@@ -22,10 +22,36 @@
       <div id="statsBox"></div>
     </div>
 
+    <!-- Oublis de pointage -->
+    <div class="card">
+      <h2>⚠️ Oublis de pointage</h2>
+      <div id="forgottenBox"></div>
+    </div>
+
     <!-- Justifications en attente -->
     <div class="card">
       <h2>📝 Justifications en attente</h2>
       <div id="pendingBox"></div>
+    </div>
+
+    <!-- Fiche mensuelle imprimable -->
+    <div class="card">
+      <h2>🖨️ Fiche mensuelle</h2>
+      <div class="row">
+        <div>
+          <label for="sheetUser">Employée</label>
+          <select id="sheetUser"></select>
+        </div>
+        <div>
+          <label for="sheetMonth">Mois</label>
+          <input id="sheetMonth" type="month" />
+        </div>
+        <div style="flex:0;">
+          <label>&nbsp;</label>
+          <button id="sheetBtn">Générer / Imprimer</button>
+        </div>
+      </div>
+      <p class="muted" style="margin-top:8px;">Ouvre une fiche imprimable (total d'heures, heures sup., récupérations) à faire signer.</p>
     </div>
 
     <!-- Horaires imposés -->
@@ -70,6 +96,10 @@
         <div style="flex:0;">
           <label>&nbsp;</label>
           <button id="filterBtn">Filtrer</button>
+        </div>
+        <div style="flex:0;">
+          <label>&nbsp;</label>
+          <button id="csvBtn" class="green">📤 Export CSV/Excel</button>
         </div>
       </div>
       <div class="table-wrap" style="margin-top:14px;">
@@ -263,6 +293,142 @@
 
     document.getElementById('filterBtn').addEventListener('click', loadAll);
 
+    /* ---------- Export CSV / Excel ---------- */
+    document.getElementById('csvBtn').addEventListener('click', async () => {
+      // Reprend les mêmes filtres que le tableau affiché.
+      const params = new URLSearchParams();
+      const u = document.getElementById('fUser').value;
+      const from = document.getElementById('fFrom').value;
+      const to = document.getElementById('fTo').value;
+      if (u) params.set('userId', u);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+
+      const { data } = await api('/api/admin/punches?' + params.toString());
+      const rows = [['Date', 'Employée', 'Arrivée', 'Départ', 'Durée (min)', 'Écart (min)', 'Statut', 'Type', 'Justification']];
+      (data.punches || []).forEach((p) => {
+        rows.push([
+          p.date, p.userName || p.userId, p.clockIn || '', p.clockOut || '',
+          p.clockOut ? p.workedMinutes : '', p.deviationMinutes || 0,
+          p.status, p.type || '', (p.justification || '').replace(/\s+/g, ' '),
+        ]);
+      });
+      // Échappe chaque champ pour le format CSV ; séparateur ";" (compatible Excel FR).
+      const csv = rows
+        .map((r) => r.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(';'))
+        .join('\r\n');
+      // BOM UTF-8 pour que les accents s'affichent bien dans Excel.
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'pointages_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    /* ---------- Oublis de pointage ---------- */
+    // Un "oubli" = pointage sans heure de sortie datant d'un jour antérieur à aujourd'hui.
+    async function loadForgotten() {
+      const { data } = await api('/api/admin/punches');
+      const pad = (n) => String(n).padStart(2, '0');
+      const d = new Date();
+      const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      const forgotten = (data.punches || []).filter((p) => !p.clockOut && p.date < today);
+
+      const box = document.getElementById('forgottenBox');
+      if (!forgotten.length) {
+        box.innerHTML = '<p class="muted">Aucun oubli détecté. ✅</p>';
+        return;
+      }
+      box.innerHTML = '<p class="muted">Ces pointages n\'ont pas d\'heure de sortie. Corrigez-les :</p>';
+      forgotten.forEach((p) => {
+        const div = document.createElement('div');
+        div.className = 'stat';
+        div.style.marginBottom = '10px';
+        div.innerHTML = `
+          <strong>${p.userName}</strong> — ${p.date}, entrée à ${p.clockIn}, sortie manquante.
+          <div class="row" style="align-items:center; margin-top:8px;">
+            <div style="flex:0;"><input type="time" id="fix_${p.id}" value="18:00" style="width:130px;" /></div>
+            <div style="flex:0;"><button class="small" data-fix="${p.id}">Enregistrer la sortie</button></div>
+          </div>`;
+        box.appendChild(div);
+      });
+      box.querySelectorAll('[data-fix]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-fix');
+          const time = document.getElementById('fix_' + id).value;
+          // Après correction, on repasse le pointage en "normal" (l'admin peut ensuite le classer).
+          await api('/api/admin/edit-punch', 'POST', { punchId: id, clockOut: time, status: 'normal' });
+          refreshAll();
+        });
+      });
+    }
+
+    /* ---------- Fiche mensuelle imprimable ---------- */
+    // Pré-remplit le mois courant.
+    (function initMonth() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      document.getElementById('sheetMonth').value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+    })();
+
+    function fillSheetUsers() {
+      const src = document.getElementById('schedUser');
+      const sheet = document.getElementById('sheetUser');
+      sheet.innerHTML = src.innerHTML;
+    }
+
+    document.getElementById('sheetBtn').addEventListener('click', async () => {
+      const uid = document.getElementById('sheetUser').value;
+      const month = document.getElementById('sheetMonth').value; // ex "2026-07"
+      if (!uid || !month) return;
+
+      const { data } = await api('/api/admin/punches?userId=' + uid + '&from=' + month + '-01&to=' + month + '-31');
+      const list = data.punches || [];
+      const name = (list[0] && list[0].userName) ||
+        document.getElementById('sheetUser').selectedOptions[0].textContent;
+
+      let totW = 0, totOT = 0, totRec = 0;
+      const rows = list.map((p) => {
+        if (p.clockOut && p.status !== 'refused') totW += p.workedMinutes;
+        if (p.status === 'validated' && p.type === 'overtime') totOT += p.deviationMinutes;
+        if (p.status === 'validated' && p.type === 'recovery') totRec += p.deviationMinutes;
+        const typeLbl = p.type === 'overtime' ? 'Heures sup.' : p.type === 'recovery' ? 'Récupération' : '';
+        return `<tr><td>${p.date}</td><td>${p.clockIn || ''}</td><td>${p.clockOut || ''}</td>
+          <td>${p.clockOut ? fmtMinutes(p.workedMinutes) : ''}</td><td>${typeLbl}</td></tr>`;
+      }).join('');
+
+      // Ouvre une fenêtre autonome, prête à imprimer.
+      const w = window.open('', '_blank');
+      w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
+        <title>Fiche ${name} ${month}</title>
+        <style>
+          body{font-family:system-ui,sans-serif;margin:30px;color:#222;}
+          h1{font-size:20px;margin:0;} h2{font-size:15px;color:#555;font-weight:400;margin:4px 0 20px;}
+          table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}
+          th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;}
+          th{background:#f1f1f1;}
+          .tot{margin-top:20px;font-size:14px;}
+          .tot span{display:inline-block;margin-right:24px;}
+          .sign{margin-top:50px;display:flex;justify-content:space-between;}
+          .sign div{border-top:1px solid #999;padding-top:6px;width:40%;text-align:center;font-size:13px;}
+          @media print{button{display:none;}}
+        </style></head><body>
+        <h1>Fiche de pointage — ${name}</h1>
+        <h2>Mois : ${month} · École des devoirs</h2>
+        <table><thead><tr><th>Date</th><th>Arrivée</th><th>Départ</th><th>Durée</th><th>Type</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5">Aucun pointage ce mois-ci.</td></tr>'}</tbody></table>
+        <div class="tot">
+          <span><strong>Total heures :</strong> ${fmtMinutes(totW)}</span>
+          <span><strong>Heures sup. :</strong> ${fmtMinutes(totOT)}</span>
+          <span><strong>Récupérations :</strong> ${fmtMinutes(totRec)}</span>
+        </div>
+        <div class="sign"><div>Signature employée</div><div>Signature responsable</div></div>
+        <p style="margin-top:30px;"><button onclick="window.print()">Imprimer</button></p>
+        </body></html>`);
+      w.document.close();
+    });
+
     /* ---------- Réinitialisation ---------- */
     document.getElementById('resetBtn').addEventListener('click', () => {
       if (confirm('Effacer TOUTES les données et repartir de zéro ?')) {
@@ -275,12 +441,13 @@
     /* ---------- Rafraîchissement global ---------- */
     function refreshAll() {
       loadStats();
+      loadForgotten();
       loadPending();
       loadAll();
+      fillSheetUsers();
     }
 
-    loadSchedules();
-    refreshAll();
+    loadSchedules().then(refreshAll);
   </script>
 </body>
 </html>

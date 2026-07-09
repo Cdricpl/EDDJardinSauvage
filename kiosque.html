@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pointeuse - Mode kiosque</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1>🖥️ Pointeuse — Mode kiosque</h1>
+    <div>
+      <span class="who" id="clock"></span>
+      <a href="index.html"><button class="small gray" style="margin-left:10px;">Connexion admin</button></a>
+    </div>
+  </div>
+
+  <div class="container" style="max-width: 560px;">
+    <!-- Étape 1 : choix de l'employée -->
+    <div class="card center" id="step1">
+      <h2>Qui pointe ?</h2>
+      <div id="tiles" style="display:flex; gap:16px; flex-wrap:wrap; justify-content:center; margin-top:10px;"></div>
+    </div>
+
+    <!-- Étape 2 : saisie du PIN -->
+    <div class="card center hidden" id="step2">
+      <h2 id="whoName"></h2>
+      <p class="muted" id="stateInfo"></p>
+      <label for="pin" style="text-align:left;">Code PIN</label>
+      <input id="pin" type="password" inputmode="numeric" placeholder="••••" style="font-size:22px; text-align:center;" />
+      <div id="msg"></div>
+      <button class="big green" id="actionBtn" style="margin-top:14px;"></button>
+      <button class="gray" id="backBtn" style="margin-top:10px;">← Retour</button>
+    </div>
+
+    <!-- Étape 3 : confirmation -->
+    <div class="card center hidden" id="step3">
+      <div style="font-size:48px;">✅</div>
+      <h2 id="doneTitle"></h2>
+      <p id="doneInfo" class="muted"></p>
+      <button class="big" id="okBtn">Terminé</button>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    // Horloge en direct dans la barre.
+    function tick() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      document.getElementById('clock').textContent =
+        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+    tick(); setInterval(tick, 1000);
+
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    const step3 = document.getElementById('step3');
+    const pinInput = document.getElementById('pin');
+    const msg = document.getElementById('msg');
+    const actionBtn = document.getElementById('actionBtn');
+
+    let selected = null;   // { id, name }
+    let openPunch = null;  // pointage en cours pour cette employée
+
+    function show(step) {
+      [step1, step2, step3].forEach((s) => s.classList.add('hidden'));
+      step.classList.remove('hidden');
+    }
+
+    // Charge les vignettes des employées (pas l'admin).
+    async function loadTiles() {
+      const { data } = await api('/api/users');
+      const tiles = document.getElementById('tiles');
+      tiles.innerHTML = '';
+      (data.users || [])
+        .filter((u) => u.role === 'employee')
+        .forEach((u) => {
+          const b = document.createElement('button');
+          b.className = 'big';
+          b.style.maxWidth = '220px';
+          b.textContent = '👩‍🏫 ' + u.name;
+          b.addEventListener('click', () => selectEmployee(u));
+          tiles.appendChild(b);
+        });
+    }
+
+    // Étape 2 : on regarde si un pointage est déjà ouvert pour préparer le bon bouton.
+    async function selectEmployee(u) {
+      selected = u;
+      msg.innerHTML = '';
+      pinInput.value = '';
+      document.getElementById('whoName').textContent = u.name;
+
+      // On lit l'état via une session temporaire (sans mot de passe : lecture seule locale).
+      setSession({ token: 'kiosk', user: { id: u.id, name: u.name, role: 'employee' } });
+      const { data } = await api('/api/clock/status');
+      clearSession();
+      openPunch = data.open;
+
+      if (openPunch) {
+        document.getElementById('stateInfo').textContent =
+          'Travail commencé à ' + openPunch.clockIn + '. Tapez votre PIN pour terminer.';
+        actionBtn.textContent = '⏹️ Terminer le travail';
+        actionBtn.className = 'big red';
+      } else {
+        document.getElementById('stateInfo').textContent =
+          'Tapez votre PIN pour commencer le travail.';
+        actionBtn.textContent = '▶️ Commencer le travail';
+        actionBtn.className = 'big green';
+      }
+      show(step2);
+      pinInput.focus();
+    }
+
+    // Valide le PIN puis effectue l'action (entrée ou sortie).
+    async function doAction() {
+      msg.innerHTML = '';
+      // 1) Vérifie le PIN
+      const login = await api('/api/login', 'POST', { userId: selected.id, pin: pinInput.value });
+      if (login.status !== 200) {
+        msg.innerHTML = '<div class="msg error">Code PIN incorrect.</div>';
+        pinInput.value = '';
+        return;
+      }
+      // 2) Ouvre une session le temps de l'action
+      setSession({ token: login.data.token, user: login.data.user });
+
+      let res;
+      if (openPunch) {
+        // Terminer — peut demander une justification si hors horaire.
+        res = await api('/api/clock/out', 'POST', {});
+        if (res.status === 422 && res.data.needJustification) {
+          const justif = prompt(
+            'Vous pointez en dehors de l\'horaire imposé (' +
+            res.data.deviationMinutes + ' min).\nJustification obligatoire :'
+          );
+          if (!justif || !justif.trim()) {
+            clearSession();
+            msg.innerHTML = '<div class="msg error">Justification requise. Pointage annulé.</div>';
+            return;
+          }
+          res = await api('/api/clock/out', 'POST', { justification: justif.trim() });
+        }
+      } else {
+        res = await api('/api/clock/in', 'POST');
+      }
+      clearSession();
+
+      if (res.status !== 200) {
+        msg.innerHTML = `<div class="msg error">${res.data.error || 'Erreur.'}</div>`;
+        return;
+      }
+
+      // 3) Confirmation
+      const p = res.data.punch;
+      if (openPunch) {
+        document.getElementById('doneTitle').textContent = 'Bonne fin de journée, ' + selected.name + ' !';
+        let info = 'Sortie enregistrée à ' + p.clockOut + '.';
+        if (p.status === 'pending')
+          info += ' Écart de ' + p.deviationMinutes + ' min — en attente de validation.';
+        document.getElementById('doneInfo').textContent = info;
+      } else {
+        document.getElementById('doneTitle').textContent = 'Bon travail, ' + selected.name + ' !';
+        document.getElementById('doneInfo').textContent = 'Entrée enregistrée à ' + p.clockIn + '.';
+      }
+      show(step3);
+    }
+
+    actionBtn.addEventListener('click', doAction);
+    pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAction(); });
+    document.getElementById('backBtn').addEventListener('click', () => { clearSession(); show(step1); });
+    document.getElementById('okBtn').addEventListener('click', () => { loadTiles(); show(step1); });
+
+    loadTiles();
+    show(step1);
+  </script>
+</body>
+</html>

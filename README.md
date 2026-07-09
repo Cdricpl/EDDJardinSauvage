@@ -82,11 +82,22 @@ retard, ou jour non prévu) et que l'écart dépasse **5 minutes** :
 2. Une **justification** est **obligatoire**.
 3. Le pointage passe **« En attente de validation Admin »**.
 
+### Mode kiosque (ordinateur partagé) 🖥️
+Depuis la page de connexion, bouton **« Ouvrir le mode kiosque »** : un écran d'accueil où
+chaque employée clique sur sa vignette puis tape son PIN pour pointer entrée/sortie,
+**sans ouvrir de session**. Idéal pour l'ordinateur partagé de l'école
+(inspiré des kiosques Connecteam / Buddy Punch).
+
 ### Espace admin
 - Vue **globale** des pointages, avec **filtres** (employée, période).
 - **Justifications en attente** : valider / refuser + classer en **Heures supplémentaires**
   ou **Récupération**.
 - **Statistiques** par employée (heures prestées, heures sup., récupérations).
+- **⚠️ Détection des oublis** : repère les pointages sans heure de sortie (oubli de pointer
+  en partant) et permet de les corriger en un clic.
+- **📤 Export CSV / Excel** des pointages (compatible Excel, avec les filtres appliqués).
+- **🖨️ Fiche mensuelle imprimable** par employée (total d'heures, heures sup.,
+  récupérations, cases de signature).
 - Bouton **Réinitialiser les données**.
 
 ---
@@ -95,9 +106,10 @@ retard, ou jour non prévu) et que l'écart dépasse **5 minutes** :
 
 ```
 Pointeuse-/
-├── index.html      # Page de connexion
+├── index.html      # Page de connexion (+ accès mode kiosque)
+├── kiosque.html    # Mode kiosque (pointage rapide sur PC partagé)
 ├── employee.html   # Espace employée (pointeuse + historique)
-├── admin.html      # Espace admin (horaires + validations + stats)
+├── admin.html      # Espace admin (horaires + validations + stats + export + fiche)
 ├── common.js       # Données locales (localStorage) + logique + formatage
 ├── style.css       # Feuille de style
 └── README.md
