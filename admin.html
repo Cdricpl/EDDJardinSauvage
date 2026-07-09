@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pointeuse - Espace admin</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1>🛠️ Espace administrateur</h1>
+    <div>
+      <span class="who" id="who"></span>
+      <button class="small gray" id="logoutBtn" style="margin-left:10px;">Déconnexion</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- Statistiques -->
+    <div class="card">
+      <h2>📊 Statistiques</h2>
+      <div id="statsBox"></div>
+    </div>
+
+    <!-- Justifications en attente -->
+    <div class="card">
+      <h2>📝 Justifications en attente</h2>
+      <div id="pendingBox"></div>
+    </div>
+
+    <!-- Horaires imposés -->
+    <div class="card">
+      <h2>🗓️ Horaires imposés</h2>
+      <div class="row">
+        <div>
+          <label for="schedUser">Employée</label>
+          <select id="schedUser"></select>
+        </div>
+        <div>
+          <label for="schedStart">Début</label>
+          <input id="schedStart" type="time" value="14:00" />
+        </div>
+        <div>
+          <label for="schedEnd">Fin</label>
+          <input id="schedEnd" type="time" value="18:00" />
+        </div>
+      </div>
+      <label>Jours obligatoires</label>
+      <div id="daysBox" style="display:flex; gap:12px; flex-wrap:wrap;"></div>
+      <button id="saveSchedBtn" style="margin-top:14px;">Enregistrer l'horaire</button>
+      <div id="schedMsg"></div>
+    </div>
+
+    <!-- Tous les pointages -->
+    <div class="card">
+      <h2>📋 Tous les pointages</h2>
+      <div class="row">
+        <div>
+          <label for="fUser">Employée</label>
+          <select id="fUser"><option value="">Toutes</option></select>
+        </div>
+        <div>
+          <label for="fFrom">Du</label>
+          <input id="fFrom" type="date" />
+        </div>
+        <div>
+          <label for="fTo">Au</label>
+          <input id="fTo" type="date" />
+        </div>
+        <div style="flex:0;">
+          <label>&nbsp;</label>
+          <button id="filterBtn">Filtrer</button>
+        </div>
+      </div>
+      <div class="table-wrap" style="margin-top:14px;">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Employée</th><th>Arrivée</th><th>Départ</th><th>Durée</th><th>Écart</th><th>Statut</th><th>Type</th></tr>
+          </thead>
+          <tbody id="allBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Données -->
+    <div class="card">
+      <h2>💾 Données</h2>
+      <p class="muted">
+        Les données sont enregistrées uniquement dans ce navigateur (localStorage).
+        La réinitialisation efface tous les pointages et remet les horaires par défaut.
+      </p>
+      <button class="red" id="resetBtn">Réinitialiser toutes les données</button>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    const session = requireRole('admin');
+    document.getElementById('who').textContent = session ? session.user.name : '';
+    document.getElementById('logoutBtn').addEventListener('click', logout);
+
+    /* ---------- Statistiques ---------- */
+    async function loadStats() {
+      const { data } = await api('/api/admin/stats');
+      const box = document.getElementById('statsBox');
+      box.innerHTML = '';
+      Object.values(data.stats || {}).forEach((s) => {
+        const div = document.createElement('div');
+        div.style.marginBottom = '16px';
+        div.innerHTML = `
+          <h3 style="margin:6px 0;">${s.name}</h3>
+          <div class="stat-grid">
+            <div class="stat"><div class="num">${fmtMinutes(s.workedMinutes)}</div><div class="lbl">Heures prestées</div></div>
+            <div class="stat"><div class="num">${fmtMinutes(s.overtimeMinutes)}</div><div class="lbl">Heures supplémentaires</div></div>
+            <div class="stat"><div class="num">${fmtMinutes(s.recoveryMinutes)}</div><div class="lbl">Récupérations</div></div>
+            <div class="stat"><div class="num">${s.pendingCount}</div><div class="lbl">En attente</div></div>
+          </div>`;
+        box.appendChild(div);
+      });
+    }
+
+    /* ---------- Justifications en attente ---------- */
+    async function loadPending() {
+      const { data } = await api('/api/admin/pending');
+      const box = document.getElementById('pendingBox');
+      const list = data.punches || [];
+      if (!list.length) {
+        box.innerHTML = '<p class="muted">Aucune justification en attente. ✅</p>';
+        return;
+      }
+      box.innerHTML = '';
+      list.forEach((p) => {
+        const div = document.createElement('div');
+        div.className = 'stat';
+        div.style.marginBottom = '12px';
+        div.innerHTML = `
+          <strong>${p.userName}</strong> — ${p.date}
+          (${p.clockIn}–${p.clockOut}, écart <strong>${p.deviationMinutes} min</strong>)
+          <p style="margin:8px 0;">💬 « ${p.justification} »</p>
+          <div class="row" style="align-items:center;">
+            <div style="flex:0;">
+              <select id="type_${p.id}">
+                <option value="overtime">Heures supplémentaires</option>
+                <option value="recovery">Récupération</option>
+              </select>
+            </div>
+            <div style="flex:0;">
+              <button class="green small" data-validate="${p.id}">Valider</button>
+              <button class="red small" data-refuse="${p.id}">Refuser</button>
+            </div>
+          </div>`;
+        box.appendChild(div);
+      });
+
+      box.querySelectorAll('[data-validate]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-validate');
+          const type = document.getElementById('type_' + id).value;
+          await api('/api/admin/validate', 'POST', { punchId: id, decision: 'validate', type });
+          refreshAll();
+        });
+      });
+      box.querySelectorAll('[data-refuse]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-refuse');
+          await api('/api/admin/validate', 'POST', { punchId: id, decision: 'refuse' });
+          refreshAll();
+        });
+      });
+    }
+
+    /* ---------- Horaires ---------- */
+    let scheduleData = { schedules: {}, users: [] };
+
+    function renderDaysCheckboxes(selected) {
+      const box = document.getElementById('daysBox');
+      box.innerHTML = '';
+      DAYS_FR.forEach((label, idx) => {
+        const id = 'day_' + idx;
+        const wrap = document.createElement('label');
+        wrap.style.fontWeight = '400';
+        wrap.style.display = 'flex';
+        wrap.style.alignItems = 'center';
+        wrap.style.gap = '4px';
+        wrap.innerHTML = `<input type="checkbox" style="width:auto;" id="${id}" value="${idx}"
+          ${selected.includes(idx) ? 'checked' : ''}/> ${label}`;
+        box.appendChild(wrap);
+      });
+    }
+
+    async function loadSchedules() {
+      const { data } = await api('/api/admin/schedules');
+      scheduleData = data;
+      const sel = document.getElementById('schedUser');
+      const fSel = document.getElementById('fUser');
+      sel.innerHTML = '';
+      // (garde l'option "Toutes" du filtre)
+      fSel.innerHTML = '<option value="">Toutes</option>';
+      data.users.forEach((u) => {
+        sel.insertAdjacentHTML('beforeend', `<option value="${u.id}">${u.name}</option>`);
+        fSel.insertAdjacentHTML('beforeend', `<option value="${u.id}">${u.name}</option>`);
+      });
+      fillScheduleForm();
+    }
+
+    function fillScheduleForm() {
+      const uid = document.getElementById('schedUser').value;
+      const s = scheduleData.schedules[uid] || { start: '14:00', end: '18:00', days: [1,2,3,4,5] };
+      document.getElementById('schedStart').value = s.start;
+      document.getElementById('schedEnd').value = s.end;
+      renderDaysCheckboxes(s.days);
+    }
+
+    document.getElementById('schedUser').addEventListener('change', fillScheduleForm);
+
+    document.getElementById('saveSchedBtn').addEventListener('click', async () => {
+      const days = [];
+      document.querySelectorAll('#daysBox input:checked').forEach((c) => days.push(Number(c.value)));
+      const body = {
+        userId: document.getElementById('schedUser').value,
+        start: document.getElementById('schedStart').value,
+        end: document.getElementById('schedEnd').value,
+        days,
+      };
+      const { status, data } = await api('/api/admin/schedule', 'POST', body);
+      const msg = document.getElementById('schedMsg');
+      if (status === 200) {
+        msg.innerHTML = '<div class="msg ok">Horaire enregistré.</div>';
+        scheduleData.schedules[body.userId] = data.schedule;
+      } else {
+        msg.innerHTML = `<div class="msg error">${data.error || 'Erreur.'}</div>`;
+      }
+      setTimeout(() => (msg.innerHTML = ''), 2500);
+    });
+
+    /* ---------- Tous les pointages ---------- */
+    async function loadAll() {
+      const params = new URLSearchParams();
+      const u = document.getElementById('fUser').value;
+      const from = document.getElementById('fFrom').value;
+      const to = document.getElementById('fTo').value;
+      if (u) params.set('userId', u);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+
+      const { data } = await api('/api/admin/punches?' + params.toString());
+      const body = document.getElementById('allBody');
+      body.innerHTML = '';
+      (data.punches || []).forEach((p) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${p.date}</td>
+          <td>${p.userName || p.userId}</td>
+          <td>${p.clockIn || '—'}</td>
+          <td>${p.clockOut || '—'}</td>
+          <td>${p.clockOut ? fmtMinutes(p.workedMinutes) : '—'}</td>
+          <td>${p.deviationMinutes ? p.deviationMinutes + ' min' : '—'}</td>
+          <td>${statusBadge(p)}</td>
+          <td>${typeBadge(p.type)}</td>`;
+        body.appendChild(tr);
+      });
+    }
+
+    document.getElementById('filterBtn').addEventListener('click', loadAll);
+
+    /* ---------- Réinitialisation ---------- */
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      if (confirm('Effacer TOUTES les données et repartir de zéro ?')) {
+        resetDB();
+        loadSchedules();
+        refreshAll();
+      }
+    });
+
+    /* ---------- Rafraîchissement global ---------- */
+    function refreshAll() {
+      loadStats();
+      loadPending();
+      loadAll();
+    }
+
+    loadSchedules();
+    refreshAll();
+  </script>
+</body>
+</html>

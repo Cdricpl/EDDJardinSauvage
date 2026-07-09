@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pointeuse - Espace employée</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1>🕒 Espace employée</h1>
+    <div>
+      <span class="who" id="who"></span>
+      <button class="small gray" id="logoutBtn" style="margin-left:10px;">Déconnexion</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- Pointeuse -->
+    <div class="card">
+      <h2>Pointage</h2>
+      <div class="clock-now" id="clockNow">--:--</div>
+      <p class="center muted" id="scheduleInfo"></p>
+      <div id="msg"></div>
+
+      <button class="big green" id="inBtn">▶️ Commencer le travail</button>
+      <button class="big red hidden" id="outBtn">⏹️ Terminer le travail</button>
+
+      <!-- Zone justification (affichée seulement si pointage hors horaire) -->
+      <div id="justifBox" class="hidden" style="margin-top:14px;">
+        <label for="justif">Justification obligatoire (hors horaire imposé)</label>
+        <textarea id="justif" placeholder="Expliquez la raison des heures effectuées hors horaire…"></textarea>
+        <button class="red" id="confirmOutBtn" style="margin-top:8px;">Confirmer la fin avec justification</button>
+      </div>
+    </div>
+
+    <!-- Récapitulatif -->
+    <div class="card">
+      <h2>Récapitulatif</h2>
+      <div class="stat-grid">
+        <div class="stat"><div class="num" id="todayTotal">0h00</div><div class="lbl">Aujourd'hui</div></div>
+        <div class="stat"><div class="num" id="weekTotal">0h00</div><div class="lbl">Cette semaine</div></div>
+      </div>
+    </div>
+
+    <!-- Historique -->
+    <div class="card">
+      <h2>Mon historique</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Arrivée</th><th>Départ</th><th>Durée</th><th>Statut</th><th>Type</th></tr>
+          </thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+      </div>
+      <p class="muted" style="margin-top:10px;">
+        ⚠️ Vous ne pouvez pas modifier vos heures. Seul l'administrateur peut corriger un pointage.
+      </p>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    const session = requireRole('employee');
+    document.getElementById('who').textContent = session ? session.user.name : '';
+
+    const msg = document.getElementById('msg');
+    const inBtn = document.getElementById('inBtn');
+    const outBtn = document.getElementById('outBtn');
+    const justifBox = document.getElementById('justifBox');
+    const confirmOutBtn = document.getElementById('confirmOutBtn');
+
+    // Horloge en direct.
+    function tick() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      document.getElementById('clockNow').textContent =
+        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    function showMsg(text, kind = 'error') {
+      msg.innerHTML = `<div class="msg ${kind}">${text}</div>`;
+    }
+    function clearMsg() { msg.innerHTML = ''; }
+
+    // Affiche l'horaire imposé.
+    async function loadSchedule() {
+      const { data } = await api('/api/me');
+      const s = data.schedule;
+      const el = document.getElementById('scheduleInfo');
+      if (s) {
+        const days = s.days.map((d) => DAYS_FR[d]).join(', ');
+        el.textContent = `Horaire imposé : ${s.start}–${s.end} · Jours : ${days}`;
+      } else {
+        el.textContent = 'Aucun horaire imposé pour le moment.';
+      }
+    }
+
+    // État courant du pointage (ouvert ou non).
+    async function refreshStatus() {
+      const { data } = await api('/api/clock/status');
+      const open = data.open;
+      if (open) {
+        inBtn.classList.add('hidden');
+        outBtn.classList.remove('hidden');
+        outBtn.textContent = `⏹️ Terminer le travail (commencé à ${open.clockIn})`;
+      } else {
+        inBtn.classList.remove('hidden');
+        outBtn.classList.add('hidden');
+        justifBox.classList.add('hidden');
+      }
+    }
+
+    inBtn.addEventListener('click', async () => {
+      clearMsg();
+      const { status, data } = await api('/api/clock/in', 'POST');
+      if (status !== 200) return showMsg(data.error || 'Erreur.');
+      showMsg('Bon travail ! Pointage démarré à ' + data.punch.clockIn + '.', 'ok');
+      await refreshStatus();
+      await loadHistory();
+    });
+
+    // Tentative de fin de travail (sans justification d'abord).
+    outBtn.addEventListener('click', async () => {
+      clearMsg();
+      const { status, data } = await api('/api/clock/out', 'POST');
+      if (status === 422 && data.needJustification) {
+        // Hors horaire : on demande une justification.
+        justifBox.classList.remove('hidden');
+        showMsg(data.error, 'error');
+        return;
+      }
+      if (status !== 200) return showMsg(data.error || 'Erreur.');
+      finishOut(data);
+    });
+
+    // Fin de travail avec justification saisie.
+    confirmOutBtn.addEventListener('click', async () => {
+      const justif = document.getElementById('justif').value.trim();
+      if (!justif) return showMsg('La justification est obligatoire.');
+      const { status, data } = await api('/api/clock/out', 'POST', { justification: justif });
+      if (status !== 200) return showMsg(data.error || 'Erreur.');
+      finishOut(data);
+    });
+
+    function finishOut(data) {
+      justifBox.classList.add('hidden');
+      document.getElementById('justif').value = '';
+      const p = data.punch;
+      if (p.status === 'pending') {
+        showMsg('Pointage terminé. Écart de ' + p.deviationMinutes +
+          ' min — en attente de validation par l\'admin.', 'ok');
+      } else {
+        showMsg('Pointage terminé. Bonne fin de journée !', 'ok');
+      }
+      refreshStatus();
+      loadHistory();
+    }
+
+    // Numéro de semaine ISO pour regrouper "cette semaine".
+    function weekKey(dateStr) {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const date = new Date(y, m - 1, d);
+      const dayNum = (date.getDay() + 6) % 7; // Lundi=0
+      date.setDate(date.getDate() - dayNum + 3);
+      const firstThursday = new Date(date.getFullYear(), 0, 4);
+      const week = 1 + Math.round(
+        ((date - firstThursday) / 86400000 - 3 + ((firstThursday.getDay() + 6) % 7)) / 7
+      );
+      return date.getFullYear() + '-W' + week;
+    }
+
+    async function loadHistory() {
+      const { data } = await api('/api/my-punches');
+      const list = data.punches || [];
+      const body = document.getElementById('historyBody');
+      body.innerHTML = '';
+
+      const today = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+      const thisWeek = weekKey(todayStr);
+
+      let todayMin = 0, weekMin = 0;
+
+      list.forEach((p) => {
+        if (p.status !== 'refused') {
+          if (p.date === todayStr) todayMin += p.workedMinutes;
+          if (weekKey(p.date) === thisWeek) weekMin += p.workedMinutes;
+        }
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${p.date}</td>
+          <td>${p.clockIn || '—'}</td>
+          <td>${p.clockOut || '—'}</td>
+          <td>${p.clockOut ? fmtMinutes(p.workedMinutes) : '—'}</td>
+          <td>${statusBadge(p)}</td>
+          <td>${typeBadge(p.type)}</td>`;
+        body.appendChild(tr);
+      });
+
+      document.getElementById('todayTotal').textContent = fmtMinutes(todayMin);
+      document.getElementById('weekTotal').textContent = fmtMinutes(weekMin);
+    }
+
+    document.getElementById('logoutBtn').addEventListener('click', logout);
+
+    // Chargement initial.
+    loadSchedule();
+    refreshStatus();
+    loadHistory();
+  </script>
+</body>
+</html>

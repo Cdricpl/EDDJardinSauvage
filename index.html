@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pointeuse - Connexion</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1>🕒 Pointeuse — École des devoirs</h1>
+  </div>
+
+  <div class="container" style="max-width: 420px;">
+    <div class="card">
+      <h2>Connexion</h2>
+
+      <label for="user">Compte</label>
+      <select id="user"></select>
+
+      <label for="pin">Code PIN</label>
+      <input id="pin" type="password" inputmode="numeric" placeholder="••••" />
+
+      <div id="msg"></div>
+
+      <button class="big" id="loginBtn" style="margin-top:16px;">Se connecter</button>
+
+      <p class="muted center" style="margin-top:16px;">
+        Comptes de démonstration :<br />
+        Employée 1 (PIN 1111) · Employée 2 (PIN 2222) · Admin (PIN 0000)
+      </p>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    // Si déjà connecté, on redirige directement.
+    const existing = getSession();
+    if (existing && existing.user) {
+      location.href = existing.user.role === 'admin' ? 'admin.html' : 'employee.html';
+    }
+
+    const userSel = document.getElementById('user');
+    const pinInput = document.getElementById('pin');
+    const msg = document.getElementById('msg');
+
+    // Remplit la liste des comptes.
+    async function loadUsers() {
+      const { data } = await api('/api/users');
+      (data.users || []).forEach((u) => {
+        const opt = document.createElement('option');
+        opt.value = u.id;
+        opt.textContent = u.name + (u.role === 'admin' ? ' (Admin)' : '');
+        userSel.appendChild(opt);
+      });
+    }
+    loadUsers();
+
+    async function doLogin() {
+      msg.innerHTML = '';
+      const { status, data } = await api('/api/login', 'POST', {
+        userId: userSel.value,
+        pin: pinInput.value,
+      });
+      if (status !== 200) {
+        msg.innerHTML = `<div class="msg error">${data.error || 'Erreur de connexion.'}</div>`;
+        return;
+      }
+      setSession({ token: data.token, user: data.user });
+      location.href = data.user.role === 'admin' ? 'admin.html' : 'employee.html';
+    }
+
+    document.getElementById('loginBtn').addEventListener('click', doLogin);
+    pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+  </script>
+</body>
+</html>
