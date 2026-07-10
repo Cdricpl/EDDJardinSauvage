@@ -59,7 +59,9 @@ months (statut de verrouillage par employée/mois)
 
 day_entries (prestations journalières)
   id PK · employee_id FK→profiles · entry_date
-  planned_minutes (admin) · worked_minutes (employée)
+  planned_minutes (admin) · worked_minutes (presté effectif)
+  start_time · end_time · break_minutes (encodage par plage horaire, 15 min)
+  worked_touched (bool : l'employée a encodé une plage → n'est plus pré-rempli)
   kind('normal'|'conge'|'recuperation'|'autre') · justification · updated_at
   UNIQUE(employee_id, entry_date)
 
@@ -81,6 +83,16 @@ Le fichier SQL complet (tables, index, RLS, déclencheurs) est dans
 - **months** : seul l'admin change le statut (verrouiller/déverrouiller/valider).
 - **children_attendance** : lecture/écriture pour tout utilisateur actif.
 - **audit_log** : lecture admin uniquement.
+
+### Encodage des prestations et pré-remplissage
+
+- Quand l'admin définit `planned_minutes`, les heures prestées sont **pré-remplies**
+  à l'identique (`worked_minutes = planned_minutes`) tant que l'employée n'a pas encodé
+  de plage horaire (`worked_touched = false`). L'employée ne modifie donc que les jours
+  qui diffèrent.
+- L'employée encode par **heure de début / fin** (tranches de 15 min) + **pause** optionnelle.
+  Le presté est calculé : `worked = end − start − break`, ce qui fixe `worked_touched = true`.
+- Un changement ultérieur de l'horaire prévu **n'écrase pas** un jour déjà encodé.
 
 ### Calculs et report de solde
 

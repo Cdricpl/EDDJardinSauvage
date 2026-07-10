@@ -41,8 +41,12 @@ create table if not exists public.day_entries (
   id               uuid primary key default gen_random_uuid(),
   employee_id      uuid not null references public.profiles (id) on delete cascade,
   entry_date       date not null,
-  planned_minutes  int  not null default 0,
-  worked_minutes   int  not null default 0,
+  planned_minutes  int  not null default 0,     -- heures à prester (admin)
+  worked_minutes   int  not null default 0,     -- heures prestées effectives (calculées)
+  start_time       text default '',             -- heure de début "HH:MM" (tranches de 15 min)
+  end_time         text default '',             -- heure de fin "HH:MM"
+  break_minutes    int  not null default 0,     -- pause éventuelle à déduire
+  worked_touched   boolean not null default false, -- true si l'employée a encodé une plage horaire
   kind             text not null default 'normal' check (kind in ('normal', 'conge', 'recuperation', 'autre')),
   justification    text default '',
   updated_by       uuid references public.profiles (id),
@@ -74,6 +78,12 @@ create table if not exists public.audit_log (
   details     jsonb,
   created_at  timestamptz not null default now()
 );
+
+-- Migration pour une base déjà existante (sans effet si les colonnes existent déjà) :
+alter table public.day_entries add column if not exists start_time     text default '';
+alter table public.day_entries add column if not exists end_time       text default '';
+alter table public.day_entries add column if not exists break_minutes  int  not null default 0;
+alter table public.day_entries add column if not exists worked_touched boolean not null default false;
 
 create index if not exists idx_day_entries_emp_date on public.day_entries (employee_id, entry_date);
 create index if not exists idx_audit_created on public.audit_log (created_at desc);

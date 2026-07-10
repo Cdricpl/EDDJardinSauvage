@@ -57,15 +57,19 @@ pré-remplies pour visualiser les récaps et les graphiques.
 
 - **Horaires (admin)** : définition des heures à prester par jour dans un tableau
   mensuel type Excel ; verrouillage / déverrouillage / validation d'un mois.
-- **Prestations (employées)** : encodage journalier (heures + type : normal, congé,
-  récupération, autre) ; justification obligatoire en cas d'écart.
+- **Prestations (employées)** : encodage par **heure de début / fin** (tranches de 15 min)
+  avec **pause** optionnelle ; le presté et l'écart sont calculés automatiquement.
+  Les jours sont **pré-remplis** avec l'horaire prévu — l'employée ne modifie que les
+  jours différents, et un changement d'horaire n'écrase pas une saisie déjà faite.
+  Justification obligatoire en cas d'écart.
 - **Calculs automatiques** : écart journalier, totaux mensuels, **solde reporté de mois
   en mois**, heures supplémentaires et heures à récupérer.
 - **Verrouillage** : un mois verrouillé n'est plus modifiable par l'employée (seul
   l'admin peut intervenir) — imposé côté base via RLS.
 - **Présences enfants** : encodage quotidien + historique.
-- **Statistiques** : moyennes hebdo / mensuelle / annuelle, histogrammes et courbes.
-- **Export PDF** : fiche mensuelle par employée (tableau, totaux, cases de signature).
+- **Statistiques** : moyennes hebdo / mensuelle / annuelle, histogrammes et courbes,
+  avec **export PDF** (moyennes + graphiques inclus).
+- **Export PDF** : fiche mensuelle par employée (tableau début/fin, totaux, signatures).
 - **Employées** : ajout, **archivage** (données conservées en lecture seule), réactivation.
 - **Temps réel** : mise à jour automatique sur tous les appareils connectés.
 - **Bonus** : journal d'audit, sauvegarde automatique, alerte d'erreur d'encodage.

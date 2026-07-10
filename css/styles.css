@@ -55,6 +55,7 @@ th { background:#f1f3f5; position:sticky; top:0; }
 .grid input.cell { border:none; width:70px; padding:6px; text-align:center; }
 .grid input.cell.wide { width:100%; min-width:120px; text-align:left; }
 .grid select.cell { border:none; padding:6px; }
+.grid select.cell.time { width:78px; }
 .grid input.cell:focus, .grid select.cell:focus { outline:2px solid var(--primary); border-radius:4px; }
 .grid input.cell.err { background:#fff0f0; outline:2px solid var(--red); }
 .grid input.cell:disabled, .grid select.cell:disabled { background:#f8f9fa; color:#495057; }

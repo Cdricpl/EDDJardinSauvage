@@ -17,6 +17,23 @@ const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
 function hoursToMin(h) { const v = parseFloat(String(h).replace(',', '.')); return isNaN(v) ? 0 : Math.round(v * 60); }
 function minToHoursInput(min) { return (min / 60).toFixed(2).replace(/\.00$/, ''); }
+
+/* Encodage par heure de début/fin, tranches de 15 minutes (06:00 → 21:00). */
+function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+function minToTime(min) { return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`; }
+const TIME_OPTIONS = (() => { const o = []; for (let m = 6 * 60; m <= 21 * 60; m += 15) o.push(minToTime(m)); return o; })();
+function timeSelect(k, date, value, disabled) {
+  const opts = ['<option value="">--:--</option>']
+    .concat(TIME_OPTIONS.map((t) => `<option value="${t}" ${t === value ? 'selected' : ''}>${t}</option>`));
+  return `<select class="cell time" data-k="${k}" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts.join('')}</select>`;
+}
+// Heures prestées effectives d'une entrée (calculées depuis début/fin/pause,
+// ou valeur pré-remplie si l'employée n'a pas encore encodé de plage horaire).
+function effectiveWorked(e) {
+  const s = timeToMin(e.start_time), f = timeToMin(e.end_time);
+  if (s != null && f != null) return Math.max(0, f - s - (e.break_minutes || 0));
+  return e.worked_minutes || 0;
+}
 function fmtHM(min) {
   const sign = min < 0 ? '-' : '';
   min = Math.abs(Math.round(min));
@@ -34,8 +51,9 @@ async function monthSummary(empId, y, m) {
   const firstOfMonth = `${y}-${pad(m)}-01`;
   let planned = 0, worked = 0, carryIn = 0;
   all.forEach((e) => {
-    if (e.entry_date < firstOfMonth) carryIn += (e.worked_minutes - e.planned_minutes);
-    else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) { planned += e.planned_minutes; worked += e.worked_minutes; }
+    const w = effectiveWorked(e);
+    if (e.entry_date < firstOfMonth) carryIn += (w - e.planned_minutes);
+    else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) { planned += e.planned_minutes; worked += w; }
   });
   const delta = worked - planned;
   return { planned, worked, delta, carryIn, closing: carryIn + delta };
@@ -167,8 +185,9 @@ async function viewSheet() {
   for (let d = 1; d <= dim; d++) {
     const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
     const dow = new Date(CUR.y, CUR.m - 1, d).getDay();
-    const e = byDate[date] || { planned_minutes: 0, worked_minutes: 0, kind: 'normal', justification: '' };
-    const delta = e.worked_minutes - e.planned_minutes;
+    const e = byDate[date] || { planned_minutes: 0, worked_minutes: 0, start_time: '', end_time: '', break_minutes: 0, kind: 'normal', justification: '' };
+    const worked = effectiveWorked(e);
+    const delta = worked - e.planned_minutes;
     const needJustif = delta !== 0 && (e.kind === 'normal' || e.kind === 'autre') && !e.justification;
     if (needJustif) warnings++;
     const weekend = (dow === 0 || dow === 6) ? ' class="weekend"' : '';
@@ -176,7 +195,10 @@ async function viewSheet() {
       <td class="nowrap">${pad(d)}/${pad(CUR.m)}</td>
       <td>${DOW[dow]}</td>
       <td><input class="cell" data-k="planned" data-date="${date}" value="${e.planned_minutes ? minToHoursInput(e.planned_minutes) : ''}" ${canEditPlanned ? '' : 'disabled'} placeholder="0"/></td>
-      <td><input class="cell" data-k="worked" data-date="${date}" value="${e.worked_minutes ? minToHoursInput(e.worked_minutes) : ''}" ${canEditWorked ? '' : 'disabled'} placeholder="0"/></td>
+      <td>${timeSelect('start_time', date, e.start_time || '', !canEditWorked)}</td>
+      <td>${timeSelect('end_time', date, e.end_time || '', !canEditWorked)}</td>
+      <td><input class="cell" style="width:56px" data-k="break_minutes" data-date="${date}" type="number" min="0" step="15" value="${e.break_minutes || ''}" ${canEditWorked ? '' : 'disabled'} placeholder="0"/></td>
+      <td class="nowrap"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
       <td><select class="cell" data-k="kind" data-date="${date}" ${canEditWorked ? '' : 'disabled'}>
         ${Object.entries(KINDS).map(([k, l]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
       <td class="${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${delta ? fmtHM(delta) : '—'}</td>
@@ -204,7 +226,7 @@ async function viewSheet() {
         ? '<div class="msg">Ce mois est ' + (month.status === 'locked' ? 'verrouillé' : 'validé') + ' : vous ne pouvez plus le modifier.</div>' : ''}
       <div class="table-wrap">
         <table class="grid">
-          <thead><tr><th>Date</th><th>Jour</th><th>À prester</th><th>Presté</th><th>Type</th><th>Écart</th><th>Justification</th></tr></thead>
+          <thead><tr><th>Date</th><th>Jour</th><th>À prester</th><th>Début</th><th>Fin</th><th>Pause</th><th>Presté</th><th>Type</th><th>Écart</th><th>Justification</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -215,20 +237,41 @@ async function viewSheet() {
         <div class="stat"><div class="num">${fmtHM(sum.carryIn)}</div><div class="lbl">Solde reporté</div></div>
         <div class="stat"><div class="num ${sum.closing >= 0 ? 'pos' : 'neg'}">${fmtHM(sum.closing)}</div><div class="lbl">Solde cumulé</div></div>
       </div>
-      <p class="muted small">Heures en décimales (ex. 4 = 4h, 4.5 = 4h30). Enregistrement automatique.</p>
+      <p class="muted small">« À prester » en heures décimales (4 = 4h, 4.5 = 4h30). Le presté est calculé
+      depuis Début/Fin (par tranches de 15 min), pause déduite. Les jours sont pré-remplis
+      comme prévu : ne modifiez que ceux qui diffèrent. Enregistrement automatique.</p>
     </div>`;
   wireToolbar();
 
-  // Sauvegarde automatique des cellules.
+  // Sauvegarde automatique des cellules (avec pré-remplissage et calcul début/fin).
   app.querySelectorAll('input.cell, select.cell').forEach((el) => {
-    const ev = el.tagName === 'SELECT' ? 'change' : 'change';
-    el.addEventListener(ev, async () => {
+    el.addEventListener('change', async () => {
       const date = el.dataset.date, k = el.dataset.k;
+      const prev = byDate[date] || {};
       const patch = { employee_id: empId, entry_date: date };
-      if (k === 'planned') patch.planned_minutes = hoursToMin(el.value);
-      else if (k === 'worked') patch.worked_minutes = hoursToMin(el.value);
-      else if (k === 'kind') patch.kind = el.value;
-      else if (k === 'justification') patch.justification = el.value;
+
+      if (k === 'planned') {
+        patch.planned_minutes = hoursToMin(el.value);
+        // Pré-remplissage : si l'employée n'a pas encore encodé de plage horaire,
+        // les heures prestées suivent l'horaire prévu (sans écraser une saisie existante).
+        if (!prev.worked_touched && !prev.start_time && !prev.end_time) {
+          patch.worked_minutes = patch.planned_minutes;
+        }
+      } else if (k === 'kind') {
+        patch.kind = el.value;
+      } else if (k === 'justification') {
+        patch.justification = el.value;
+      } else if (k === 'start_time' || k === 'end_time' || k === 'break_minutes') {
+        // Encodage réel d'une plage horaire → marque le jour comme modifié.
+        const start = k === 'start_time' ? el.value : (prev.start_time || '');
+        const end = k === 'end_time' ? el.value : (prev.end_time || '');
+        const brk = k === 'break_minutes' ? Number(el.value || 0) : Number(prev.break_minutes || 0);
+        patch.start_time = start; patch.end_time = end; patch.break_minutes = brk;
+        patch.worked_touched = true;
+        const s = timeToMin(start), f = timeToMin(end);
+        patch.worked_minutes = (s != null && f != null) ? Math.max(0, f - s - brk) : 0;
+        if (s != null && f != null && f <= s) { toast("L'heure de fin doit être après le début.", 'error'); return; }
+      }
       try { await STORE.upsertEntry(patch); render(); }
       catch (e) { toast(e.message, 'error'); }
     });
@@ -332,10 +375,17 @@ async function viewStats() {
   const weekVals = Object.values(weeks);
   const weeklyAvg = weekVals.length ? weekVals.reduce((a, b) => a + b, 0) / weekVals.length : 0;
 
+  const stats = {
+    weeklyAvg: weeklyAvg, dailyMonth: avg(inMonth), dailyYear: avg(inYear),
+  };
+
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
-      <h2>📈 Statistiques de fréquentation</h2>
-      <div class="stat-grid" style="margin-bottom:16px">
+      <div class="row-between">
+        <h2 style="margin:0">📈 Statistiques de fréquentation</h2>
+        <button class="small" id="statsPdfBtn">🖨️ Export PDF</button>
+      </div>
+      <div class="stat-grid" style="margin:16px 0">
         <div class="stat"><div class="num">${weeklyAvg.toFixed(0)}</div><div class="lbl">Moyenne hebdomadaire (mois)</div></div>
         <div class="stat"><div class="num">${avg(inMonth).toFixed(1)}</div><div class="lbl">Moyenne journalière (mois)</div></div>
         <div class="stat"><div class="num">${avg(inYear).toFixed(1)}</div><div class="lbl">Moyenne journalière (année)</div></div>
@@ -347,17 +397,21 @@ async function viewStats() {
     </div>`;
   wireToolbar();
 
-  if (!window.Chart) { document.getElementById('chartDaily').replaceWith(Object.assign(document.createElement('p'), { className: 'muted', textContent: 'Graphiques indisponibles hors ligne (Chart.js).' })); return; }
+  if (!window.Chart) {
+    document.getElementById('chartDaily').replaceWith(Object.assign(document.createElement('p'), { className: 'muted', textContent: 'Graphiques indisponibles hors ligne (Chart.js).' }));
+    document.getElementById('statsPdfBtn').onclick = () => exportStatsPDF(stats, null, null);
+    return;
+  }
 
   // Histogramme journalier
   const dim = daysInMonth(CUR.y, CUR.m);
   const labels = [], data = [];
   const byDate = {}; inMonth.forEach((c) => (byDate[c.entry_date] = Number(c.children || 0)));
   for (let d = 1; d <= dim; d++) { labels.push(pad(d)); data.push(byDate[`${CUR.y}-${pad(CUR.m)}-${pad(d)}`] || 0); }
-  new Chart(document.getElementById('chartDaily'), {
+  const chartDaily = new Chart(document.getElementById('chartDaily'), {
     type: 'bar',
     data: { labels, datasets: [{ label: 'Enfants', data, backgroundColor: '#3b5bdb' }] },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+    options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
   // Courbe moyenne mensuelle sur l'année
   const mLabels = [], mData = [];
@@ -366,11 +420,64 @@ async function viewStats() {
     mLabels.push(new Date(CUR.y, mm - 1, 1).toLocaleDateString('fr-FR', { month: 'short' }));
     mData.push(arr.length ? +(arr.reduce((s, c) => s + Number(c.children || 0), 0) / arr.length).toFixed(1) : 0);
   }
-  new Chart(document.getElementById('chartMonthly'), {
+  const chartMonthly = new Chart(document.getElementById('chartMonthly'), {
     type: 'line',
     data: { labels: mLabels, datasets: [{ label: 'Moyenne/jour', data: mData, borderColor: '#2f9e44', tension: 0.3, fill: false }] },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+    options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
+
+  document.getElementById('statsPdfBtn').onclick = () => exportStatsPDF(stats, chartDaily, chartMonthly);
+}
+
+/* ---------------- Export PDF des statistiques (avec graphiques) ---------------- */
+async function exportStatsPDF(stats, chartDaily, chartMonthly) {
+  // Repli impression si jsPDF absent (hors ligne).
+  if (!window.jspdf) {
+    const w = window.open('', '_blank');
+    w.document.write(`<h2>Statistiques de fréquentation — ${monthName(CUR.y, CUR.m)}</h2>
+      <ul>
+        <li>Moyenne hebdomadaire (mois) : <b>${stats.weeklyAvg.toFixed(0)}</b></li>
+        <li>Moyenne journalière (mois) : <b>${stats.dailyMonth.toFixed(1)}</b></li>
+        <li>Moyenne journalière (année) : <b>${stats.dailyYear.toFixed(1)}</b></li>
+      </ul>
+      ${chartDaily ? `<img src="${chartDaily.toBase64Image()}" style="max-width:100%"/>` : ''}
+      ${chartMonthly ? `<img src="${chartMonthly.toBase64Image()}" style="max-width:100%"/>` : ''}
+      <button onclick="print()">Imprimer</button>`);
+    w.document.close(); return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(16); doc.text('Statistiques de fréquentation', 14, 18);
+  doc.setFontSize(11); doc.setTextColor(90);
+  doc.text(`École des devoirs · ${monthName(CUR.y, CUR.m)} · Année ${CUR.y}`, 14, 25);
+
+  // Tableau des moyennes
+  doc.autoTable({
+    startY: 32,
+    head: [['Indicateur', 'Valeur']],
+    body: [
+      ['Moyenne hebdomadaire (mois)', stats.weeklyAvg.toFixed(0) + ' enfants'],
+      ['Moyenne journalière (mois)', stats.dailyMonth.toFixed(1) + ' enfants'],
+      ['Moyenne journalière (année)', stats.dailyYear.toFixed(1) + ' enfants'],
+    ],
+    styles: { fontSize: 11 }, headStyles: { fillColor: [59, 91, 219] },
+  });
+  let y = doc.lastAutoTable.finalY + 10;
+
+  // Graphiques (rendus en images depuis les canvases Chart.js)
+  const W = 180;
+  if (chartDaily) {
+    doc.setTextColor(0); doc.setFontSize(12);
+    doc.text(`Enfants présents par jour — ${monthName(CUR.y, CUR.m)}`, 14, y); y += 4;
+    doc.addImage(chartDaily.toBase64Image('image/png', 1), 'PNG', 14, y, W, W * 0.42); y += W * 0.42 + 10;
+  }
+  if (chartMonthly) {
+    if (y > 240) { doc.addPage(); y = 20; }
+    doc.setFontSize(12);
+    doc.text(`Moyenne mensuelle — ${CUR.y}`, 14, y); y += 4;
+    doc.addImage(chartMonthly.toBase64Image('image/png', 1), 'PNG', 14, y, W, W * 0.42);
+  }
+  doc.save(`statistiques_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 function isoWeek(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -452,15 +559,18 @@ async function exportSheetPDF(empId) {
   const body = [];
   for (let d = 1; d <= dim; d++) {
     const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
-    const e = byDate[date]; if (!e || (!e.planned_minutes && !e.worked_minutes)) continue;
-    body.push([`${pad(d)}/${pad(CUR.m)}`, fmtHM(e.planned_minutes), fmtHM(e.worked_minutes),
-      KINDS[e.kind], fmtHM(e.worked_minutes - e.planned_minutes), e.justification || '']);
+    const e = byDate[date]; if (!e) continue;
+    const worked = effectiveWorked(e);
+    if (!e.planned_minutes && !worked) continue;
+    body.push([`${pad(d)}/${pad(CUR.m)}`, fmtHM(e.planned_minutes),
+      e.start_time || '—', e.end_time || '—', fmtHM(worked),
+      KINDS[e.kind], fmtHM(worked - e.planned_minutes), e.justification || '']);
   }
 
   if (!window.jspdf) { // fallback impression
     const w = window.open('', '_blank');
     w.document.write(`<h2>Prestations — ${prof.full_name} — ${monthName(CUR.y, CUR.m)}</h2>
-      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>À prester</th><th>Presté</th><th>Type</th><th>Écart</th><th>Justif.</th></tr>
+      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>À prester</th><th>Début</th><th>Fin</th><th>Presté</th><th>Type</th><th>Écart</th><th>Justif.</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
       <p><b>Total presté:</b> ${fmtHM(sum.worked)} — <b>Solde cumulé:</b> ${fmtHM(sum.closing)}</p>
       <button onclick="print()">Imprimer</button>`);
@@ -471,7 +581,7 @@ async function exportSheetPDF(empId) {
   doc.setFontSize(15); doc.text(`Prestations — ${prof.full_name}`, 14, 18);
   doc.setFontSize(11); doc.setTextColor(90); doc.text(`${monthName(CUR.y, CUR.m)} · École des devoirs`, 14, 25);
   doc.autoTable({
-    startY: 32, head: [['Date', 'À prester', 'Presté', 'Type', 'Écart', 'Justification']], body,
+    startY: 32, head: [['Date', 'À prester', 'Début', 'Fin', 'Presté', 'Type', 'Écart', 'Justification']], body,
     styles: { fontSize: 9 }, headStyles: { fillColor: [59, 91, 219] },
   });
   let y = doc.lastAutoTable.finalY + 10;

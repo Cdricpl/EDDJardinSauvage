@@ -21,6 +21,7 @@ const Util = {
   ym(date) { const [y, m] = date.split('-').map(Number); return { y, m }; },
   pad(n) { return String(n).padStart(2, '0'); },
   monthKey(y, m) { return `${y}-${Util.pad(m)}`; },
+  minToTimeSafe(min) { return `${Util.pad(Math.floor(min / 60))}:${Util.pad(min % 60)}`; },
   daysInMonth(y, m) { return new Date(y, m, 0).getDate(); },
   today() {
     const d = new Date();
@@ -65,13 +66,20 @@ class DemoStore {
       const dow = new Date(y, m - 1, d).getDay();
       if (dow === 0 || dow === 6) continue; // week-end
       [e1, e2].forEach((emp, i) => {
-        const planned = 240; // 4h
-        const worked = planned + (d % 5 === 0 ? 30 : 0) - (d % 7 === 0 ? 15 : 0);
+        const planned = 240; // 4h → 14:00–18:00
+        // Certains jours diffèrent (encodés via début/fin) ; les autres sont pré-remplis.
+        const extra = (d % 5 === 0 ? 30 : 0) - (d % 7 === 0 ? 15 : 0);
+        const touched = extra !== 0;
+        const end = touched ? Util.minToTimeSafe(18 * 60 + extra) : '';
+        const start = touched ? '14:00' : '';
+        const worked = touched ? planned + extra : planned;
         db.entries.push({
           id: Util.uuid(), employee_id: emp, entry_date: date,
           planned_minutes: planned, worked_minutes: worked,
+          start_time: start, end_time: end, break_minutes: 0,
+          worked_touched: touched,
           kind: 'normal',
-          justification: worked !== planned ? 'Activité prolongée' : '',
+          justification: touched ? 'Activité prolongée' : '',
         });
       });
       db.children.push({ entry_date: date, children: 8 + ((d * 3) % 7), note: '' });
@@ -160,10 +168,12 @@ class DemoStore {
     let e = db.entries.find(x => x.employee_id === entry.employee_id && x.entry_date === entry.entry_date);
     if (!e) {
       e = { id: Util.uuid(), employee_id: entry.employee_id, entry_date: entry.entry_date,
-            planned_minutes: 0, worked_minutes: 0, kind: 'normal', justification: '' };
+            planned_minutes: 0, worked_minutes: 0, start_time: '', end_time: '',
+            break_minutes: 0, worked_touched: false, kind: 'normal', justification: '' };
       db.entries.push(e);
     }
-    ['planned_minutes', 'worked_minutes', 'kind', 'justification'].forEach(k => {
+    ['planned_minutes', 'worked_minutes', 'start_time', 'end_time', 'break_minutes',
+     'worked_touched', 'kind', 'justification'].forEach(k => {
       if (entry[k] !== undefined) e[k] = entry[k];
     });
     this._log(db, 'update_entry', 'day_entry', e.entry_date, { employee_id: entry.employee_id });
