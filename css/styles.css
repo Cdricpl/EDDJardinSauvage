@@ -63,7 +63,11 @@ th { background:#f1f3f5; position:sticky; top:0; }
 .grid input.cell { border:none; width:70px; padding:6px; text-align:center; }
 .grid input.cell.wide { width:100%; min-width:120px; text-align:left; }
 .grid select.cell { border:none; padding:6px; }
-.grid select.cell.time { width:78px; }
+.grid input.cell.time { width:104px; border:none; padding:5px; text-align:center; }
+.grid input.cell.time:focus { outline:2px solid var(--primary); border-radius:4px; }
+/* Éclat vert bref quand une cellule vient d'être enregistrée */
+.cell.saved { animation:savedFlash .7s ease-out; }
+@keyframes savedFlash { 0%{ background:#d3f9d8; } 100%{ background:transparent; } }
 
 /* Groupes de colonnes prévu / réel */
 .grid thead th.grp-plan-h { background:var(--plan-bg); color:var(--plan); }
@@ -106,6 +110,10 @@ tr.weekend td { background:#fafbfc; color:#adb5bd; }
 /* Toast */
 .toast { display:none; position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#2b8a3e; color:#fff; padding:12px 20px; border-radius:10px; box-shadow:var(--shadow); z-index:50; font-size:14px; }
 .toast.error { background:var(--red); }
+
+/* Barre de chargement (haut de page) */
+#loadbar { position:fixed; top:0; left:0; height:3px; width:0; background:var(--primary); z-index:100; transition:width .2s ease; opacity:0; }
+#loadbar.on { width:80%; opacity:1; transition:width 1.2s ease; }
 
 @media (max-width:600px) {
   .container { padding:0 8px; } .card { padding:14px; }

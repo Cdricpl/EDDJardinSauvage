@@ -25,17 +25,13 @@ const daysInMonth = (y, m) => new Date(y, m, 0).getDate();
 const monthName = (y, m) => new Date(y, m - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
-function hoursToMin(h) { const v = parseFloat(String(h).replace(',', '.')); return isNaN(v) ? 0 : Math.round(v * 60); }
-function minToHoursInput(min) { return (min / 60).toFixed(2).replace(/\.00$/, ''); }
-
-/* Encodage par heure de début/fin, tranches de 15 minutes (06:00 → 21:00). */
+/* Encodage par heure de début/fin. Champ time natif, tranches de 15 minutes (step=900). */
 function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function minToTime(min) { return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`; }
 const TIME_OPTIONS = (() => { const o = []; for (let m = 6 * 60; m <= 21 * 60; m += 15) o.push(minToTime(m)); return o; })();
+// Champ heure léger (input natif) : DOM minimal, sélecteur natif fluide sur mobile.
 function timeSelect(k, date, value, disabled) {
-  const opts = ['<option value="">--:--</option>']
-    .concat(TIME_OPTIONS.map((t) => `<option value="${t}" ${t === value ? 'selected' : ''}>${t}</option>`));
-  return `<select class="cell time" data-k="${k}" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts.join('')}</select>`;
+  return `<input type="time" step="900" class="cell time" data-k="${k}" data-date="${date}" value="${value || ''}" ${disabled ? 'disabled' : ''}/>`;
 }
 // Heures PRÉVUES : durée définie par l'admin via heure de début/fin prévue.
 function plannedMinutes(e) {
@@ -185,7 +181,6 @@ async function toolbar(showEmployee) {
     <button class="small" id="nextM">▶</button>
     ${empSel}
     <span style="flex:1"></span>
-    <span id="toolbarExtra"></span>
   </div>`;
 }
 function wireToolbar() {
@@ -200,11 +195,15 @@ function wireToolbar() {
  * ================================================================ */
 async function render() {
   const map = { sheet: viewSheet, recap: viewRecap, children: viewChildren, stats: viewStats, employees: viewEmployees };
+  const bar = document.getElementById('loadbar');
+  if (bar) bar.classList.add('on');
   try {
     await (map[VIEW] || viewSheet)();
   } catch (e) {
     console.error('[render:' + VIEW + ']', e);
     showFatal(e && e.message ? e.message : String(e));
+  } finally {
+    if (bar) bar.classList.remove('on');
   }
 }
 
@@ -295,7 +294,7 @@ async function viewSheet() {
         <h2 style="margin:0">Feuille mensuelle ${statusBadge}</h2>
         <div>${adminControls} <button class="small" id="pdfBtn">🖨️ Export PDF</button></div>
       </div>
-      ${warnings ? `<div class="msg error">${warnings} jour(s) avec un écart non justifié.</div>` : ''}
+      <div class="msg error" id="warnBanner" ${warnings ? '' : 'style="display:none"'}>${warnings} jour(s) avec un écart non justifié.</div>
       ${!monthEditable && empId === ME.id && ME.role === 'employee'
         ? '<div class="msg">Ce mois est ' + (month.status === 'locked' ? 'verrouillé' : 'validé') + ' : vous ne pouvez plus le modifier.</div>' : ''}
       <div class="table-wrap">
@@ -316,11 +315,11 @@ async function viewSheet() {
         </table>
       </div>
       <div class="stat-grid" style="margin-top:16px">
-        <div class="stat"><div class="num">${fmtHM(sum.planned)}</div><div class="lbl">Total prévu</div></div>
-        <div class="stat"><div class="num">${fmtHM(sum.worked)}</div><div class="lbl">Total presté</div></div>
-        <div class="stat"><div class="num ${sum.delta >= 0 ? 'pos' : 'neg'}">${fmtHM(sum.delta)}</div><div class="lbl">Écart du mois</div></div>
-        <div class="stat"><div class="num">${fmtHM(sum.carryIn)}</div><div class="lbl">Solde reporté</div></div>
-        <div class="stat"><div class="num ${sum.closing >= 0 ? 'pos' : 'neg'}">${fmtHM(sum.closing)}</div><div class="lbl">Solde cumulé</div></div>
+        <div class="stat"><div class="num" id="tPlanned">${fmtHM(sum.planned)}</div><div class="lbl">Total prévu</div></div>
+        <div class="stat"><div class="num" id="tWorked">${fmtHM(sum.worked)}</div><div class="lbl">Total presté</div></div>
+        <div class="stat"><div class="num ${sum.delta >= 0 ? 'pos' : 'neg'}" id="tDelta">${fmtHM(sum.delta)}</div><div class="lbl">Écart du mois</div></div>
+        <div class="stat"><div class="num" id="tCarry">${fmtHM(sum.carryIn)}</div><div class="lbl">Solde reporté</div></div>
+        <div class="stat"><div class="num ${sum.closing >= 0 ? 'pos' : 'neg'}" id="tClosing">${fmtHM(sum.closing)}</div><div class="lbl">Solde cumulé</div></div>
       </div>
       <p class="muted small">
         <span class="legend"><span class="sw grp-plan-h"></span> Horaire prévu (défini par l'admin)</span>
@@ -333,6 +332,45 @@ async function viewSheet() {
   wireToolbar();
 
   if (ME.role === 'admin') wireTemplateCard(empId, month);
+
+  // --- Mise à jour ciblée (sans reconstruire la table = fluide, focus préservé) ---
+  const baseCarry = sum.carryIn;
+  const setTile = (id, txt, positive) => {
+    const el = document.getElementById(id); if (!el) return;
+    el.textContent = txt;
+    if (positive !== undefined) { el.classList.toggle('pos', positive); el.classList.toggle('neg', !positive); }
+  };
+  function refreshRow(tr, date) {
+    const e = byDate[date] || {};
+    const planned = plannedMinutes(e), worked = effectiveWorked(e), delta = worked - planned;
+    const modified = !!e.worked_touched;
+    const needJustif = delta !== 0 && (e.kind === 'normal' || e.kind === 'autre') && !e.justification;
+    const weekend = new Date(date.slice(0, 4), Number(date.slice(5, 7)) - 1, Number(date.slice(8))).getDay();
+    tr.className = [(weekend === 0 || weekend === 6) ? 'weekend' : '', modified ? 'modified' : ''].filter(Boolean).join(' ');
+    const [, mo, dd] = date.split('-');
+    tr.children[0].innerHTML = `${dd}/${mo}${modified ? ' <span class="dot" title="Jour modifié">●</span>' : ''}`;
+    tr.children[6].innerHTML = `<strong>${worked ? fmtHM(worked) : '—'}</strong>`;
+    const ec = tr.children[8];
+    ec.textContent = delta ? fmtHM(delta) : '—';
+    ec.className = delta > 0 ? 'pos' : delta < 0 ? 'neg' : '';
+    const jinp = tr.children[9].querySelector('input');
+    if (jinp) { jinp.classList.toggle('err', needJustif); jinp.placeholder = needJustif ? 'Justification requise' : ''; }
+  }
+  function refreshTotals() {
+    let P = 0, W = 0, warn = 0;
+    for (let d = 1; d <= dim; d++) {
+      const e = byDate[`${CUR.y}-${pad(CUR.m)}-${pad(d)}`]; if (!e) continue;
+      const p = plannedMinutes(e), w = effectiveWorked(e); P += p; W += w;
+      if ((w - p) !== 0 && (e.kind === 'normal' || e.kind === 'autre') && !e.justification) warn++;
+    }
+    const delta = W - P, closing = baseCarry + delta;
+    setTile('tPlanned', fmtHM(P)); setTile('tWorked', fmtHM(W));
+    setTile('tDelta', fmtHM(delta), delta >= 0); setTile('tCarry', fmtHM(baseCarry));
+    setTile('tClosing', fmtHM(closing), closing >= 0);
+    const wb = document.getElementById('warnBanner');
+    if (wb) { wb.textContent = warn + ' jour(s) avec un écart non justifié.'; wb.style.display = warn ? '' : 'none'; }
+  }
+  const flashSaved = (el) => { el.classList.add('saved'); setTimeout(() => el.classList.remove('saved'), 700); };
 
   // Sauvegarde automatique des cellules (avec pré-remplissage et calcul début/fin).
   app.querySelectorAll('input.cell, select.cell').forEach((el) => {
@@ -358,8 +396,8 @@ async function viewSheet() {
         // L'employée (ou l'admin) modifie l'horaire réel.
         // On lit les DEUX sélecteurs réels de la ligne (ce qui est affiché).
         const tr = el.closest('tr');
-        const start = tr.querySelector('select[data-k="start_time"]').value;
-        const end = tr.querySelector('select[data-k="end_time"]').value;
+        const start = tr.querySelector('[data-k="start_time"]').value;
+        const end = tr.querySelector('[data-k="end_time"]').value;
         const s = timeToMin(start), f = timeToMin(end);
         if (s != null && f != null && f <= s) { toast("L'heure de fin doit être après le début.", 'error'); return; }
         const bothEmpty = !start && !end;
@@ -380,8 +418,22 @@ async function viewSheet() {
       } else if (k === 'justification') {
         patch.justification = el.value;
       }
-      try { await STORE.upsertEntry(patch); render(); }
-      catch (e) { toast(e.message, 'error'); }
+      try {
+        const saved = await STORE.upsertEntry(patch);
+        byDate[date] = saved;                      // état local à jour
+        const tr = el.closest('tr');
+        // Si l'admin change le prévu d'un jour non modifié, refléter dans le réel affiché.
+        if ((k === 'planned_start' || k === 'planned_end') && !saved.worked_touched) {
+          const rs = tr.querySelector('[data-k="start_time"]'); if (rs) rs.value = saved.start_time || '';
+          const re = tr.querySelector('[data-k="end_time"]'); if (re) re.value = saved.end_time || '';
+        }
+        refreshRow(tr, date);
+        refreshTotals();
+        flashSaved(el);
+      } catch (e) {
+        console.error('[sheet:save]', e);
+        toast('Enregistrement impossible : ' + e.message, 'error');
+      }
     });
   });
 
@@ -431,17 +483,14 @@ const DOW_FULL = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi',
 function templateHasSlots(tpl) {
   return tpl && Object.values(tpl).some((s) => s && s.start && s.end);
 }
-function tplOptions(value) {
-  return ['<option value="">--:--</option>']
-    .concat(TIME_OPTIONS.map((t) => `<option value="${t}" ${t === value ? 'selected' : ''}>${t}</option>`)).join('');
-}
 function templateCardHTML(tpl, month) {
+  const tin = (id, v) => `<input type="time" step="900" id="${id}" value="${v || ''}" style="width:120px"/>`;
   const rows = WEEK_ORDER.map((w) => {
     const s = (tpl && tpl[w]) || {};
     return `<tr>
       <td>${DOW_FULL[w]}</td>
-      <td><select id="tpl_${w}_s">${tplOptions(s.start || '')}</select></td>
-      <td><select id="tpl_${w}_e">${tplOptions(s.end || '')}</select></td>
+      <td>${tin(`tpl_${w}_s`, s.start)}</td>
+      <td>${tin(`tpl_${w}_e`, s.end)}</td>
     </tr>`;
   }).join('');
   return `<div class="card hidden" id="tplCard">

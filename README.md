@@ -120,9 +120,13 @@ automatiquement sur l'accueil, dans l'entête et dans les PDF.
 
 - **Filet anti-crash** : toute erreur affiche un message clair (jamais d'écran blanc), avec
   bouton « Recharger ». Gestionnaires globaux `error` / `unhandledrejection` + logs console.
-- **Performances** : en mode cloud, les entrées d'une employée sont **mises en cache** (une
-  requête par session, mise à jour en local à l'écriture) ; rendus temps réel **groupés
-  (debounce)** pour éviter les rafales ; seul le **mois actif** est affiché.
+- **Performances** : en mode cloud, les entrées **et** les profils sont **mis en cache**
+  (moins de requêtes par rendu) ; l'audit réseau sur le chemin d'écriture a été supprimé
+  (latence de saisie divisée) ; la feuille se met à jour **cellule par cellule** sans
+  reconstruire le tableau (saisie fluide, focus préservé, éclat « enregistré ») ; les
+  menus d'heures sont des **champs `time` natifs** (DOM allégé, meilleur sur mobile) ;
+  rendus temps réel **groupés (debounce)** ; seul le **mois actif** est chargé ; barre de
+  chargement pendant les requêtes.
 - Toutes les actions (lecture, écriture, navigation) sont encapsulées en `try/catch`.
 
 ## 🔐 Rôles et sécurité

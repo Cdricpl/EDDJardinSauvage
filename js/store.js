@@ -143,11 +143,6 @@ class DemoStore {
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.active = active; this._log(db, active ? 'reactivate_employee' : 'archive_employee', 'profile', id, { full_name: p.full_name }); this._save(db); }
   }
-  async setRole(id, role) {
-    const db = this._db();
-    const p = db.profiles.find(x => x.id === id);
-    if (p) { p.role = role; this._log(db, 'set_role', 'profile', id, { role }); this._save(db); }
-  }
 
   /* ---- Horaire type ---- */
   async getTemplate(employee_id) {
@@ -239,9 +234,6 @@ class DemoStore {
     return c;
   }
 
-  /* ---- Audit ---- */
-  async listAudit(limit = 100) { return this._db().audit.slice(0, limit); }
-
   /* ---- Temps réel (autres onglets) ---- */
   onChange(cb) {
     window.addEventListener('storage', (e) => {
@@ -254,7 +246,7 @@ class DemoStore {
  * MODE CLOUD — Supabase
  * ================================================================ */
 class SupabaseStore {
-  constructor(sb) { this.sb = sb; this._profile = null; this._entriesCache = {}; }
+  constructor(sb) { this.sb = sb; this._profile = null; this._entriesCache = {}; this._profilesCache = null; }
   async init() {}
 
   async signIn(email, password) {
@@ -271,9 +263,12 @@ class SupabaseStore {
     return data;
   }
 
+  // Profils mis en cache (rarement modifiés) : évite 1 à 2 requêtes par rendu.
   async listProfiles() {
+    if (this._profilesCache) return this._profilesCache;
     const { data, error } = await this.sb.from('profiles').select('*').order('full_name');
-    if (error) throw error; return data;
+    if (error) throw new Error(error.message);
+    return (this._profilesCache = data || []);
   }
   async addProfile({ full_name, email, password, role }) {
     // Création du compte + profil (nécessite que l'admin soit connecté ;
@@ -285,24 +280,20 @@ class SupabaseStore {
     if (role === 'admin' && data.user) {
       await this.sb.from('profiles').update({ role: 'admin' }).eq('id', data.user.id);
     }
+    this._profilesCache = null;
     return data.user;
   }
   async setActive(id, active) {
     const { error } = await this.sb.from('profiles').update({ active }).eq('id', id);
-    if (error) throw error;
-    await this._audit(active ? 'reactivate_employee' : 'archive_employee', 'profile', id, {});
-  }
-  async setRole(id, role) {
-    const { error } = await this.sb.from('profiles').update({ role }).eq('id', id);
     if (error) throw new Error(error.message);
-    await this._audit('set_role', 'profile', id, { role });
+    this._profilesCache = null;
   }
   async setEmail(id, email) {
     email = (email || '').trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Adresse email invalide.');
     const { error } = await this.sb.from('profiles').update({ email }).eq('id', id);
     if (error) throw new Error(error.message);
-    await this._audit('set_email', 'profile', id, { email });
+    this._profilesCache = null;
   }
   async sendPasswordReset(email) {
     const { error } = await this.sb.auth.resetPasswordForEmail((email || '').trim(), {
@@ -319,7 +310,6 @@ class SupabaseStore {
     const { error } = await this.sb.from('schedule_templates')
       .upsert({ employee_id, slots }, { onConflict: 'employee_id' });
     if (error) throw new Error(error.message);
-    await this._audit('set_template', 'template', employee_id, {});
   }
 
   async getMonth(employee_id, year, month) {
@@ -332,7 +322,6 @@ class SupabaseStore {
     const { data, error } = await this.sb.from('months')
       .upsert(patch, { onConflict: 'employee_id,year,month' }).select().single();
     if (error) throw error;
-    await this._audit('set_month_' + status, 'month', Util.monthKey(year, month), { employee_id });
     return data;
   }
 
@@ -362,7 +351,6 @@ class SupabaseStore {
       const i = list.findIndex((e) => e.entry_date === data.entry_date);
       if (i >= 0) list[i] = data; else list.push(data);
     }
-    await this._audit('update_entry', 'day_entry', entry.entry_date, { employee_id: entry.employee_id });
     return data;
   }
 
@@ -383,25 +371,13 @@ class SupabaseStore {
     return data;
   }
 
-  async listAudit(limit = 100) {
-    const { data } = await this.sb.from('audit_log').select('*')
-      .order('created_at', { ascending: false }).limit(limit);
-    return data || [];
-  }
-  async _audit(action, entity, entity_id, details) {
-    await this.sb.from('audit_log').insert({
-      actor_id: this._profile ? this._profile.id : null,
-      actor_name: this._profile ? this._profile.full_name : null,
-      action, entity, entity_id, details,
-    });
-  }
-
   onChange(cb) {
     // Abonnement temps réel Supabase sur les tables clés.
     ['day_entries', 'months', 'children_attendance', 'profiles', 'schedule_templates'].forEach((t) => {
       this.sb.channel('rt-' + t)
         .on('postgres_changes', { event: '*', schema: 'public', table: t }, () => {
           if (t === 'day_entries') this._entriesCache = {}; // invalide le cache si un autre appareil écrit
+          if (t === 'profiles') this._profilesCache = null;
           cb();
         })
         .subscribe();
