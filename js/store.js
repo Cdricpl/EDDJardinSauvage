@@ -56,6 +56,11 @@ class DemoStore {
       entries: [],      // { id, employee_id, entry_date, planned_minutes, worked_minutes, kind, justification }
       children: [],     // { entry_date, children, note }
       audit: [],        // { id, actor_name, action, entity, entity_id, details, created_at }
+      // Horaire type hebdomadaire par employée : slots[weekday] = {start,end} (0=Dim..6=Sam)
+      templates: [
+        { employee_id: e1, slots: { 1: { start: '14:00', end: '18:00' }, 2: { start: '14:00', end: '18:00' }, 3: { start: '14:00', end: '18:00' }, 4: { start: '14:00', end: '18:00' }, 5: { start: '14:00', end: '18:00' } } },
+        { employee_id: e2, slots: { 1: { start: '14:00', end: '18:00' }, 2: { start: '14:00', end: '18:00' }, 3: { start: '14:00', end: '18:00' }, 4: { start: '14:00', end: '18:00' }, 5: { start: '14:00', end: '18:00' } } },
+      ],
     };
     // Quelques données d'exemple sur le mois courant (pour les stats/graphiques).
     const now = new Date();
@@ -142,6 +147,22 @@ class DemoStore {
     const db = this._db();
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.role = role; this._log(db, 'set_role', 'profile', id, { role }); this._save(db); }
+  }
+
+  /* ---- Horaire type ---- */
+  async getTemplate(employee_id) {
+    const db = this._db();
+    const t = (db.templates || []).find(x => x.employee_id === employee_id);
+    return t ? t.slots : {};
+  }
+  async setTemplate(employee_id, slots) {
+    const db = this._db();
+    db.templates = db.templates || [];
+    let t = db.templates.find(x => x.employee_id === employee_id);
+    if (!t) { t = { employee_id, slots }; db.templates.push(t); }
+    t.slots = slots;
+    this._log(db, 'set_template', 'template', employee_id, {});
+    this._save(db);
   }
 
   /* ---- Mois ---- */
@@ -263,6 +284,17 @@ class SupabaseStore {
     await this._audit('set_role', 'profile', id, { role });
   }
 
+  async getTemplate(employee_id) {
+    const { data } = await this.sb.from('schedule_templates').select('slots').eq('employee_id', employee_id).maybeSingle();
+    return data ? data.slots : {};
+  }
+  async setTemplate(employee_id, slots) {
+    const { error } = await this.sb.from('schedule_templates')
+      .upsert({ employee_id, slots }, { onConflict: 'employee_id' });
+    if (error) throw new Error(error.message);
+    await this._audit('set_template', 'template', employee_id, {});
+  }
+
   async getMonth(employee_id, year, month) {
     const { data } = await this.sb.from('months').select('*')
       .eq('employee_id', employee_id).eq('year', year).eq('month', month).maybeSingle();
@@ -328,7 +360,7 @@ class SupabaseStore {
 
   onChange(cb) {
     // Abonnement temps réel Supabase sur les tables clés.
-    ['day_entries', 'months', 'children_attendance', 'profiles'].forEach((t) => {
+    ['day_entries', 'months', 'children_attendance', 'profiles', 'schedule_templates'].forEach((t) => {
       this.sb.channel('rt-' + t)
         .on('postgres_changes', { event: '*', schema: 'public', table: t }, cb)
         .subscribe();

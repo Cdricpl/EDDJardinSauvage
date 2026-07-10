@@ -57,6 +57,16 @@ create table if not exists public.day_entries (
 );
 
 -- ---------------------------------------------------------------------------
+-- 3bis. HORAIRE TYPE hebdomadaire par employée (sert à pré-remplir les mois)
+--       slots : JSON { "1": {"start":"14:00","end":"18:00"}, ... } (0=Dim..6=Sam)
+-- ---------------------------------------------------------------------------
+create table if not exists public.schedule_templates (
+  employee_id  uuid primary key references public.profiles (id) on delete cascade,
+  slots        jsonb not null default '{}'::jsonb,
+  updated_at   timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------------
 -- 4. PRÉSENCES ENFANTS (à l'échelle de l'école, une ligne par jour)
 -- ---------------------------------------------------------------------------
 create table if not exists public.children_attendance (
@@ -125,8 +135,15 @@ $$;
 alter table public.profiles            enable row level security;
 alter table public.months              enable row level security;
 alter table public.day_entries         enable row level security;
+alter table public.schedule_templates  enable row level security;
 alter table public.children_attendance enable row level security;
 alter table public.audit_log           enable row level security;
+
+-- SCHEDULE_TEMPLATES : lecture pour tous ; écriture admin.
+drop policy if exists templates_read  on public.schedule_templates;
+drop policy if exists templates_admin on public.schedule_templates;
+create policy templates_read  on public.schedule_templates for select using (auth.uid() is not null);
+create policy templates_admin on public.schedule_templates for all using (is_admin()) with check (is_admin());
 
 -- Note : les policies sont "droppées" avant d'être recréées, pour que ce fichier
 -- puisse être ré-exécuté sans erreur (« policy already exists »).

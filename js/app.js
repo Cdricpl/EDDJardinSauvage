@@ -178,7 +178,16 @@ async function viewSheet() {
   const app = document.getElementById('app');
   const empId = SEL_EMP;
   const month = await STORE.getMonth(empId, CUR.y, CUR.m);
-  const entries = await STORE.entriesForMonth(empId, CUR.y, CUR.m);
+  let entries = await STORE.entriesForMonth(empId, CUR.y, CUR.m);
+  const tpl = ME.role === 'admin' ? await STORE.getTemplate(empId) : {};
+
+  // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
+  // (Les mois verrouillés/validés ne sont jamais touchés.)
+  if (ME.role === 'admin' && month.status === 'open' && entries.length === 0 && templateHasSlots(tpl)) {
+    await applyTemplate(empId, CUR.y, CUR.m, tpl, true);
+    return render();
+  }
+
   const byDate = {}; entries.forEach((e) => (byDate[e.entry_date] = e));
   const dim = daysInMonth(CUR.y, CUR.m);
 
@@ -225,6 +234,7 @@ async function viewSheet() {
   let adminControls = '';
   if (ME.role === 'admin') {
     adminControls = `
+      <button class="small" id="tplBtn">🗓️ Horaire type</button>
       <button class="small ${month.status === 'locked' ? 'gray' : 'green'}" id="lockBtn">
         ${month.status === 'locked' ? '🔓 Déverrouiller' : '🔒 Verrouiller le mois'}</button>
       ${month.status === 'open' ? '<button class="small" id="validBtn">Marquer validé</button>' : ''}`;
@@ -270,8 +280,11 @@ async function viewSheet() {
         <span class="legend"><span class="pos">▲ heures sup.</span> / <span class="neg">▼ à récupérer</span></span><br>
         Heures par tranches de 15 min. Le réel est pré-rempli avec le prévu : ne modifiez que les jours différents. Enregistrement automatique.
       </p>
-    </div>`;
+    </div>
+    ${ME.role === 'admin' ? templateCardHTML(tpl, month) : ''}`;
   wireToolbar();
+
+  if (ME.role === 'admin') wireTemplateCard(empId, month);
 
   // Sauvegarde automatique des cellules (avec pré-remplissage et calcul début/fin).
   app.querySelectorAll('input.cell, select.cell').forEach((el) => {
@@ -339,6 +352,98 @@ async function viewSheet() {
 
 async function currentEmpProfile(id) {
   return (await STORE.listProfiles()).find((p) => p.id === id) || { active: true };
+}
+
+/* ---------------- Horaire type (template hebdomadaire) ---------------- */
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Lun..Dim
+const DOW_FULL = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+
+function templateHasSlots(tpl) {
+  return tpl && Object.values(tpl).some((s) => s && s.start && s.end);
+}
+function tplOptions(value) {
+  return ['<option value="">--:--</option>']
+    .concat(TIME_OPTIONS.map((t) => `<option value="${t}" ${t === value ? 'selected' : ''}>${t}</option>`)).join('');
+}
+function templateCardHTML(tpl, month) {
+  const rows = WEEK_ORDER.map((w) => {
+    const s = (tpl && tpl[w]) || {};
+    return `<tr>
+      <td>${DOW_FULL[w]}</td>
+      <td><select id="tpl_${w}_s">${tplOptions(s.start || '')}</select></td>
+      <td><select id="tpl_${w}_e">${tplOptions(s.end || '')}</select></td>
+    </tr>`;
+  }).join('');
+  return `<div class="card hidden" id="tplCard">
+    <h3 style="margin-top:0">🗓️ Horaire type hebdomadaire</h3>
+    <p class="muted small">Définis l'horaire habituel de cette employée. Il sert à
+      <strong>pré-remplir automatiquement les nouveaux mois</strong>. Laisse « --:-- » pour un jour non travaillé.</p>
+    <div class="table-wrap"><table class="grid" style="max-width:420px">
+      <thead><tr><th>Jour</th><th>Début</th><th>Fin</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div id="tplMsg"></div>
+    <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap">
+      <button id="tplSave">💾 Enregistrer l'horaire type</button>
+      <button class="green" id="tplApply" ${month.status === 'locked' ? 'disabled title="Mois verrouillé"' : ''}>
+        ⤵️ Appliquer au mois affiché</button>
+    </div>
+    <p class="muted small" style="margin-top:8px">
+      « Appliquer » remplit le mois courant avec cet horaire (les jours déjà modifiés gardent leur horaire réel).
+      ${month.status === 'locked' ? '<strong>Ce mois est verrouillé : il ne sera pas modifié.</strong>' : ''}</p>
+  </div>`;
+}
+function wireTemplateCard(empId, month) {
+  const btn = document.getElementById('tplBtn');
+  if (btn) btn.onclick = () => document.getElementById('tplCard').classList.toggle('hidden');
+
+  const save = document.getElementById('tplSave');
+  if (save) save.onclick = async () => {
+    const slots = {};
+    for (const w of WEEK_ORDER) {
+      const s = document.getElementById(`tpl_${w}_s`).value;
+      const e = document.getElementById(`tpl_${w}_e`).value;
+      if (s && e) {
+        if (timeToMin(e) <= timeToMin(s)) {
+          document.getElementById('tplMsg').innerHTML = `<div class="msg error">${DOW_FULL[w]} : la fin doit être après le début.</div>`;
+          return;
+        }
+        slots[w] = { start: s, end: e };
+      }
+    }
+    try { await STORE.setTemplate(empId, slots); toast('Horaire type enregistré'); render(); }
+    catch (e) { document.getElementById('tplMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
+  };
+
+  const apply = document.getElementById('tplApply');
+  if (apply) apply.onclick = async () => {
+    if (month.status === 'locked') { toast('Mois verrouillé — non modifié', 'error'); return; }
+    const tpl = await STORE.getTemplate(empId);
+    if (!templateHasSlots(tpl)) { toast("Définis d'abord un horaire type.", 'error'); return; }
+    if (!confirm(`Appliquer l'horaire type à ${monthName(CUR.y, CUR.m)} ? Les jours déjà modifiés sont préservés.`)) return;
+    await applyTemplate(empId, CUR.y, CUR.m, tpl, false);
+  };
+}
+
+// Remplit un mois avec l'horaire type. Ne touche jamais un mois verrouillé,
+// ni l'horaire réel d'un jour déjà modifié (worked_touched).
+async function applyTemplate(empId, y, m, slots, silent) {
+  const month = await STORE.getMonth(empId, y, m);
+  if (month.status === 'locked') { if (!silent) toast('Mois verrouillé — non modifié', 'error'); return; }
+  const existing = {};
+  (await STORE.entriesForMonth(empId, y, m)).forEach((e) => (existing[e.entry_date] = e));
+  const dim = daysInMonth(y, m);
+  for (let d = 1; d <= dim; d++) {
+    const w = new Date(y, m - 1, d).getDay();
+    const slot = slots[w];
+    if (!slot || !slot.start || !slot.end) continue; // jour non travaillé → ignoré
+    const date = `${y}-${pad(m)}-${pad(d)}`;
+    const dur = Math.max(0, timeToMin(slot.end) - timeToMin(slot.start));
+    const ex = existing[date] || {};
+    const patch = { employee_id: empId, entry_date: date, planned_start: slot.start, planned_end: slot.end, planned_minutes: dur };
+    if (!ex.worked_touched) { patch.start_time = slot.start; patch.end_time = slot.end; patch.worked_minutes = dur; }
+    await STORE.upsertEntry(patch);
+  }
+  if (!silent) { toast('Horaire type appliqué au mois'); render(); }
 }
 
 /* ---------------- Vue : Récapitulatif (toutes employées pour l'admin) ---------------- */

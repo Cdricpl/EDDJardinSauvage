@@ -58,6 +58,9 @@ pré-remplies pour visualiser les récaps et les graphiques.
 - **Horaires prévus (admin)** : l'admin définit, par jour, une **heure de début** et une
   **heure de fin** prévues (tranches de 15 min), dans un tableau mensuel type Excel ;
   verrouillage / déverrouillage / validation d'un mois.
+- **Horaire type hebdomadaire (admin)** : un modèle Lun→Dim par employée qui **pré-remplit
+  automatiquement les nouveaux mois**. Modifiable à tout moment ; les **mois verrouillés ne
+  sont jamais recalculés**, et les jours déjà modifiés gardent leur horaire réel.
 - **Prestations (employées)** : l'employée voit l'horaire prévu et ne modifie que
   l'**heure de début / fin réelle** (tranches de 15 min) ; le presté et l'écart sont
   calculés automatiquement. Les jours sont **pré-remplis** avec l'horaire prévu — on ne
