@@ -28,6 +28,13 @@ const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 /* Encodage par heure de début/fin. Champ time natif, tranches de 15 minutes (step=900). */
 function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function minToTime(min) { return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`; }
+// Arrondit une heure "HH:MM" au quart d'heure le plus proche (00, 15, 30, 45).
+function snapQuarter(t) {
+  const m = timeToMin(t);
+  if (m == null) return '';
+  const r = Math.min(1425, Math.max(0, Math.round(m / 15) * 15));
+  return minToTime(r);
+}
 const TIME_OPTIONS = (() => { const o = []; for (let m = 6 * 60; m <= 21 * 60; m += 15) o.push(minToTime(m)); return o; })();
 // Champ heure léger (input natif) : DOM minimal, sélecteur natif fluide sur mobile.
 function timeSelect(k, date, value, disabled) {
@@ -376,6 +383,8 @@ async function viewSheet() {
   app.querySelectorAll('input.cell, select.cell').forEach((el) => {
     el.addEventListener('change', async () => {
       const date = el.dataset.date, k = el.dataset.k;
+      // Force l'arrondi au quart d'heure et reflète la correction dans le champ.
+      if (el.classList.contains('time') && el.value) el.value = snapQuarter(el.value);
       const prev = byDate[date] || {};
       const patch = { employee_id: empId, entry_date: date };
 
@@ -519,8 +528,9 @@ function wireTemplateCard(empId, month) {
   if (save) save.onclick = async () => {
     const slots = {};
     for (const w of WEEK_ORDER) {
-      const s = document.getElementById(`tpl_${w}_s`).value;
-      const e = document.getElementById(`tpl_${w}_e`).value;
+      const sEl = document.getElementById(`tpl_${w}_s`), eEl = document.getElementById(`tpl_${w}_e`);
+      const s = snapQuarter(sEl.value), e = snapQuarter(eEl.value);
+      sEl.value = s; eEl.value = e;   // reflète l'arrondi au quart d'heure
       if (s && e) {
         if (timeToMin(e) <= timeToMin(s)) {
           document.getElementById('tplMsg').innerHTML = `<div class="msg error">${DOW_FULL[w]} : la fin doit être après le début.</div>`;
