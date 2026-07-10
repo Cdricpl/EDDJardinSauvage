@@ -86,8 +86,14 @@ async function boot() {
   document.getElementById('modeBadge').textContent = MODE === 'cloud' ? '☁️ Cloud' : '🧪 Démo (local)';
   document.getElementById('modeBadge').className = 'badge ' + (MODE === 'cloud' ? 'validated' : 'pending');
 
-  // Temps réel : re-rendu groupé (debounce) pour éviter les rendus en rafale.
-  STORE.onChange(debounce(() => { if (ME) render(); }, 350));
+  // Temps réel : re-rendu groupé (debounce) pour éviter les rendus en rafale,
+  // et jamais pendant une saisie active (sinon on volerait le focus du champ).
+  STORE.onChange(debounce(() => {
+    if (!ME) return;
+    const ae = document.activeElement;
+    if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.closest('#app')) return;
+    render();
+  }, 400));
 
   ME = await STORE.getCurrentUser();
   if (ME) await afterLogin(); else renderLogin();
@@ -158,7 +164,7 @@ function renderLogin() {
 function buildNav() {
   const items = ME.role === 'admin'
     ? [['sheet', '📅 Feuille du mois'], ['recap', '📊 Récapitulatif'], ['children', '🧒 Enfants'],
-       ['stats', '📈 Statistiques'], ['employees', '👥 Utilisateurs'], ['audit', '📝 Journal']]
+       ['stats', '📈 Statistiques'], ['employees', '👥 Utilisateurs']]
     : [['sheet', '📅 Ma feuille'], ['recap', '📊 Mon récap'], ['children', '🧒 Enfants'], ['stats', '📈 Statistiques']];
   document.getElementById('nav').innerHTML = items.map(
     ([v, l]) => `<button class="navbtn ${v === VIEW ? 'active' : ''}" data-v="${v}">${l}</button>`).join('');
@@ -193,7 +199,7 @@ function wireToolbar() {
  * Rendu principal (avec filet de sécurité : jamais d'écran blanc)
  * ================================================================ */
 async function render() {
-  const map = { sheet: viewSheet, recap: viewRecap, children: viewChildren, stats: viewStats, employees: viewEmployees, audit: viewAudit };
+  const map = { sheet: viewSheet, recap: viewRecap, children: viewChildren, stats: viewStats, employees: viewEmployees };
   try {
     await (map[VIEW] || viewSheet)();
   } catch (e) {
@@ -283,6 +289,7 @@ async function viewSheet() {
   }
 
   app.innerHTML = `${await toolbar(true)}
+    ${ME.role === 'admin' ? templateCardHTML(tpl, month) : ''}
     <div class="card">
       <div class="row-between">
         <h2 style="margin:0">Feuille mensuelle ${statusBadge}</h2>
@@ -322,8 +329,7 @@ async function viewSheet() {
         <span class="legend"><span class="pos">▲ heures sup.</span> / <span class="neg">▼ à récupérer</span></span><br>
         Heures par tranches de 15 min. Le réel est pré-rempli avec le prévu : ne modifiez que les jours différents. Enregistrement automatique.
       </p>
-    </div>
-    ${ME.role === 'admin' ? templateCardHTML(tpl, month) : ''}`;
+    </div>`;
   wireToolbar();
 
   if (ME.role === 'admin') wireTemplateCard(empId, month);
@@ -560,14 +566,27 @@ async function viewChildren() {
     <div class="card">
       <h2>🧒 Présences enfants — ${monthName(CUR.y, CUR.m)}</h2>
       <div class="stat-grid" style="margin-bottom:14px">
-        <div class="stat"><div class="num">${total}</div><div class="lbl">Total du mois</div></div>
-        <div class="stat"><div class="num">${count ? (total / count).toFixed(1) : '0'}</div><div class="lbl">Moyenne / jour</div></div>
+        <div class="stat"><div class="num" id="chTotal">${total}</div><div class="lbl">Total du mois</div></div>
+        <div class="stat"><div class="num" id="chAvg">${count ? (total / count).toFixed(1) : '0'}</div><div class="lbl">Moyenne / jour</div></div>
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Date</th><th>Jour</th><th>Enfants</th><th>Note</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
     </div>`;
   wireToolbar();
+
+  // Recalcule les totaux du mois sans reconstruire la table (préserve le focus).
+  const refreshChildTotals = () => {
+    let t = 0, n = 0;
+    for (let d = 1; d <= dim; d++) {
+      const c = byDate[`${CUR.y}-${pad(CUR.m)}-${pad(d)}`];
+      if (c && c.children !== '' && c.children != null) { t += Number(c.children) || 0; n++; }
+    }
+    const tEl = document.getElementById('chTotal'), aEl = document.getElementById('chAvg');
+    if (tEl) tEl.textContent = t;
+    if (aEl) aEl.textContent = n ? (t / n).toFixed(1) : '0';
+  };
+
   app.querySelectorAll('input.cell').forEach((el) => el.addEventListener('change', async () => {
     try {
       const date = el.dataset.date;
@@ -576,8 +595,10 @@ async function viewChildren() {
       let children = el.dataset.k === 'children' ? parseInt(el.value, 10) : parseInt(cur.children, 10);
       if (!Number.isFinite(children) || children < 0) children = 0;  // valeur sûre
       const note = (el.dataset.k === 'note' ? el.value : (cur.note || '')) || '';
+      // Met à jour l'état local puis enregistre — SANS re-rendu (pas de perte de focus).
+      byDate[date] = { entry_date: date, children, note };
+      refreshChildTotals();
       await STORE.upsertChildren(date, children, note);
-      render();
     } catch (e) {
       console.error('[children:save]', e);
       toast("Impossible d'enregistrer la présence : " + e.message, 'error');
@@ -599,15 +620,17 @@ async function viewStats() {
   const weekVals = Object.values(weeks);
   const weeklyAvg = weekVals.length ? weekVals.reduce((a, b) => a + b, 0) / weekVals.length : 0;
 
+  const annualTotal = inYear.reduce((s, c) => s + (Number(c.children) || 0), 0);
   const stats = {
     weeklyAvg: weeklyAvg, dailyMonth: avg(inMonth), dailyYear: avg(inYear),
+    annualTotal, annualDays: inYear.length, year: CUR.y,
   };
 
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <div class="row-between">
         <h2 style="margin:0">📈 Statistiques de fréquentation</h2>
-        <button class="small" id="statsPdfBtn">🖨️ Export PDF</button>
+        <button class="small" id="statsPdfBtn">🖨️ Export PDF annuel</button>
       </div>
       <div class="stat-grid" style="margin:16px 0">
         <div class="stat"><div class="num">${weeklyAvg.toFixed(0)}</div><div class="lbl">Moyenne hebdomadaire (mois)</div></div>
@@ -653,53 +676,44 @@ async function viewStats() {
   document.getElementById('statsPdfBtn').onclick = () => exportStatsPDF(stats, chartDaily, chartMonthly);
 }
 
-/* ---------------- Export PDF des statistiques (avec graphiques) ---------------- */
+/* ---------------- Export PDF des statistiques ANNUELLES ---------------- */
+// N'inclut que les statistiques de l'année : moyenne annuelle, total, et le
+// graphique de moyenne mensuelle sur l'année.
 async function exportStatsPDF(stats, chartDaily, chartMonthly) {
   // Repli impression si jsPDF absent (hors ligne).
   if (!window.jspdf) {
     const w = window.open('', '_blank');
-    w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Statistiques de fréquentation — ${monthName(CUR.y, CUR.m)}</h2>
+    w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Statistiques annuelles ${stats.year} — Fréquentation</h2>
       <ul>
-        <li>Moyenne hebdomadaire (mois) : <b>${stats.weeklyAvg.toFixed(0)}</b></li>
-        <li>Moyenne journalière (mois) : <b>${stats.dailyMonth.toFixed(1)}</b></li>
-        <li>Moyenne journalière (année) : <b>${stats.dailyYear.toFixed(1)}</b></li>
+        <li>Moyenne journalière (année) : <b>${stats.dailyYear.toFixed(1)}</b> enfants</li>
+        <li>Total enfants sur l'année : <b>${stats.annualTotal}</b> (sur ${stats.annualDays} jours encodés)</li>
       </ul>
-      ${chartDaily ? `<img src="${chartDaily.toBase64Image()}" style="max-width:100%"/>` : ''}
       ${chartMonthly ? `<img src="${chartMonthly.toBase64Image()}" style="max-width:100%"/>` : ''}
       <button onclick="print()">Imprimer</button>`);
     w.document.close(); return;
   }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
-  let y = await pdfHeader(doc, 'Statistiques de fréquentation', `${monthName(CUR.y, CUR.m)} · Année ${CUR.y}`);
+  let y = await pdfHeader(doc, 'Statistiques annuelles de fréquentation', `Année ${stats.year}`);
 
-  // Tableau des moyennes
   doc.autoTable({
     startY: y,
-    head: [['Indicateur', 'Valeur']],
+    head: [['Indicateur (année ' + stats.year + ')', 'Valeur']],
     body: [
-      ['Moyenne hebdomadaire (mois)', stats.weeklyAvg.toFixed(0) + ' enfants'],
-      ['Moyenne journalière (mois)', stats.dailyMonth.toFixed(1) + ' enfants'],
-      ['Moyenne journalière (année)', stats.dailyYear.toFixed(1) + ' enfants'],
+      ['Moyenne journalière', stats.dailyYear.toFixed(1) + ' enfants'],
+      ['Total sur l\'année', stats.annualTotal + ' enfants'],
+      ['Jours encodés', String(stats.annualDays)],
     ],
     styles: { fontSize: 11 }, headStyles: { fillColor: [59, 91, 219] },
   });
   y = doc.lastAutoTable.finalY + 10;
 
-  // Graphiques (rendus en images depuis les canvases Chart.js)
-  const W = 180;
-  if (chartDaily) {
-    doc.setTextColor(0); doc.setFontSize(12);
-    doc.text(`Enfants présents par jour — ${monthName(CUR.y, CUR.m)}`, 14, y); y += 4;
-    doc.addImage(chartDaily.toBase64Image('image/png', 1), 'PNG', 14, y, W, W * 0.42); y += W * 0.42 + 10;
-  }
   if (chartMonthly) {
-    if (y > 240) { doc.addPage(); y = 20; }
-    doc.setFontSize(12);
-    doc.text(`Moyenne mensuelle — ${CUR.y}`, 14, y); y += 4;
-    doc.addImage(chartMonthly.toBase64Image('image/png', 1), 'PNG', 14, y, W, W * 0.42);
+    doc.setTextColor(0); doc.setFontSize(12);
+    doc.text(`Moyenne d'enfants par jour, mois par mois — ${stats.year}`, 14, y); y += 4;
+    doc.addImage(chartMonthly.toBase64Image('image/png', 1), 'PNG', 14, y, 180, 180 * 0.42);
   }
-  doc.save(`statistiques_${CUR.y}-${pad(CUR.m)}.pdf`);
+  doc.save(`statistiques_annuelles_${stats.year}.pdf`);
 }
 function isoWeek(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -792,22 +806,6 @@ async function viewEmployees() {
     try { await STORE.setActive(b.dataset.react, true); toast('Employée réactivée'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
-}
-
-/* ---------------- Vue : Journal d'audit (admin) ---------------- */
-async function viewAudit() {
-  const app = document.getElementById('app');
-  const list = await STORE.listAudit(150);
-  const rows = list.map((a) => `<tr>
-    <td class="nowrap">${new Date(a.created_at).toLocaleString('fr-FR')}</td>
-    <td>${a.actor_name || '—'}</td><td>${a.action}</td><td>${a.entity}</td><td class="muted">${a.entity_id || ''}</td>
-  </tr>`).join('');
-  app.innerHTML = `<div class="card">
-    <h2>📝 Journal des modifications</h2>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Date</th><th>Auteur</th><th>Action</th><th>Objet</th><th>Réf.</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="5" class="muted">Aucune activité.</td></tr>'}</tbody></table></div>
-  </div>`;
 }
 
 /* ---------------- Logo pour les PDF (SVG → PNG dataURL, mis en cache) ---------------- */
