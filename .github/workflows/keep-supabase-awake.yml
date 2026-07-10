@@ -1,0 +1,34 @@
+name: Garder Supabase éveillé
+
+# Empêche la mise en veille du projet Supabase (plan gratuit : pause après ~7 jours
+# d'inactivité). Ce robot envoie une petite requête à la base 2 fois par semaine.
+# Aucune donnée n'est modifiée : c'est une simple lecture qui compte comme "activité".
+
+on:
+  schedule:
+    # Lundi et jeudi à 06:00 UTC (jamais plus de ~3-4 jours entre deux réveils).
+    - cron: '0 6 * * 1,4'
+  workflow_dispatch: {}   # permet aussi de le lancer à la main depuis l'onglet Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Réveiller la base Supabase
+        env:
+          SUPABASE_URL: https://sbuwxpecmsglbkeiaikz.supabase.co
+          # Clé "anon" publique (déjà présente dans js/config.js) — sécurisée par la RLS.
+          SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNidXd4cGVjbXNnbGJrZWlhaWt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM2NDkzMTcsImV4cCI6MjA5OTIyNTMxN30.-_YtmodUzMCbVPHzYGT6sdyLro86mK1pqBEg8QcCN-c
+        run: |
+          echo "Ping de la base Supabase pour la garder active..."
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "$SUPABASE_URL/rest/v1/profiles?select=id&limit=1" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "Réponse HTTP : $code"
+          # 200 (ok) ou 401/403 (RLS) comptent tous comme une activité valide.
+          if [ "$code" = "200" ] || [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "OK — la base a bien reçu la requête, elle reste éveillée."
+          else
+            echo "Réponse inattendue ($code), mais la requête a tout de même touché le projet."
+          fi
