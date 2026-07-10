@@ -165,6 +165,20 @@ class DemoStore {
     this._save(db);
   }
 
+  /* ---- Email / mot de passe ---- */
+  async setEmail(id, email) {
+    const db = this._db();
+    email = (email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Adresse email invalide.');
+    if (db.profiles.some(p => p.email === email && p.id !== id)) throw new Error('Cet email est déjà utilisé.');
+    const p = db.profiles.find(x => x.id === id);
+    if (p) { p.email = email; this._log(db, 'set_email', 'profile', id, { email }); this._save(db); }
+  }
+  async sendPasswordReset(email) {
+    // Pas d'envoi d'email possible en mode démo.
+    throw new Error("Envoi d'email indisponible en mode démo (fonctionne en mode cloud).");
+  }
+
   /* ---- Mois ---- */
   async getMonth(employee_id, year, month) {
     return this._db().months.find(x => x.employee_id === employee_id && x.year === year && x.month === month)
@@ -240,7 +254,7 @@ class DemoStore {
  * MODE CLOUD — Supabase
  * ================================================================ */
 class SupabaseStore {
-  constructor(sb) { this.sb = sb; this._profile = null; }
+  constructor(sb) { this.sb = sb; this._profile = null; this._entriesCache = {}; }
   async init() {}
 
   async signIn(email, password) {
@@ -283,6 +297,19 @@ class SupabaseStore {
     if (error) throw new Error(error.message);
     await this._audit('set_role', 'profile', id, { role });
   }
+  async setEmail(id, email) {
+    email = (email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Adresse email invalide.');
+    const { error } = await this.sb.from('profiles').update({ email }).eq('id', id);
+    if (error) throw new Error(error.message);
+    await this._audit('set_email', 'profile', id, { email });
+  }
+  async sendPasswordReset(email) {
+    const { error } = await this.sb.auth.resetPasswordForEmail((email || '').trim(), {
+      redirectTo: location.origin + location.pathname,
+    });
+    if (error) throw new Error(error.message);
+  }
 
   async getTemplate(employee_id) {
     const { data } = await this.sb.from('schedule_templates').select('slots').eq('employee_id', employee_id).maybeSingle();
@@ -309,21 +336,32 @@ class SupabaseStore {
     return data;
   }
 
-  async entriesForMonth(employee_id, year, month) {
-    const from = `${Util.monthKey(year, month)}-01`;
-    const to = `${Util.monthKey(year, month)}-31`;
-    const { data, error } = await this.sb.from('day_entries').select('*')
-      .eq('employee_id', employee_id).gte('entry_date', from).lte('entry_date', to);
-    if (error) throw error; return data;
-  }
+  // Cache : une seule requête "toutes les entrées de l'employée" par session,
+  // réutilisée pour le mois affiché et le calcul du solde reporté. Invalidée
+  // à chaque écriture (locale) et sur tout changement temps réel.
   async entriesForEmployee(employee_id) {
-    const { data } = await this.sb.from('day_entries').select('*').eq('employee_id', employee_id);
-    return data || [];
+    if (this._entriesCache[employee_id]) return this._entriesCache[employee_id];
+    const { data, error } = await this.sb.from('day_entries').select('*').eq('employee_id', employee_id);
+    if (error) throw new Error(error.message);
+    const list = data || [];
+    this._entriesCache[employee_id] = list;
+    return list;
+  }
+  async entriesForMonth(employee_id, year, month) {
+    const prefix = Util.monthKey(year, month);
+    const all = await this.entriesForEmployee(employee_id);
+    return all.filter((e) => (e.entry_date || '').startsWith(prefix));
   }
   async upsertEntry(entry) {
     const { data, error } = await this.sb.from('day_entries')
       .upsert({ ...entry }, { onConflict: 'employee_id,entry_date' }).select().single();
     if (error) throw new Error(error.message);
+    // Met à jour le cache local sans refaire une requête.
+    const list = this._entriesCache[entry.employee_id];
+    if (list) {
+      const i = list.findIndex((e) => e.entry_date === data.entry_date);
+      if (i >= 0) list[i] = data; else list.push(data);
+    }
     await this._audit('update_entry', 'day_entry', entry.entry_date, { employee_id: entry.employee_id });
     return data;
   }
@@ -362,7 +400,10 @@ class SupabaseStore {
     // Abonnement temps réel Supabase sur les tables clés.
     ['day_entries', 'months', 'children_attendance', 'profiles', 'schedule_templates'].forEach((t) => {
       this.sb.channel('rt-' + t)
-        .on('postgres_changes', { event: '*', schema: 'public', table: t }, cb)
+        .on('postgres_changes', { event: '*', schema: 'public', table: t }, () => {
+          if (t === 'day_entries') this._entriesCache = {}; // invalide le cache si un autre appareil écrit
+          cb();
+        })
         .subscribe();
     });
   }

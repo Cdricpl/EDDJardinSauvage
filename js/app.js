@@ -6,8 +6,18 @@
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
 let SEL_EMP = null;                 // employée sélectionnée (vue admin)
+let APPLYING = false;               // garde anti-réentrance du pré-remplissage
 let CUR = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 const KINDS = { normal: 'Normal', conge: 'Congé', recuperation: 'Récupération', autre: 'Autre' };
+
+/* Le système démarre en janvier 2026 : aucun mois antérieur n'est accessible. */
+const MIN_YM = { y: 2026, m: 1 };
+const ymNum = (y, m) => y * 12 + (m - 1);
+const atOrBeforeMin = () => ymNum(CUR.y, CUR.m) <= ymNum(MIN_YM.y, MIN_YM.m);
+function clampMonth() {
+  if (ymNum(CUR.y, CUR.m) < ymNum(MIN_YM.y, MIN_YM.m)) { CUR.y = MIN_YM.y; CUR.m = MIN_YM.m; }
+}
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
 /* ---------------- Helpers temps ---------------- */
 const pad = (n) => String(n).padStart(2, '0');
@@ -70,12 +80,14 @@ async function monthSummary(empId, y, m) {
  * Démarrage
  * ================================================================ */
 async function boot() {
+  clampMonth();
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
   document.getElementById('modeBadge').textContent = MODE === 'cloud' ? '☁️ Cloud' : '🧪 Démo (local)';
   document.getElementById('modeBadge').className = 'badge ' + (MODE === 'cloud' ? 'validated' : 'pending');
 
-  STORE.onChange(() => { if (ME) render(); });   // temps réel
+  // Temps réel : re-rendu groupé (debounce) pour éviter les rendus en rafale.
+  STORE.onChange(debounce(() => { if (ME) render(); }, 350));
 
   ME = await STORE.getCurrentUser();
   if (ME) await afterLogin(); else renderLogin();
@@ -114,20 +126,32 @@ function renderLogin() {
       <input id="pwd" type="password" value="${MODE === 'demo' ? 'admin123' : ''}" placeholder="votre mot de passe" />
       <div id="loginMsg"></div>
       <button class="big" id="loginBtn">Se connecter</button>
-      ${MODE === 'demo' ? `<p class="muted small" style="margin-top:14px">
+      <p class="center" style="margin-top:10px"><a href="#" id="forgotLink" class="muted small">Mot de passe oublié ?</a></p>
+      ${MODE === 'demo' ? `<p class="muted small" style="margin-top:6px">
         Mode démo — comptes de test :<br>
         admin@ecole.be / admin123 · flora@ecole.be / flora123 · sarah@ecole.be / sarah123</p>` : ''}
     </div>`;
+  const loginMsg = (html, kind = 'error') => {
+    document.getElementById('loginMsg').innerHTML = `<div class="msg ${kind}">${html}</div>`;
+  };
   const go = async () => {
     try {
       ME = await STORE.signIn(document.getElementById('email').value.trim(), document.getElementById('pwd').value);
       await afterLogin();
-    } catch (e) {
-      document.getElementById('loginMsg').innerHTML = `<div class="msg error">${e.message}</div>`;
-    }
+    } catch (e) { loginMsg(e.message); }
   };
   document.getElementById('loginBtn').onclick = go;
   document.getElementById('pwd').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  document.getElementById('forgotLink').onclick = async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('email').value.trim();
+    if (!email) { loginMsg('Entrez d\'abord votre email, puis cliquez sur « Mot de passe oublié ».'); return; }
+    if (MODE !== 'cloud') { loginMsg('La réinitialisation par email est disponible en mode cloud uniquement.'); return; }
+    try {
+      await STORE.sendPasswordReset(email);
+      loginMsg('Un email de réinitialisation a été envoyé à ' + email + ' (pensez à vérifier les spams).', 'ok');
+    } catch (err) { loginMsg(err.message); }
+  };
 }
 
 /* ---------------- Navigation ---------------- */
@@ -150,7 +174,7 @@ async function toolbar(showEmployee) {
       `<option value="${p.id}" ${p.id === SEL_EMP ? 'selected' : ''}>${p.full_name}${p.active ? '' : ' (archivée)'}</option>`).join('')}</select>`;
   }
   return `<div class="toolbar">
-    <button class="small" id="prevM">◀</button>
+    <button class="small" id="prevM" ${atOrBeforeMin() ? 'disabled title="Janvier 2026 = premier mois"' : ''}>◀</button>
     <strong style="min-width:170px;text-align:center;text-transform:capitalize">${monthName(CUR.y, CUR.m)}</strong>
     <button class="small" id="nextM">▶</button>
     ${empSel}
@@ -160,17 +184,32 @@ async function toolbar(showEmployee) {
 }
 function wireToolbar() {
   const p = document.getElementById('prevM'), n = document.getElementById('nextM'), s = document.getElementById('empSel');
-  if (p) p.onclick = () => { CUR.m--; if (CUR.m < 1) { CUR.m = 12; CUR.y--; } render(); };
+  if (p) p.onclick = () => { if (atOrBeforeMin()) return; CUR.m--; if (CUR.m < 1) { CUR.m = 12; CUR.y--; } clampMonth(); render(); };
   if (n) n.onclick = () => { CUR.m++; if (CUR.m > 12) { CUR.m = 1; CUR.y++; } render(); };
   if (s) s.onchange = () => { SEL_EMP = s.value; render(); };
 }
 
 /* ================================================================
- * Rendu principal
+ * Rendu principal (avec filet de sécurité : jamais d'écran blanc)
  * ================================================================ */
 async function render() {
   const map = { sheet: viewSheet, recap: viewRecap, children: viewChildren, stats: viewStats, employees: viewEmployees, audit: viewAudit };
-  await (map[VIEW] || viewSheet)();
+  try {
+    await (map[VIEW] || viewSheet)();
+  } catch (e) {
+    console.error('[render:' + VIEW + ']', e);
+    showFatal(e && e.message ? e.message : String(e));
+  }
+}
+
+function showFatal(msg) {
+  const app = document.getElementById('app');
+  if (!app) return;
+  app.innerHTML = `<div class="card">
+    <div class="msg error"><strong>Une erreur est survenue.</strong><br>${msg || ''}</div>
+    <p class="muted small">Vos données sont en sécurité. Réessayez, ou rechargez l'application.</p>
+    <button onclick="location.reload()">Recharger</button>
+  </div>`;
 }
 
 /* ---------------- Vue : Feuille mensuelle (type Excel) ---------------- */
@@ -182,9 +221,12 @@ async function viewSheet() {
   const tpl = ME.role === 'admin' ? await STORE.getTemplate(empId) : {};
 
   // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
-  // (Les mois verrouillés/validés ne sont jamais touchés.)
-  if (ME.role === 'admin' && month.status === 'open' && entries.length === 0 && templateHasSlots(tpl)) {
-    await applyTemplate(empId, CUR.y, CUR.m, tpl, true);
+  // (Les mois verrouillés/validés ne sont jamais touchés.) Garde anti-réentrance.
+  if (ME.role === 'admin' && month.status === 'open' && entries.length === 0 && templateHasSlots(tpl) && !APPLYING) {
+    APPLYING = true;
+    try { await applyTemplate(empId, CUR.y, CUR.m, tpl, true); }
+    catch (e) { console.error('[auto-prefill]', e); toast('Pré-remplissage impossible : ' + e.message, 'error'); }
+    finally { APPLYING = false; }
     return render();
   }
 
@@ -340,14 +382,36 @@ async function viewSheet() {
   if (ME.role === 'admin') {
     const lb = document.getElementById('lockBtn');
     if (lb) lb.onclick = async () => {
-      await STORE.setMonthStatus(empId, CUR.y, CUR.m, month.status === 'locked' ? 'open' : 'locked');
-      toast(month.status === 'locked' ? 'Mois déverrouillé' : 'Mois verrouillé — solde reporté au mois suivant');
-      render();
+      try {
+        if (month.status === 'locked') {
+          await STORE.setMonthStatus(empId, CUR.y, CUR.m, 'open');
+          toast('Mois déverrouillé');
+        } else {
+          // Règle métier : verrouiller un mois verrouille aussi tous les précédents.
+          await lockThrough(empId, CUR.y, CUR.m);
+          toast('Mois verrouillé (ainsi que les mois précédents)');
+        }
+        render();
+      } catch (e) { toast('Erreur : ' + e.message, 'error'); }
     };
     const vb = document.getElementById('validBtn');
-    if (vb) vb.onclick = async () => { await STORE.setMonthStatus(empId, CUR.y, CUR.m, 'validated'); toast('Mois marqué validé'); render(); };
+    if (vb) vb.onclick = async () => {
+      try { await STORE.setMonthStatus(empId, CUR.y, CUR.m, 'validated'); toast('Mois marqué validé'); render(); }
+      catch (e) { toast('Erreur : ' + e.message, 'error'); }
+    };
   }
-  document.getElementById('pdfBtn').onclick = () => exportSheetPDF(empId);
+  document.getElementById('pdfBtn').onclick = () => exportSheetPDF(empId).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+}
+
+// Verrouille tous les mois de janvier 2026 jusqu'au mois cible inclus.
+async function lockThrough(empId, y, m) {
+  const target = ymNum(y, m);
+  let yy = MIN_YM.y, mm = MIN_YM.m;
+  while (ymNum(yy, mm) <= target) {
+    const mo = await STORE.getMonth(empId, yy, mm);
+    if (mo.status !== 'locked') await STORE.setMonthStatus(empId, yy, mm, 'locked');
+    mm++; if (mm > 12) { mm = 1; yy++; }
+  }
 }
 
 async function currentEmpProfile(id) {
@@ -505,11 +569,19 @@ async function viewChildren() {
     </div>`;
   wireToolbar();
   app.querySelectorAll('input.cell').forEach((el) => el.addEventListener('change', async () => {
-    const date = el.dataset.date;
-    const cur = byDate[date] || { children: 0, note: '' };
-    const children = el.dataset.k === 'children' ? Number(el.value || 0) : Number(cur.children || 0);
-    const note = el.dataset.k === 'note' ? el.value : (cur.note || '');
-    await STORE.upsertChildren(date, children, note); render();
+    try {
+      const date = el.dataset.date;
+      if (!date) return;
+      const cur = byDate[date] || { children: 0, note: '' };
+      let children = el.dataset.k === 'children' ? parseInt(el.value, 10) : parseInt(cur.children, 10);
+      if (!Number.isFinite(children) || children < 0) children = 0;  // valeur sûre
+      const note = (el.dataset.k === 'note' ? el.value : (cur.note || '')) || '';
+      await STORE.upsertChildren(date, children, note);
+      render();
+    } catch (e) {
+      console.error('[children:save]', e);
+      toast("Impossible d'enregistrer la présence : " + e.message, 'error');
+    }
   }));
 }
 
@@ -643,20 +715,19 @@ async function viewEmployees() {
   const profs = await STORE.listProfiles();
   const roleLbl = (r) => (r === 'admin' ? 'Administrateur' : 'Employée');
   const rows = profs.map((p) => {
-    const isMe = p.id === ME.id;
-    const roleBtn = isMe
-      ? '<span class="muted small">(vous)</span>'
-      : `<button class="small gray" data-role-id="${p.id}" data-role-to="${p.role === 'admin' ? 'employee' : 'admin'}">
-           ${p.role === 'admin' ? '↓ Passer employée' : '↑ Passer admin'}</button>`;
     const activeBtn = p.role === 'employee'
       ? (p.active ? `<button class="small red" data-arch="${p.id}">Archiver</button>`
                   : `<button class="small green" data-react="${p.id}">Réactiver</button>`)
       : '';
     return `<tr>
-      <td>${p.full_name}</td><td>${p.email || '—'}</td>
+      <td>${p.full_name}</td>
+      <td class="nowrap">${p.email || '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email">✏️</button></td>
       <td><span class="badge ${p.role === 'admin' ? 'validated' : 'open'}">${roleLbl(p.role)}</span></td>
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
-      <td class="nowrap">${roleBtn} ${activeBtn}</td>
+      <td class="nowrap">
+        <button class="small" data-reset="${p.id}">✉️ Réinit. mot de passe</button>
+        ${activeBtn}
+      </td>
     </tr>`;
   }).join('');
   app.innerHTML = `<div class="card">
@@ -665,8 +736,10 @@ async function viewEmployees() {
         <thead><tr><th>Nom</th><th>Email</th><th>Rôle</th><th>Statut</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <p class="muted small">
-        « Passer admin / employée » change le rôle d'un compte existant (moyen recommandé pour créer un admin).
+        🔒 Le rôle <strong>Administrateur est fixe</strong> : une employée ne peut pas être promue admin.
+        « ✏️ » modifie l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
         Archiver conserve les données en lecture seule.
+        ${MODE === 'cloud' ? "En cloud, l'email modifié sert de contact/réinitialisation." : ''}
       </p>
     </div>
     <div class="card hidden" id="addForm">
@@ -675,40 +748,50 @@ async function viewEmployees() {
         <div><label>Nom complet</label><input id="nName" placeholder="Prénom Nom"/></div>
         <div><label>Email</label><input id="nEmail" type="email" placeholder="prenom@ecole.be"/></div>
         <div><label>Mot de passe initial</label><input id="nPwd" placeholder="au moins 6 caractères"/></div>
-        <div><label>Rôle</label><select id="nRole">
-          <option value="employee">Employée</option>
-          <option value="admin">Administrateur</option>
-        </select></div>
       </div>
       <div id="addMsg"></div>
-      ${MODE === 'cloud' ? `<p class="muted small">En mode cloud, la création d'un compte peut vous déconnecter
-        (limite de Supabase). Astuce fiable : créez d'abord la personne comme employée, puis utilisez
-        « ↑ Passer admin » dans le tableau — cela ne vous déconnecte pas.</p>` : ''}
+      <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employée</strong>. Le rôle admin est réservé et contrôlé.
+        ${MODE === 'cloud' ? "En cloud, la création peut vous déconnecter (limite Supabase) ; reconnectez-vous si besoin." : ''}</p>
       <button id="saveEmp" style="margin-top:10px">Créer</button>
     </div>`;
+
   document.getElementById('addBtn').onclick = () => document.getElementById('addForm').classList.toggle('hidden');
   document.getElementById('saveEmp').onclick = async () => {
-    const full_name = document.getElementById('nName').value.trim();
-    const email = document.getElementById('nEmail').value.trim();
-    const password = document.getElementById('nPwd').value;
-    const role = document.getElementById('nRole').value;
-    if (!full_name || !email || password.length < 6) {
-      document.getElementById('addMsg').innerHTML = '<div class="msg error">Nom, email et mot de passe (6+) requis.</div>'; return;
-    }
-    try { await STORE.addProfile({ full_name, email, password, role }); toast(roleLbl(role) + ' ajouté(e)'); render(); }
-    catch (e) { document.getElementById('addMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
+    const msg = document.getElementById('addMsg');
+    try {
+      const full_name = document.getElementById('nName').value.trim();
+      const email = document.getElementById('nEmail').value.trim();
+      const password = document.getElementById('nPwd').value;
+      if (!full_name || !email || password.length < 6) {
+        msg.innerHTML = '<div class="msg error">Nom, email et mot de passe (6+ caractères) requis.</div>'; return;
+      }
+      await STORE.addProfile({ full_name, email, password, role: 'employee' }); // rôle toujours employée
+      toast('Employée ajoutée'); render();
+    } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
-  app.querySelectorAll('[data-role-id]').forEach((b) => b.onclick = async () => {
-    const to = b.dataset.roleTo;
-    if (confirm(`Changer le rôle de cet utilisateur en « ${roleLbl(to)} » ?`)) {
-      try { await STORE.setRole(b.dataset.roleId, to); toast('Rôle mis à jour'); render(); }
-      catch (e) { toast(e.message, 'error'); }
-    }
+  app.querySelectorAll('[data-email]').forEach((b) => b.onclick = async () => {
+    const p = profs.find((x) => x.id === b.dataset.email) || {};
+    const email = prompt(`Nouvel email pour ${p.full_name} :`, p.email || '');
+    if (email == null) return;
+    try { await STORE.setEmail(b.dataset.email, email); toast('Email mis à jour'); render(); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  });
+  app.querySelectorAll('[data-reset]').forEach((b) => b.onclick = async () => {
+    const p = profs.find((x) => x.id === b.dataset.reset) || {};
+    if (!p.email) { toast("Cet utilisateur n'a pas d'email.", 'error'); return; }
+    if (MODE !== 'cloud') { toast("Envoi d'email disponible uniquement en mode cloud.", 'error'); return; }
+    if (!confirm(`Envoyer un email de réinitialisation à ${p.email} ?`)) return;
+    try { await STORE.sendPasswordReset(p.email); toast('Email de réinitialisation envoyé à ' + p.email); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
   app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
-    if (confirm('Archiver cette employée ? Ses données restent consultables.')) { await STORE.setActive(b.dataset.arch, false); toast('Employée archivée'); render(); }
+    try { if (confirm('Archiver cette employée ? Ses données restent consultables.')) { await STORE.setActive(b.dataset.arch, false); toast('Employée archivée'); render(); } }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
-  app.querySelectorAll('[data-react]').forEach((b) => b.onclick = async () => { await STORE.setActive(b.dataset.react, true); toast('Employée réactivée'); render(); });
+  app.querySelectorAll('[data-react]').forEach((b) => b.onclick = async () => {
+    try { await STORE.setActive(b.dataset.react, true); toast('Employée réactivée'); render(); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  });
 }
 
 /* ---------------- Vue : Journal d'audit (admin) ---------------- */
@@ -805,9 +888,23 @@ async function exportSheetPDF(empId) {
 }
 
 /* ---------------- Déconnexion ---------------- */
-async function doLogout() { await STORE.signOut(); ME = null; location.reload(); }
+async function doLogout() {
+  try { await STORE.signOut(); } catch (e) { console.error('[logout]', e); }
+  ME = null; location.reload();
+}
+
+/* ---------------- Filet de sécurité global ---------------- */
+window.addEventListener('error', (ev) => {
+  console.error('[window.error]', ev.error || ev.message);
+  try { toast('Erreur inattendue. Réessayez.', 'error'); } catch {}
+});
+window.addEventListener('unhandledrejection', (ev) => {
+  console.error('[unhandledrejection]', ev.reason);
+  const m = (ev.reason && ev.reason.message) || 'Opération impossible.';
+  try { toast('Erreur : ' + m, 'error'); } catch {}
+});
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('logoutBtn').onclick = doLogout;
-  boot();
+  boot().catch((e) => { console.error('[boot]', e); showFatal((e && e.message) || 'Démarrage impossible.'); });
 });
