@@ -12,10 +12,12 @@
 create table if not exists public.profiles (
   id          uuid primary key references auth.users (id) on delete cascade,
   full_name   text not null,
+  email       text,                                 -- copie de l'email (affichage + reset)
   role        text not null default 'employee' check (role in ('admin', 'employee')),
   active      boolean not null default true,        -- false = archivée (lecture seule)
   created_at  timestamptz not null default now()
 );
+alter table public.profiles add column if not exists email text;
 
 -- ---------------------------------------------------------------------------
 -- 2. MOIS (statut de verrouillage + solde reporté, par employée et par mois)
@@ -233,8 +235,8 @@ create trigger trg_propagate_carry before update on public.months
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.profiles (id, full_name, role)
-  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', new.email), 'employee')
+  insert into public.profiles (id, full_name, email, role)
+  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', new.email), new.email, 'employee')
   on conflict (id) do nothing;
   return new;
 end;

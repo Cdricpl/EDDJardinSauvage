@@ -99,6 +99,7 @@ tr.weekend td { background:#fafbfc; color:#adb5bd; }
 .badge.refused { background:#ffe3e3; color:#c92a2a; }
 .msg { padding:10px 14px; border-radius:8px; margin:10px 0; font-size:14px; background:#eef1ff; color:#2f48af; }
 .msg.error { background:#ffe3e3; color:var(--red); }
+.msg.ok { background:#ebfbee; color:var(--pos); }
 .muted { color:var(--gray); } .small { font-size:12px; }
 .hidden { display:none; }
 

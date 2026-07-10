@@ -109,6 +109,22 @@ automatiquement sur l'accueil, dans l'entête et dans les PDF.
 
 ---
 
+## 🧱 Règles métier (mois)
+
+- Le système **démarre en janvier 2026** : impossible d'accéder à un mois antérieur.
+- **Verrouillage en cascade** : verrouiller un mois verrouille automatiquement **tous les
+  mois précédents** (depuis janvier 2026).
+- Un mois **verrouillé** n'est plus modifiable par l'employée (seul l'admin peut intervenir).
+
+## 🛡️ Stabilité & fiabilité
+
+- **Filet anti-crash** : toute erreur affiche un message clair (jamais d'écran blanc), avec
+  bouton « Recharger ». Gestionnaires globaux `error` / `unhandledrejection` + logs console.
+- **Performances** : en mode cloud, les entrées d'une employée sont **mises en cache** (une
+  requête par session, mise à jour en local à l'écriture) ; rendus temps réel **groupés
+  (debounce)** pour éviter les rafales ; seul le **mois actif** est affiché.
+- Toutes les actions (lecture, écriture, navigation) sont encapsulées en `try/catch`.
+
 ## 🔐 Rôles et sécurité
 
 - **Administrateur** : accès complet (horaires, verrouillage, employées, audit, tout modifier).
