@@ -69,8 +69,24 @@ create table if not exists public.schedule_templates (
 );
 
 -- ---------------------------------------------------------------------------
--- 4. PRÉSENCES ENFANTS (à l'échelle de l'école, une ligne par jour)
+-- 4. ENFANTS — liste nominative + présences journalières
 -- ---------------------------------------------------------------------------
+create table if not exists public.kids (
+  id          uuid primary key default gen_random_uuid(),
+  first_name  text not null,
+  last_name   text not null default '',
+  active      boolean not null default true,
+  created_at  timestamptz not null default now()
+);
+-- Une ligne = un enfant présent un jour donné (absence = pas de ligne).
+create table if not exists public.kid_attendance (
+  kid_id      uuid not null references public.kids (id) on delete cascade,
+  entry_date  date not null,
+  primary key (kid_id, entry_date)
+);
+create index if not exists idx_kid_att_date on public.kid_attendance (entry_date);
+
+-- (Ancienne table de présences agrégées — conservée pour compat, non utilisée.)
 create table if not exists public.children_attendance (
   entry_date   date primary key,
   children     int  not null default 0 check (children >= 0),
@@ -138,6 +154,8 @@ alter table public.profiles            enable row level security;
 alter table public.months              enable row level security;
 alter table public.day_entries         enable row level security;
 alter table public.schedule_templates  enable row level security;
+alter table public.kids                enable row level security;
+alter table public.kid_attendance      enable row level security;
 alter table public.children_attendance enable row level security;
 alter table public.audit_log           enable row level security;
 
@@ -146,6 +164,16 @@ drop policy if exists templates_read  on public.schedule_templates;
 drop policy if exists templates_admin on public.schedule_templates;
 create policy templates_read  on public.schedule_templates for select using (auth.uid() is not null);
 create policy templates_admin on public.schedule_templates for all using (is_admin()) with check (is_admin());
+
+-- ENFANTS : lecture + écriture pour tout utilisateur connecté (admin + employées).
+drop policy if exists kids_read  on public.kids;
+drop policy if exists kids_write on public.kids;
+create policy kids_read  on public.kids for select using (auth.uid() is not null);
+create policy kids_write on public.kids for all using (auth.uid() is not null) with check (auth.uid() is not null);
+drop policy if exists katt_read  on public.kid_attendance;
+drop policy if exists katt_write on public.kid_attendance;
+create policy katt_read  on public.kid_attendance for select using (auth.uid() is not null);
+create policy katt_write on public.kid_attendance for all using (auth.uid() is not null) with check (auth.uid() is not null);
 
 -- Note : les policies sont "droppées" avant d'être recréées, pour que ce fichier
 -- puisse être ré-exécuté sans erreur (« policy already exists »).

@@ -140,6 +140,22 @@ tr.weekend td { background:#f7f2e8; color:#b3a893; }
 .legend .sw.grp-plan-h { background:var(--plan-bg); border:1px solid var(--plan); }
 .legend .sw.grp-real-h { background:var(--real-bg); border:1px solid var(--real); }
 
+/* ---------- Grille de présence des enfants ---------- */
+input[type=checkbox] { width:auto; min-height:0; padding:0; }
+.attend { border-collapse:separate; border-spacing:0; font-size:13px; }
+.attend th, .attend td { border:1px solid var(--border); padding:4px; text-align:center; }
+.attend .kidname { text-align:left; position:sticky; left:0; z-index:2; background:var(--card); min-width:150px; white-space:nowrap; }
+.attend thead .kidname, .attend tfoot .kidname { background:#f2ead9; }
+.attend .daycol { width:30px; padding:3px 2px; font-size:11px; line-height:1.1; }
+.attend .daycol .dini { color:var(--muted); font-weight:400; }
+.attend .daycell { width:30px; }
+.attend .daycell.weekend, .attend .daycol.weekend { background:#f7f2e8; }
+.attend .kidtot { background:#faf5ec; min-width:44px; }
+.attend tfoot td { background:#f2ead9; font-weight:700; }
+.attend input.pres { width:18px; height:18px; margin:0; accent-color:var(--primary); cursor:pointer; }
+.linkx { background:transparent; color:var(--muted); box-shadow:none; padding:0 4px; font-size:13px; margin-left:4px; }
+.linkx:hover { background:transparent; color:var(--red); }
+
 /* ---------- Tuiles de stats ---------- */
 .stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
 .stat { background:linear-gradient(180deg,#fffdf9,#faf4e9); border:1px solid var(--border); border-radius:12px; padding:14px; text-align:center; }
@@ -188,8 +204,9 @@ tr.weekend td { background:#f7f2e8; color:#b3a893; }
   .who { display:none; }
   .nav { position:static; flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; padding:9px 10px; gap:7px; }
   .navbtn { white-space:nowrap; padding:10px 14px; font-size:14px; }
-  input, select, button { min-height:44px; font-size:16px; }
+  input:not([type=checkbox]), select, button { min-height:44px; font-size:16px; }
   button.small { min-height:38px; }
+  .attend input.pres { width:22px; height:22px; }
   .grid input.cell, .grid select.cell { min-height:38px; font-size:15px; }
   .grid select.cell.time { width:98px; }
   th, td { padding:9px 8px; }

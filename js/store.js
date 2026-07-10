@@ -54,7 +54,13 @@ class DemoStore {
       ],
       months: [],       // { employee_id, year, month, status, carry_in_minutes }
       entries: [],      // { id, employee_id, entry_date, planned_minutes, worked_minutes, kind, justification }
-      children: [],     // { entry_date, children, note }
+      children: [],     // (ancien) présences agrégées par jour — déprécié
+      kids: [           // liste nominative des enfants
+        { id: 'k1', first_name: 'Lucas', last_name: 'Martin', active: true },
+        { id: 'k2', first_name: 'Emma', last_name: 'Bernard', active: true },
+        { id: 'k3', first_name: 'Noah', last_name: 'Dubois', active: true },
+      ],
+      kidatt: [],       // présences : { kid_id, entry_date }
       audit: [],        // { id, actor_name, action, entity, entity_id, details, created_at }
       // Horaire type hebdomadaire par employée : slots[weekday] = {start,end} (0=Dim..6=Sam)
       templates: [
@@ -88,7 +94,10 @@ class DemoStore {
           justification: touched ? 'Activité prolongée' : '',
         });
       });
-      db.children.push({ entry_date: date, children: 8 + ((d * 3) % 7), note: '' });
+      // Présences d'exemple : chaque enfant présent la plupart des jours (avec quelques absences).
+      db.kids.forEach((k, ki) => {
+        if ((d + ki) % 6 !== 0) db.kidatt.push({ kid_id: k.id, entry_date: date }); // ~1 absence / 6 jours
+      });
     }
     localStorage.setItem(this.KEY, JSON.stringify(db));
   }
@@ -218,20 +227,39 @@ class DemoStore {
     return e;
   }
 
-  /* ---- Enfants ---- */
-  async childrenForMonth(year, month) {
-    const prefix = Util.monthKey(year, month);
-    return this._db().children.filter(c => c.entry_date.startsWith(prefix));
+  /* ---- Enfants (liste nominative + présences) ---- */
+  async listKids(includeArchived = false) {
+    return this._db().kids
+      .filter(k => includeArchived || k.active)
+      .sort((a, b) => (a.last_name + a.first_name).localeCompare(b.last_name + b.first_name));
   }
-  async allChildren() { return this._db().children.slice(); }
-  async upsertChildren(entry_date, children, note) {
+  async addKid(first_name, last_name) {
     const db = this._db();
-    let c = db.children.find(x => x.entry_date === entry_date);
-    if (!c) { c = { entry_date, children: 0, note: '' }; db.children.push(c); }
-    c.children = children; c.note = note || '';
-    this._log(db, 'update_children', 'children', entry_date, { children });
+    const k = { id: Util.uuid(), first_name: (first_name || '').trim(), last_name: (last_name || '').trim(), active: true };
+    if (!k.first_name) throw new Error('Le prénom est requis.');
+    db.kids.push(k); this._save(db); return k;
+  }
+  async setKidActive(id, active) {
+    const db = this._db();
+    const k = db.kids.find(x => x.id === id);
+    if (k) { k.active = active; this._save(db); }
+  }
+  async kidAttendanceForMonth(year, month) {
+    const prefix = Util.monthKey(year, month);
+    return this._db().kidatt.filter(a => a.entry_date.startsWith(prefix));
+  }
+  async setKidPresence(kid_id, entry_date, present) {
+    const db = this._db();
+    const i = db.kidatt.findIndex(a => a.kid_id === kid_id && a.entry_date === entry_date);
+    if (present && i < 0) db.kidatt.push({ kid_id, entry_date });
+    if (!present && i >= 0) db.kidatt.splice(i, 1);
     this._save(db);
-    return c;
+  }
+  // Comptes agrégés par jour (nombre d'enfants présents) — pour les statistiques.
+  async allChildren() {
+    const byDate = {};
+    this._db().kidatt.forEach(a => { byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1; });
+    return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
   }
 
   /* ---- Temps réel (autres onglets) ---- */
@@ -354,26 +382,54 @@ class SupabaseStore {
     return data;
   }
 
-  async childrenForMonth(year, month) {
-    const from = `${Util.monthKey(year, month)}-01`, to = `${Util.monthKey(year, month)}-31`;
-    const { data } = await this.sb.from('children_attendance').select('*')
-      .gte('entry_date', from).lte('entry_date', to);
+  /* ---- Enfants (liste nominative + présences) ---- */
+  async listKids(includeArchived = false) {
+    let q = this.sb.from('kids').select('*').order('last_name').order('first_name');
+    if (!includeArchived) q = q.eq('active', true);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
     return data || [];
   }
-  async allChildren() {
-    const { data } = await this.sb.from('children_attendance').select('*');
-    return data || [];
-  }
-  async upsertChildren(entry_date, children, note) {
-    const { data, error } = await this.sb.from('children_attendance')
-      .upsert({ entry_date, children, note }, { onConflict: 'entry_date' }).select().single();
-    if (error) throw error;
+  async addKid(first_name, last_name) {
+    first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
+    if (!first_name) throw new Error('Le prénom est requis.');
+    const { data, error } = await this.sb.from('kids').insert({ first_name, last_name }).select().single();
+    if (error) throw new Error(error.message);
     return data;
+  }
+  async setKidActive(id, active) {
+    const { error } = await this.sb.from('kids').update({ active }).eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+  async kidAttendanceForMonth(year, month) {
+    const from = `${Util.monthKey(year, month)}-01`, to = `${Util.monthKey(year, month)}-31`;
+    const { data, error } = await this.sb.from('kid_attendance').select('*')
+      .gte('entry_date', from).lte('entry_date', to);
+    if (error) throw new Error(error.message);
+    return data || [];
+  }
+  async setKidPresence(kid_id, entry_date, present) {
+    if (present) {
+      const { error } = await this.sb.from('kid_attendance')
+        .upsert({ kid_id, entry_date }, { onConflict: 'kid_id,entry_date' });
+      if (error) throw new Error(error.message);
+    } else {
+      const { error } = await this.sb.from('kid_attendance')
+        .delete().eq('kid_id', kid_id).eq('entry_date', entry_date);
+      if (error) throw new Error(error.message);
+    }
+  }
+  // Comptes agrégés par jour (nombre d'enfants présents) — pour les statistiques.
+  async allChildren() {
+    const { data } = await this.sb.from('kid_attendance').select('entry_date');
+    const byDate = {};
+    (data || []).forEach((a) => { byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1; });
+    return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
   }
 
   onChange(cb) {
     // Abonnement temps réel Supabase sur les tables clés.
-    ['day_entries', 'months', 'children_attendance', 'profiles', 'schedule_templates'].forEach((t) => {
+    ['day_entries', 'months', 'kids', 'kid_attendance', 'profiles', 'schedule_templates'].forEach((t) => {
       this.sb.channel('rt-' + t)
         .on('postgres_changes', { event: '*', schema: 'public', table: t }, () => {
           if (t === 'day_entries') this._entriesCache = {}; // invalide le cache si un autre appareil écrit

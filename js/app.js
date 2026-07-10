@@ -8,7 +8,6 @@ let VIEW = 'sheet';
 let SEL_EMP = null;                 // employée sélectionnée (vue admin)
 let APPLYING = false;               // garde anti-réentrance du pré-remplissage
 let CUR = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
-const KINDS = { normal: 'Normal', conge: 'Congé', recuperation: 'Récupération', autre: 'Autre' };
 
 /* Le système démarre en janvier 2026 : aucun mois antérieur n'est accessible. */
 const MIN_YM = { y: 2026, m: 1 };
@@ -260,7 +259,7 @@ async function viewSheet() {
     const worked = effectiveWorked(e);
     const delta = worked - planned;
     const modified = !!e.worked_touched;
-    const needJustif = delta !== 0 && (e.kind === 'normal' || e.kind === 'autre') && !e.justification;
+    const needJustif = delta !== 0 && !e.justification;
     if (needJustif) warnings++;
     // Valeurs réelles affichées : par défaut = prévu (pré-remplissage) si non modifié.
     const realStart = e.start_time || (!modified ? (e.planned_start || '') : '');
@@ -274,8 +273,6 @@ async function viewSheet() {
       <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked)}</td>
       <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked)}</td>
       <td class="nowrap"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
-      <td><select class="cell" data-k="kind" data-date="${date}" ${canEditWorked ? '' : 'disabled'}>
-        ${Object.entries(KINDS).map(([k, l]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
       <td class="${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${delta ? fmtHM(delta) : '—'}</td>
       <td><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${(e.justification || '').replace(/"/g, '&quot;')}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
     </tr>`;
@@ -308,7 +305,7 @@ async function viewSheet() {
               <th rowspan="2">Date</th><th rowspan="2">Jour</th>
               <th colspan="2" class="grp-plan-h">Horaire prévu (admin)</th>
               <th colspan="2" class="grp-real-h">Horaire réel</th>
-              <th rowspan="2">Presté</th><th rowspan="2">Type</th><th rowspan="2">Écart</th><th rowspan="2">Justification</th>
+              <th rowspan="2">Presté</th><th rowspan="2">Écart</th><th rowspan="2">Justification</th>
             </tr>
             <tr>
               <th class="grp-plan-h">Début</th><th class="grp-plan-h">Fin</th>
@@ -348,16 +345,16 @@ async function viewSheet() {
     const e = byDate[date] || {};
     const planned = plannedMinutes(e), worked = effectiveWorked(e), delta = worked - planned;
     const modified = !!e.worked_touched;
-    const needJustif = delta !== 0 && (e.kind === 'normal' || e.kind === 'autre') && !e.justification;
+    const needJustif = delta !== 0 && !e.justification;
     const weekend = new Date(date.slice(0, 4), Number(date.slice(5, 7)) - 1, Number(date.slice(8))).getDay();
     tr.className = [(weekend === 0 || weekend === 6) ? 'weekend' : '', modified ? 'modified' : ''].filter(Boolean).join(' ');
     const [, mo, dd] = date.split('-');
     tr.children[0].innerHTML = `${dd}/${mo}${modified ? ' <span class="dot" title="Jour modifié">●</span>' : ''}`;
-    tr.children[6].innerHTML = `<strong>${worked ? fmtHM(worked) : '—'}</strong>`;
-    const ec = tr.children[8];
+    tr.children[6].innerHTML = `<strong>${worked ? fmtHM(worked) : '—'}</strong>`;   // Presté
+    const ec = tr.children[7];                                                       // Écart
     ec.textContent = delta ? fmtHM(delta) : '—';
     ec.className = delta > 0 ? 'pos' : delta < 0 ? 'neg' : '';
-    const jinp = tr.children[9].querySelector('input');
+    const jinp = tr.children[8].querySelector('input');                              // Justification
     if (jinp) { jinp.classList.toggle('err', needJustif); jinp.placeholder = needJustif ? 'Justification requise' : ''; }
   }
   function refreshTotals() {
@@ -365,7 +362,7 @@ async function viewSheet() {
     for (let d = 1; d <= dim; d++) {
       const e = byDate[`${CUR.y}-${pad(CUR.m)}-${pad(d)}`]; if (!e) continue;
       const p = plannedMinutes(e), w = effectiveWorked(e); P += p; W += w;
-      if ((w - p) !== 0 && (e.kind === 'normal' || e.kind === 'autre') && !e.justification) warn++;
+      if ((w - p) !== 0 && !e.justification) warn++;
     }
     const delta = W - P, closing = baseCarry + delta;
     setTile('tPlanned', fmtHM(P)); setTile('tWorked', fmtHM(W));
@@ -417,8 +414,6 @@ async function viewSheet() {
           patch.worked_touched = true;
           patch.worked_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
         }
-      } else if (k === 'kind') {
-        patch.kind = el.value;
       } else if (k === 'justification') {
         patch.justification = el.value;
       }
@@ -596,65 +591,85 @@ async function viewRecap() {
   wireToolbar();
 }
 
-/* ---------------- Vue : Enfants ---------------- */
+/* ---------------- Vue : Enfants (liste nominative + présences) ---------------- */
 async function viewChildren() {
   const app = document.getElementById('app');
-  const list = await STORE.childrenForMonth(CUR.y, CUR.m);
-  const byDate = {}; list.forEach((c) => (byDate[c.entry_date] = c));
+  const kids = await STORE.listKids();
+  const att = await STORE.kidAttendanceForMonth(CUR.y, CUR.m);
+  const present = new Set(att.map((a) => a.kid_id + '|' + a.entry_date));
   const dim = daysInMonth(CUR.y, CUR.m);
-  let rows = '', total = 0, count = 0;
+  const days = [];
   for (let d = 1; d <= dim; d++) {
-    const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
     const dow = new Date(CUR.y, CUR.m - 1, d).getDay();
-    const c = byDate[date] || { children: '', note: '' };
-    if (c.children !== '' && c.children != null) { total += Number(c.children); count++; }
-    rows += `<tr${(dow === 0 || dow === 6) ? ' class="weekend"' : ''}>
-      <td class="nowrap">${pad(d)}/${pad(CUR.m)}</td><td>${DOW[dow]}</td>
-      <td><input class="cell" style="width:80px" data-date="${date}" data-k="children" type="number" min="0" value="${c.children}" placeholder="0"/></td>
-      <td><input class="cell wide" data-date="${date}" data-k="note" value="${(c.note || '').replace(/"/g, '&quot;')}" placeholder="Note"/></td>
-    </tr>`;
+    days.push({ d, dow, date: `${CUR.y}-${pad(CUR.m)}-${pad(d)}`, weekend: dow === 0 || dow === 6 });
   }
+  const kidPresentCount = (kid) => days.reduce((n, day) => n + (present.has(kid.id + '|' + day.date) ? 1 : 0), 0);
+  const dayPresentCount = (day) => kids.reduce((n, k) => n + (present.has(k.id + '|' + day.date) ? 1 : 0), 0);
+
+  // En-têtes des jours (numéro + initiale du jour).
+  const headDays = days.map((day) =>
+    `<th class="daycol${day.weekend ? ' weekend' : ''}"><div>${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
+
+  const kidRows = kids.length ? kids.map((k) => {
+    const cells = days.map((day) => {
+      const on = present.has(k.id + '|' + day.date);
+      return `<td class="daycell${day.weekend ? ' weekend' : ''}">
+        <input type="checkbox" class="pres" data-kid="${k.id}" data-date="${day.date}" ${on ? 'checked' : ''}/></td>`;
+    }).join('');
+    return `<tr>
+      <td class="kidname nowrap">${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name}
+        <button class="linkx" data-arch="${k.id}" title="Retirer de la liste">✕</button></td>
+      ${cells}
+      <td class="kidtot"><strong id="kidtot_${k.id}">${kidPresentCount(k)}</strong></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="${dim + 2}" class="muted" style="padding:16px">Aucun enfant. Ajoutez-en ci-dessus.</td></tr>`;
+
+  const footCells = days.map((day) => `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong id="daytot_${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
-      <h2>🧒 Présences enfants — ${monthName(CUR.y, CUR.m)}</h2>
-      <div class="stat-grid" style="margin-bottom:14px">
-        <div class="stat"><div class="num" id="chTotal">${total}</div><div class="lbl">Total du mois</div></div>
-        <div class="stat"><div class="num" id="chAvg">${count ? (total / count).toFixed(1) : '0'}</div><div class="lbl">Moyenne / jour</div></div>
+      <h2>🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
+      <div class="row" style="align-items:end; max-width:560px">
+        <div><label>Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
+        <div><label>Nom</label><input id="kLast" placeholder="Nom"/></div>
+        <div style="flex:0"><label>&nbsp;</label><button id="kAdd">+ Ajouter</button></div>
       </div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Date</th><th>Jour</th><th>Enfants</th><th>Note</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>
+      <div id="kMsg"></div>
+      <p class="muted small">Cochez les jours de présence de chaque enfant. Une case décochée un jour d'ouverture = absence.</p>
+      <div class="table-wrap" style="margin-top:8px"><table class="attend">
+        <thead><tr><th class="kidname">Enfant</th>${headDays}<th class="kidtot">Prés.</th></tr></thead>
+        <tbody>${kidRows}</tbody>
+        <tfoot><tr><td class="kidname">Total / jour</td>${footCells}<td class="kidtot"><strong>${att.length}</strong></td></tr></tfoot>
+      </table></div>
+      <p class="muted small">« Prés. » = nombre de jours de présence de l'enfant ce mois-ci. La moyenne annuelle est dans l'onglet 📈 Statistiques.</p>
     </div>`;
   wireToolbar();
 
-  // Recalcule les totaux du mois sans reconstruire la table (préserve le focus).
-  const refreshChildTotals = () => {
-    let t = 0, n = 0;
-    for (let d = 1; d <= dim; d++) {
-      const c = byDate[`${CUR.y}-${pad(CUR.m)}-${pad(d)}`];
-      if (c && c.children !== '' && c.children != null) { t += Number(c.children) || 0; n++; }
-    }
-    const tEl = document.getElementById('chTotal'), aEl = document.getElementById('chAvg');
-    if (tEl) tEl.textContent = t;
-    if (aEl) aEl.textContent = n ? (t / n).toFixed(1) : '0';
-  };
-
-  app.querySelectorAll('input.cell').forEach((el) => el.addEventListener('change', async () => {
+  // Ajout d'un enfant.
+  document.getElementById('kAdd').onclick = async () => {
+    const msg = document.getElementById('kMsg');
     try {
-      const date = el.dataset.date;
-      if (!date) return;
-      const cur = byDate[date] || { children: 0, note: '' };
-      let children = el.dataset.k === 'children' ? parseInt(el.value, 10) : parseInt(cur.children, 10);
-      if (!Number.isFinite(children) || children < 0) children = 0;  // valeur sûre
-      const note = (el.dataset.k === 'note' ? el.value : (cur.note || '')) || '';
-      // Met à jour l'état local puis enregistre — SANS re-rendu (pas de perte de focus).
-      byDate[date] = { entry_date: date, children, note };
-      refreshChildTotals();
-      await STORE.upsertChildren(date, children, note);
-    } catch (e) {
-      console.error('[children:save]', e);
-      toast("Impossible d'enregistrer la présence : " + e.message, 'error');
-    }
+      await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value);
+      toast('Enfant ajouté'); render();
+    } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
+  };
+  // Retirer un enfant (archivage : données conservées).
+  app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Retirer cet enfant de la liste ? (ses présences passées restent comptées)')) return;
+    try { await STORE.setKidActive(b.dataset.arch, false); toast('Enfant retiré'); render(); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  });
+  // Cocher/décocher une présence — sans re-rendu (mise à jour ciblée des totaux).
+  app.querySelectorAll('input.pres').forEach((el) => el.addEventListener('change', async () => {
+    const kid = el.dataset.kid, date = el.dataset.date, on = el.checked;
+    const key = kid + '|' + date;
+    if (on) present.add(key); else present.delete(key);
+    // Totaux ligne + colonne + total général, en place.
+    const dNum = Number(date.slice(8));
+    const kt = document.getElementById('kidtot_' + kid); if (kt) kt.textContent = kids.reduce ? days.reduce((n, day) => n + (present.has(kid + '|' + day.date) ? 1 : 0), 0) : 0;
+    const dt = document.getElementById('daytot_' + dNum); if (dt) dt.textContent = kids.reduce((n, k) => n + (present.has(k.id + '|' + date) ? 1 : 0), 0);
+    try { await STORE.setKidPresence(kid, date, on); }
+    catch (e) { el.checked = !on; if (on) present.delete(key); else present.add(key); toast('Erreur : ' + e.message, 'error'); }
   }));
 }
 
@@ -891,13 +906,13 @@ async function exportSheetPDF(empId) {
     body.push([`${pad(d)}/${pad(CUR.m)}`,
       e.planned_start || '—', e.planned_end || '—',
       e.start_time || '—', e.end_time || '—', fmtHM(worked),
-      KINDS[e.kind], fmtHM(worked - planned), e.justification || '']);
+      fmtHM(worked - planned), e.justification || '']);
   }
 
   if (!window.jspdf) { // fallback impression
     const w = window.open('', '_blank');
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Prestations — ${prof.full_name} — ${monthName(CUR.y, CUR.m)}</h2>
-      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>Prévu début</th><th>Prévu fin</th><th>Réel début</th><th>Réel fin</th><th>Presté</th><th>Type</th><th>Écart</th><th>Justif.</th></tr>
+      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>Prévu début</th><th>Prévu fin</th><th>Réel début</th><th>Réel fin</th><th>Presté</th><th>Écart</th><th>Justif.</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
       <p><b>Total presté:</b> ${fmtHM(sum.worked)} — <b>Solde cumulé:</b> ${fmtHM(sum.closing)}</p>
       <button onclick="print()">Imprimer</button>`);
@@ -908,7 +923,7 @@ async function exportSheetPDF(empId) {
   const startY = await pdfHeader(doc, `Prestations — ${prof.full_name}`, monthName(CUR.y, CUR.m));
   doc.autoTable({
     startY,
-    head: [['Date', 'Prévu déb.', 'Prévu fin', 'Réel déb.', 'Réel fin', 'Presté', 'Type', 'Écart', 'Justification']],
+    head: [['Date', 'Prévu déb.', 'Prévu fin', 'Réel déb.', 'Réel fin', 'Presté', 'Écart', 'Justification']],
     body, styles: { fontSize: 9 }, headStyles: { fillColor: [59, 91, 219] },
   });
   let y = doc.lastAutoTable.finalY + 10;
