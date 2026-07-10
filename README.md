@@ -1,134 +1,109 @@
-# 🕒 Pointeuse — École des devoirs
+# 🏫 École des devoirs — Application de gestion
 
-Application web de **pointeuse** pour **2 employées** avec un **accès administrateur** :
-horaires imposés, justification des heures effectuées hors horaire, validation par
-l'admin (heures supplémentaires / récupérations) et statistiques.
+Outil web **centralisé et responsive** pour gérer une école des devoirs :
+horaires mensuels, encodage des prestations, calcul automatique des soldes (heures
+supplémentaires / à récupérer), présences des enfants, statistiques, export PDF,
+gestion et archivage des employées — avec **synchronisation temps réel** entre
+plusieurs appareils via le cloud.
 
-**Version 100 % navigateur** : aucune installation, aucun serveur. Les données sont
-enregistrées dans le navigateur (`localStorage`). Fonctionne en ligne sur **GitHub Pages**
-ou simplement en ouvrant `index.html`.
-
----
-
-## 🌐 Utiliser en ligne (GitHub Pages)
-
-Une fois GitHub Pages activé, l'application est accessible à une adresse du type :
-
-```
-https://cdricpl.github.io/Pointeuse-/
-```
-
-### Activer / vérifier GitHub Pages
-1. Dépôt GitHub → **Settings** → **Pages**.
-2. **Source** : `Deploy from a branch`.
-3. **Branch** : `main` · dossier `/ (root)` → **Save**.
-4. Attendre ~1 minute puis ouvrir l'adresse affichée.
-
-> ⚠️ Les fichiers de l'application doivent être **à la racine** du dépôt
-> (c'est le cas ici : `index.html` est à la racine, pas dans un sous-dossier).
-> Assure-toi que la branche choisie dans Pages contient bien ces fichiers
-> (fusionne la Pull Request dans `main`, ou sélectionne la branche concernée).
+> **Deux modes, un même code :**
+> - 🧪 **Mode démo** (par défaut) : données locales au navigateur — pour tester tout
+>   de suite, sans rien installer. Sert aussi de maquette interactive.
+> - ☁️ **Mode cloud** (Supabase) : données partagées et synchronisées en temps réel.
 
 ---
 
-## 💻 Utiliser hors ligne (sans internet)
+## 🚀 Essayer immédiatement (mode démo)
 
-Télécharge le dépôt (bouton vert **Code → Download ZIP**), décompresse-le,
-puis **double-clique sur `index.html`**. L'application s'ouvre dans ton navigateur.
+Ouvre simplement `index.html` (ou visite le site GitHub Pages). Comptes de test :
 
----
+| Compte | Email | Mot de passe | Rôle |
+|--------|-------|--------------|------|
+| Admin | `admin@ecole.be` | `admin123` | administrateur |
+| Employée 1 | `flora@ecole.be` | `flora123` | employée |
+| Employée 2 | `sarah@ecole.be` | `sarah123` | employée |
 
-## 👥 Comptes par défaut
-
-| Compte      | Rôle      | Code PIN |
-|-------------|-----------|----------|
-| Employée 1  | Employée  | `1111`   |
-| Employée 2  | Employée  | `2222`   |
-| Admin       | Admin     | `0000`   |
+Des données d'exemple (prestations + présences enfants du mois en cours) sont
+pré-remplies pour visualiser les récaps et les graphiques.
 
 ---
 
-## ⚠️ Important : où sont stockées les données ?
+## ☁️ Passer en mode cloud (Supabase) — synchronisation multi-appareils
 
-Les données (pointages, horaires) sont enregistrées **dans le navigateur utilisé**
-(`localStorage`). Conséquences :
+1. Crée un compte gratuit sur **https://supabase.com** puis un nouveau projet.
+2. Dans **SQL Editor**, colle et exécute le contenu de [`supabase/schema.sql`](supabase/schema.sql)
+   (crée les tables, la sécurité par rôle, l'audit et le report de solde).
+3. Dans **Authentication → Users**, crée les comptes (admin + employées).
+   Puis dans **SQL Editor** passe l'admin en administrateur :
+   ```sql
+   update public.profiles set role = 'admin' where full_name = 'Admin';
+   ```
+4. Dans **Settings → API**, copie l'**URL du projet** et la clé **anon public**.
+5. Colle-les dans [`js/config.js`](js/config.js) :
+   ```js
+   window.APP_CONFIG = {
+     SUPABASE_URL: 'https://xxxx.supabase.co',
+     SUPABASE_ANON_KEY: 'eyJhbGciOi...',
+   };
+   ```
+6. Recharge la page : le badge en haut passe de **🧪 Démo** à **☁️ Cloud**.
 
-- Les données **ne sont pas partagées** entre plusieurs ordinateurs / téléphones.
-- Si l'Employée 1 pointe sur son téléphone, l'Admin sur un autre appareil **ne verra pas**
-  ces pointages.
-- Vider les données du navigateur efface aussi les pointages.
-
-👉 Cette version convient bien si **tout le monde utilise le même ordinateur / navigateur**
-(ex. l'ordinateur de l'école). Pour un vrai partage entre appareils, il faut la version
-avec serveur (voir la section plus bas).
+> La clé « anon » est publique par conception : la sécurité est assurée côté serveur
+> par les règles **RLS** définies dans `schema.sql`.
 
 ---
 
 ## ✨ Fonctionnalités
 
-### Pour les employées
-- **▶️ Commencer le travail** / **⏹️ Terminer le travail**.
-- Récapitulatif **du jour** et **de la semaine**.
-- Historique personnel **en lecture seule** : une employée ne peut jamais modifier ses heures.
-
-### Horaires imposés (définis par l'admin)
-- Heure de **début** / **fin** (ex. 14h–18h) et **jours obligatoires**.
-- Les employées **voient** leur horaire mais ne peuvent pas le changer.
-
-### Justification automatique des écarts
-Quand une employée pointe **en dehors de l'horaire imposé** (arrivée en avance, départ en
-retard, ou jour non prévu) et que l'écart dépasse **5 minutes** :
-1. L'écart est **calculé automatiquement**.
-2. Une **justification** est **obligatoire**.
-3. Le pointage passe **« En attente de validation Admin »**.
-
-### Mode kiosque (ordinateur partagé) 🖥️
-Depuis la page de connexion, bouton **« Ouvrir le mode kiosque »** : un écran d'accueil où
-chaque employée clique sur sa vignette puis tape son PIN pour pointer entrée/sortie,
-**sans ouvrir de session**. Idéal pour l'ordinateur partagé de l'école
-(inspiré des kiosques Connecteam / Buddy Punch).
-
-### Espace admin
-- Vue **globale** des pointages, avec **filtres** (employée, période).
-- **Justifications en attente** : valider / refuser + classer en **Heures supplémentaires**
-  ou **Récupération**.
-- **Statistiques** par employée (heures prestées, heures sup., récupérations).
-- **⚠️ Détection des oublis** : repère les pointages sans heure de sortie (oubli de pointer
-  en partant) et permet de les corriger en un clic.
-- **📤 Export CSV / Excel** des pointages (compatible Excel, avec les filtres appliqués).
-- **🖨️ Fiche mensuelle imprimable** par employée (total d'heures, heures sup.,
-  récupérations, cases de signature).
-- Bouton **Réinitialiser les données**.
+- **Horaires (admin)** : définition des heures à prester par jour dans un tableau
+  mensuel type Excel ; verrouillage / déverrouillage / validation d'un mois.
+- **Prestations (employées)** : encodage journalier (heures + type : normal, congé,
+  récupération, autre) ; justification obligatoire en cas d'écart.
+- **Calculs automatiques** : écart journalier, totaux mensuels, **solde reporté de mois
+  en mois**, heures supplémentaires et heures à récupérer.
+- **Verrouillage** : un mois verrouillé n'est plus modifiable par l'employée (seul
+  l'admin peut intervenir) — imposé côté base via RLS.
+- **Présences enfants** : encodage quotidien + historique.
+- **Statistiques** : moyennes hebdo / mensuelle / annuelle, histogrammes et courbes.
+- **Export PDF** : fiche mensuelle par employée (tableau, totaux, cases de signature).
+- **Employées** : ajout, **archivage** (données conservées en lecture seule), réactivation.
+- **Temps réel** : mise à jour automatique sur tous les appareils connectés.
+- **Bonus** : journal d'audit, sauvegarde automatique, alerte d'erreur d'encodage.
 
 ---
 
-## 🗂️ Fichiers
+## 🗂️ Structure du projet
 
 ```
-Pointeuse-/
-├── index.html      # Page de connexion (+ accès mode kiosque)
-├── kiosque.html    # Mode kiosque (pointage rapide sur PC partagé)
-├── employee.html   # Espace employée (pointeuse + historique)
-├── admin.html      # Espace admin (horaires + validations + stats + export + fiche)
-├── common.js       # Données locales (localStorage) + logique + formatage
-├── style.css       # Feuille de style
+.
+├── index.html            # Shell de l'application (SPA)
+├── css/styles.css        # Styles (responsive)
+├── js/
+│   ├── config.js         # Clés Supabase (vide = mode démo)
+│   ├── store.js          # Couche de données : démo (localStorage) OU Supabase
+│   └── app.js            # Interface, calculs, vues, PDF, graphiques
+├── supabase/
+│   └── schema.sql        # Schéma PostgreSQL : tables, RLS, audit, report de solde
+├── docs/
+│   └── ARCHITECTURE.md   # Proposition d'architecture + schéma de BDD + écrans
 └── README.md
 ```
 
 ---
 
-## 🔐 Règles de sécurité
+## 🔐 Rôles et sécurité
 
-- Les employées **ne peuvent jamais modifier leurs heures** (aucune action ne le permet).
-- Seul l'**admin** peut : modifier les horaires, valider/refuser les justifications,
-  réinitialiser les données.
+- **Administrateur** : accès complet (horaires, verrouillage, employées, audit, tout modifier).
+- **Employée** : encode ses prestations tant que le mois est ouvert ; ne peut pas
+  modifier ses horaires imposés ni un mois verrouillé/validé.
+- Une employée **archivée** ne peut plus se connecter ; ses données restent consultables.
+
+En **mode cloud**, ces règles sont **imposées par la base** (RLS) et pas seulement par
+l'interface — elles ne peuvent donc pas être contournées.
 
 ---
 
-## 🔁 Besoin d'un vrai partage entre appareils ?
+## 🧭 Détails techniques
 
-Cette version (localStorage) est locale à chaque navigateur. Si tu as besoin que les deux
-employées et l'admin partagent **les mêmes données depuis des appareils différents**, il
-faut une version **avec serveur** (base de données commune). Cette version existe dans
-l'historique Git du projet (serveur Node.js) et peut être hébergée sur un service qui
-exécute Node (Render, Railway, etc.). Dis-le si tu veux que je la remette en place.
+Voir [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) pour l'architecture, le schéma de
+base de données (tables et relations), les règles de sécurité et la description des écrans.
