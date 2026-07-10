@@ -229,7 +229,7 @@ async function viewSheet() {
   const tpl = ME.role === 'admin' ? await STORE.getTemplate(empId) : {};
 
   // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
-  // (Les mois verrouillés/validés ne sont jamais touchés.) Garde anti-réentrance.
+  // (Les mois validés ne sont jamais touchés.) Garde anti-réentrance.
   if (ME.role === 'admin' && month.status === 'open' && entries.length === 0 && templateHasSlots(tpl) && !APPLYING) {
     APPLYING = true;
     try { await applyTemplate(empId, CUR.y, CUR.m, tpl, true); }
@@ -247,7 +247,7 @@ async function viewSheet() {
   const canEditWorked = ME.role === 'admin' || (empId === ME.id && monthEditable && editableProf.active);
 
   const statusBadge = { open: '<span class="badge open">En cours</span>',
-    validated: '<span class="badge validated">Validé</span>', locked: '<span class="badge refused">🔒 Verrouillé</span>' }[month.status];
+    validated: '<span class="badge validated">✓ Validé</span>' }[month.status];
 
   let rows = '';
   let warnings = 0;
@@ -283,9 +283,8 @@ async function viewSheet() {
   if (ME.role === 'admin') {
     adminControls = `
       <button class="small" id="tplBtn">🗓️ Horaire type</button>
-      <button class="small ${month.status === 'locked' ? 'gray' : 'green'}" id="lockBtn">
-        ${month.status === 'locked' ? '🔓 Déverrouiller' : '🔒 Verrouiller le mois'}</button>
-      ${month.status === 'open' ? '<button class="small" id="validBtn">Marquer validé</button>' : ''}`;
+      <button class="small ${month.status === 'validated' ? 'gray' : 'green'}" id="validBtn">
+        ${month.status === 'validated' ? '↩︎ Repasser en cours' : '✓ Valider le mois'}</button>`;
   }
 
   app.innerHTML = `${await toolbar(true)}
@@ -297,7 +296,7 @@ async function viewSheet() {
       </div>
       <div class="msg error" id="warnBanner" ${warnings ? '' : 'style="display:none"'}>${warnings} jour(s) avec un écart non justifié.</div>
       ${!monthEditable && empId === ME.id && ME.role === 'employee'
-        ? '<div class="msg">Ce mois est ' + (month.status === 'locked' ? 'verrouillé' : 'validé') + ' : vous ne pouvez plus le modifier.</div>' : ''}
+        ? '<div class="msg">Ce mois est validé : vous ne pouvez plus le modifier. Contactez l\'administrateur si besoin.</div>' : ''}
       <div class="table-wrap">
         <table class="grid">
           <thead>
@@ -327,7 +326,7 @@ async function viewSheet() {
         <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employée)</span>
         <span class="legend"><span class="dot">●</span> jour modifié</span>
         <span class="legend"><span class="pos">▲ heures sup.</span> / <span class="neg">▼ à récupérer</span></span><br>
-        Heures par tranches de 15 min. Le réel est pré-rempli avec le prévu : ne modifiez que les jours différents. Enregistrement automatique.
+        Heures par tranches de 15 min. Enregistrement automatique.
       </p>
     </div>`;
   wireToolbar();
@@ -437,38 +436,19 @@ async function viewSheet() {
   });
 
   if (ME.role === 'admin') {
-    const lb = document.getElementById('lockBtn');
-    if (lb) lb.onclick = async () => {
+    // Bascule validation : un mois validé n'est plus modifiable par l'employée
+    // (seul l'admin peut encore intervenir). « Repasser en cours » réouvre.
+    const vb = document.getElementById('validBtn');
+    if (vb) vb.onclick = async () => {
       try {
-        if (month.status === 'locked') {
-          await STORE.setMonthStatus(empId, CUR.y, CUR.m, 'open');
-          toast('Mois déverrouillé');
-        } else {
-          // Règle métier : verrouiller un mois verrouille aussi tous les précédents.
-          await lockThrough(empId, CUR.y, CUR.m);
-          toast('Mois verrouillé (ainsi que les mois précédents)');
-        }
+        const next = month.status === 'validated' ? 'open' : 'validated';
+        await STORE.setMonthStatus(empId, CUR.y, CUR.m, next);
+        toast(next === 'validated' ? 'Mois validé' : 'Mois repassé en cours');
         render();
       } catch (e) { toast('Erreur : ' + e.message, 'error'); }
     };
-    const vb = document.getElementById('validBtn');
-    if (vb) vb.onclick = async () => {
-      try { await STORE.setMonthStatus(empId, CUR.y, CUR.m, 'validated'); toast('Mois marqué validé'); render(); }
-      catch (e) { toast('Erreur : ' + e.message, 'error'); }
-    };
   }
   document.getElementById('pdfBtn').onclick = () => exportSheetPDF(empId).catch((e) => toast('Export impossible : ' + e.message, 'error'));
-}
-
-// Verrouille tous les mois de janvier 2026 jusqu'au mois cible inclus.
-async function lockThrough(empId, y, m) {
-  const target = ymNum(y, m);
-  let yy = MIN_YM.y, mm = MIN_YM.m;
-  while (ymNum(yy, mm) <= target) {
-    const mo = await STORE.getMonth(empId, yy, mm);
-    if (mo.status !== 'locked') await STORE.setMonthStatus(empId, yy, mm, 'locked');
-    mm++; if (mm > 12) { mm = 1; yy++; }
-  }
 }
 
 async function currentEmpProfile(id) {
@@ -502,12 +482,12 @@ function templateCardHTML(tpl, month) {
     <div id="tplMsg"></div>
     <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap">
       <button id="tplSave">💾 Enregistrer l'horaire type</button>
-      <button class="green" id="tplApply" ${month.status === 'locked' ? 'disabled title="Mois verrouillé"' : ''}>
+      <button class="green" id="tplApply" ${month.status !== 'open' ? 'disabled title="Mois validé"' : ''}>
         ⤵️ Appliquer au mois affiché</button>
     </div>
     <p class="muted small" style="margin-top:8px">
       « Appliquer » remplit le mois courant avec cet horaire (les jours déjà modifiés gardent leur horaire réel).
-      ${month.status === 'locked' ? '<strong>Ce mois est verrouillé : il ne sera pas modifié.</strong>' : ''}</p>
+      ${month.status !== 'open' ? '<strong>Ce mois est validé : il ne sera pas modifié.</strong>' : ''}</p>
   </div>`;
 }
 function wireTemplateCard(empId, month) {
@@ -533,7 +513,7 @@ function wireTemplateCard(empId, month) {
 
   const apply = document.getElementById('tplApply');
   if (apply) apply.onclick = async () => {
-    if (month.status === 'locked') { toast('Mois verrouillé — non modifié', 'error'); return; }
+    if (month.status !== 'open') { toast('Mois validé — non modifié', 'error'); return; }
     const tpl = await STORE.getTemplate(empId);
     if (!templateHasSlots(tpl)) { toast("Définis d'abord un horaire type.", 'error'); return; }
     if (!confirm(`Appliquer l'horaire type à ${monthName(CUR.y, CUR.m)} ? Les jours déjà modifiés sont préservés.`)) return;
@@ -541,11 +521,11 @@ function wireTemplateCard(empId, month) {
   };
 }
 
-// Remplit un mois avec l'horaire type. Ne touche jamais un mois verrouillé,
+// Remplit un mois avec l'horaire type. Ne touche jamais un mois validé,
 // ni l'horaire réel d'un jour déjà modifié (worked_touched).
 async function applyTemplate(empId, y, m, slots, silent) {
   const month = await STORE.getMonth(empId, y, m);
-  if (month.status === 'locked') { if (!silent) toast('Mois verrouillé — non modifié', 'error'); return; }
+  if (month.status !== 'open') { if (!silent) toast('Mois validé — non modifié', 'error'); return; }
   const existing = {};
   (await STORE.entriesForMonth(empId, y, m)).forEach((e) => (existing[e.entry_date] = e));
   const dim = daysInMonth(y, m);
@@ -577,7 +557,7 @@ async function viewRecap() {
       <td class="${s.delta >= 0 ? 'pos' : 'neg'}">${fmtHM(s.delta)}</td>
       <td>${fmtHM(s.carryIn)}</td>
       <td class="${s.closing >= 0 ? 'pos' : 'neg'}"><strong>${fmtHM(s.closing)}</strong></td>
-      <td>${{ open: 'En cours', validated: 'Validé', locked: '🔒 Verrouillé' }[mo.status]}</td>
+      <td>${{ open: 'En cours', validated: '✓ Validé' }[mo.status] || 'En cours'}</td>
     </tr>`;
   }
   app.innerHTML = `${await toolbar(false)}
