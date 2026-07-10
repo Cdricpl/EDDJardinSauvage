@@ -105,7 +105,7 @@ function renderLogin() {
   document.body.removeAttribute('data-role');
   el.innerHTML = `
     <div class="card login-card">
-      <img src="assets/logo.svg" alt="Jardin Sauvage" class="logo-login" />
+      <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
       <h1>EDD Jardin Sauvage</h1>
       <p class="muted">Gestion des horaires, prestations et présences</p>
       <label>Email</label>
@@ -584,22 +584,26 @@ async function viewAudit() {
 
 /* ---------------- Logo pour les PDF (SVG → PNG dataURL, mis en cache) ---------------- */
 let _logoCache;
-function logoDataURL() {
-  if (_logoCache !== undefined) return Promise.resolve(_logoCache);
+function _loadImage(src) {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => {
-      try {
-        const c = document.createElement('canvas');
-        c.width = img.naturalWidth || 320; c.height = img.naturalHeight || 200;
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-        _logoCache = { url: c.toDataURL('image/png'), w: c.width, h: c.height };
-      } catch { _logoCache = null; }
-      resolve(_logoCache);
-    };
-    img.onerror = () => { _logoCache = null; resolve(null); };
-    img.src = 'assets/logo.svg';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
   });
+}
+async function logoDataURL() {
+  if (_logoCache !== undefined) return _logoCache;
+  // Utilise le vrai logo (assets/logo.png) s'il existe, sinon le SVG par défaut.
+  const img = (await _loadImage('assets/logo.png')) || (await _loadImage('assets/logo.svg'));
+  if (!img) { _logoCache = null; return null; }
+  try {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth || 320; c.height = img.naturalHeight || 200;
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    _logoCache = { url: c.toDataURL('image/png'), w: c.width, h: c.height };
+  } catch { _logoCache = null; }
+  return _logoCache;
 }
 // En-tête commun des PDF : logo + titre.
 async function pdfHeader(doc, title, subtitle) {
