@@ -128,18 +128,29 @@ alter table public.day_entries         enable row level security;
 alter table public.children_attendance enable row level security;
 alter table public.audit_log           enable row level security;
 
+-- Note : les policies sont "droppées" avant d'être recréées, pour que ce fichier
+-- puisse être ré-exécuté sans erreur (« policy already exists »).
+
 -- PROFILES : tout le monde (connecté) peut lire ; seul l'admin modifie.
+drop policy if exists profiles_read  on public.profiles;
+drop policy if exists profiles_admin on public.profiles;
 create policy profiles_read   on public.profiles for select using (auth.uid() is not null);
 create policy profiles_admin  on public.profiles for all using (is_admin()) with check (is_admin());
 
 -- MONTHS : lecture pour tous ; écriture admin ; l'employée peut créer son mois "open".
+drop policy if exists months_read  on public.months;
+drop policy if exists months_admin on public.months;
 create policy months_read   on public.months for select using (auth.uid() is not null);
 create policy months_admin  on public.months for all using (is_admin()) with check (is_admin());
 
 -- DAY_ENTRIES :
 --   - lecture pour tous les utilisateurs connectés
---   - l'admin écrit tout (y compris planned_minutes et mois verrouillés)
+--   - l'admin écrit tout (y compris l'horaire prévu et les mois verrouillés)
 --   - l'employée écrit SES entrées seulement si le mois est 'open'
+drop policy if exists entries_read            on public.day_entries;
+drop policy if exists entries_admin           on public.day_entries;
+drop policy if exists entries_employee_insert on public.day_entries;
+drop policy if exists entries_employee_update on public.day_entries;
 create policy entries_read  on public.day_entries for select using (auth.uid() is not null);
 create policy entries_admin on public.day_entries for all using (is_admin()) with check (is_admin());
 create policy entries_employee_insert on public.day_entries for insert
@@ -149,11 +160,15 @@ create policy entries_employee_update on public.day_entries for update
   with check (employee_id = auth.uid() and month_is_open(employee_id, entry_date));
 
 -- CHILDREN : lecture pour tous ; écriture pour tout utilisateur actif (admin + employées).
+drop policy if exists children_read  on public.children_attendance;
+drop policy if exists children_write on public.children_attendance;
 create policy children_read  on public.children_attendance for select using (auth.uid() is not null);
 create policy children_write on public.children_attendance for all
   using (auth.uid() is not null) with check (auth.uid() is not null);
 
 -- AUDIT : lecture admin ; insertion par tous (via triggers/app).
+drop policy if exists audit_read   on public.audit_log;
+drop policy if exists audit_insert on public.audit_log;
 create policy audit_read   on public.audit_log for select using (is_admin());
 create policy audit_insert on public.audit_log for insert with check (auth.uid() is not null);
 
@@ -212,8 +227,14 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- Force Supabase (PostgREST) à recharger son cache de schéma.
+notify pgrst, 'reload schema';
+
 -- ============================================================================
 -- FIN — Après exécution : créez vos utilisateurs dans Authentication,
 -- puis passez l'un d'eux en role='admin' :
 --   update public.profiles set role='admin' where full_name = 'Admin';
+--
+-- Ce fichier est ré-exécutable sans erreur (colonnes IF NOT EXISTS,
+-- policies drop/create, fonctions create-or-replace).
 -- ============================================================================
