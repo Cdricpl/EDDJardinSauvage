@@ -88,3 +88,39 @@ test('règle métier : le mois précédent est bloqué en janvier 2026', async (
   }
   await expect(prev).toBeDisabled();
 });
+
+test('feuille : valider un mois bascule le bouton en « Repasser en cours »', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  const btn = page.locator('#validBtn');
+  await expect(btn).toContainText('Valider');
+  await btn.click();
+  await expect(page.locator('#validBtn')).toContainText('Repasser');
+});
+
+test('feuille : un écart non justifié affiche la bannière d’avertissement', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#warnBanner')).toBeHidden();
+  // On allonge l'horaire réel du 1er jour → écart sans justification.
+  await page.locator('select[data-k="end_time"]:not([disabled])').first().selectOption('21:00');
+  await expect(page.locator('#warnBanner')).toBeVisible();
+});
+
+test('restauration : importer une sauvegarde JSON remplace les données', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+
+  const backup = JSON.stringify({
+    kids: [{ id: 'imp1', first_name: 'Importe', last_name: 'Test', active: true }],
+    kid_attendance: [],
+  });
+  await page.locator('#impFile').setInputFiles({
+    name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(backup),
+  });
+  page.on('dialog', (d) => d.accept()); // confirme le remplacement
+  await page.locator('#impBtn').click();
+
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend tbody tr', { hasText: 'Importe' })).toHaveCount(1);
+});

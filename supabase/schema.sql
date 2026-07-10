@@ -99,6 +99,10 @@ alter table public.day_entries add column if not exists worked_touched boolean n
 
 create index if not exists idx_day_entries_emp_date on public.day_entries (employee_id, entry_date);
 
+-- Règle métier imposée en base : aucune prestation avant janvier 2026.
+alter table public.day_entries drop constraint if exists day_entries_min_date;
+alter table public.day_entries add  constraint day_entries_min_date check (entry_date >= date '2026-01-01');
+
 -- ============================================================================
 -- FONCTIONS UTILITAIRES
 -- ============================================================================
@@ -140,12 +144,18 @@ drop policy if exists templates_admin on public.schedule_templates;
 create policy templates_read  on public.schedule_templates for select using (auth.uid() is not null);
 create policy templates_admin on public.schedule_templates for all using (is_admin()) with check (is_admin());
 
--- ENFANTS : lecture + écriture pour tout utilisateur connecté (admin + employées).
--- (Les employées encadrent les enfants : accès métier légitime à la liste et aux présences.)
-drop policy if exists kids_read  on public.kids;
-drop policy if exists kids_write on public.kids;
-create policy kids_read  on public.kids for select using (auth.uid() is not null);
-create policy kids_write on public.kids for all using (auth.uid() is not null) with check (auth.uid() is not null);
+-- ENFANTS : lecture + ajout pour tout utilisateur connecté ; RENOMMAGE/RETRAIT
+-- (update) et SUPPRESSION (delete) réservés à l'admin. Les présences (kid_attendance)
+-- restent ouvertes à l'équipe (encadrement quotidien).
+drop policy if exists kids_read   on public.kids;
+drop policy if exists kids_write  on public.kids;
+drop policy if exists kids_insert on public.kids;
+drop policy if exists kids_update on public.kids;
+drop policy if exists kids_delete on public.kids;
+create policy kids_read   on public.kids for select using (auth.uid() is not null);
+create policy kids_insert on public.kids for insert with check (auth.uid() is not null);
+create policy kids_update on public.kids for update using (is_admin()) with check (is_admin());
+create policy kids_delete on public.kids for delete using (is_admin());
 drop policy if exists katt_read  on public.kid_attendance;
 drop policy if exists katt_write on public.kid_attendance;
 create policy katt_read  on public.kid_attendance for select using (auth.uid() is not null);

@@ -281,6 +281,28 @@ class DemoStore {
       kids: db.kids || [], kid_attendance: db.kidatt || [],
     };
   }
+  // Restaure une sauvegarde. Remplace les tables de données ; pour les profils on
+  // met à jour les champs sans écraser les mots de passe existants (mode démo).
+  async importAll(data) {
+    if (!data || typeof data !== 'object') throw new Error('Fichier de sauvegarde invalide.');
+    const db = this._db();
+    const counts = {};
+    if (Array.isArray(data.months))             { db.months = data.months;                 counts.months = db.months.length; }
+    if (Array.isArray(data.day_entries))        { db.entries = data.day_entries;            counts.day_entries = db.entries.length; }
+    if (Array.isArray(data.schedule_templates)) { db.templates = data.schedule_templates;   counts.schedule_templates = db.templates.length; }
+    if (Array.isArray(data.kids))               { db.kids = data.kids;                      counts.kids = db.kids.length; }
+    if (Array.isArray(data.kid_attendance))     { db.kidatt = data.kid_attendance;          counts.kid_attendance = db.kidatt.length; }
+    if (Array.isArray(data.profiles)) {
+      data.profiles.forEach((p) => {
+        const ex = db.profiles.find((x) => x.id === p.id);
+        if (ex) Object.assign(ex, p, { password: ex.password }); // conserve le mot de passe local
+        else db.profiles.push({ ...p, password: p.password || 'changeme' });
+      });
+      counts.profiles = db.profiles.length;
+    }
+    this._save(db);
+    return counts;
+  }
 
   /* ---- Temps réel (autres onglets) ---- */
   onChange(cb) {
@@ -319,17 +341,29 @@ class SupabaseStore {
     return (this._profilesCache = data || []);
   }
   async addProfile({ full_name, email, password, role }) {
-    // Création du compte + profil (nécessite que l'admin soit connecté ;
-    // en production on passera par une Edge Function pour ne pas déconnecter l'admin).
-    const { data, error } = await this.sb.auth.signUp({
-      email, password, options: { data: { full_name } },
-    });
-    if (error) throw new Error(error.message);
-    if (role === 'admin' && data.user) {
-      await this.sb.from('profiles').update({ role: 'admin' }).eq('id', data.user.id);
+    // Voie privilégiée : Edge Function "create-user" (clé service_role) qui crée
+    // le compte SANS déconnecter l'admin. Repli sur signUp si la fonction n'est
+    // pas déployée (l'admin peut alors être déconnecté — limite Supabase).
+    try {
+      const { data, error } = await this.sb.functions.invoke('create-user', {
+        body: { full_name, email, password },
+      });
+      if (error) throw error;
+      if (data && data.error) throw new Error(data.error);
+      this._profilesCache = null;
+      return data && data.user;
+    } catch (e) {
+      // 404 / fonction absente / réseau → repli signUp.
+      const status = e && (e.status || (e.context && e.context.status));
+      const missing = status === 404 || /not\s*found|failed to (fetch|send)/i.test(e && e.message || '');
+      if (!missing) throw new Error(e && e.message ? e.message : String(e));
+      const { data, error } = await this.sb.auth.signUp({
+        email, password, options: { data: { full_name } },
+      });
+      if (error) throw new Error(error.message);
+      this._profilesCache = null;
+      return data.user;
     }
-    this._profilesCache = null;
-    return data.user;
   }
   async setActive(id, active) {
     const { error } = await this.sb.from('profiles').update({ active }).eq('id', id);
@@ -490,6 +524,26 @@ class SupabaseStore {
     ]);
     return { exported_at: new Date().toISOString(), mode: 'cloud',
       profiles, months, day_entries, schedule_templates, kids, kid_attendance };
+  }
+  // Restaure les TABLES DE DONNÉES (pas les comptes : ceux-ci vivent dans Supabase
+  // Auth). Les employee_id/kid_id doivent référencer des comptes/enfants existants.
+  async importAll(data) {
+    if (!data || typeof data !== 'object') throw new Error('Fichier de sauvegarde invalide.');
+    const counts = {};
+    const restore = async (table, rows, conflict) => {
+      if (!Array.isArray(rows) || !rows.length) return;
+      const { error } = await this.sb.from(table).upsert(rows, conflict ? { onConflict: conflict } : undefined);
+      if (error) throw new Error(`${table} : ${error.message}`);
+      counts[table] = rows.length;
+    };
+    // Ordre : enfants avant présences (clé étrangère).
+    await restore('kids', data.kids, 'id');
+    await restore('kid_attendance', data.kid_attendance, 'kid_id,entry_date');
+    await restore('schedule_templates', data.schedule_templates, 'employee_id');
+    await restore('months', data.months, 'employee_id,year,month');
+    await restore('day_entries', data.day_entries, 'employee_id,entry_date');
+    this._entriesCache = {};
+    return counts;
   }
 
   onChange(cb) {

@@ -62,6 +62,14 @@ pré-remplies pour visualiser les récaps et les graphiques.
 > La clé « anon » est publique par conception : la sécurité est assurée côté serveur
 > par les règles **RLS** définies dans `schema.sql`.
 
+### Durcissement (recommandé)
+- Exécutez aussi **[`supabase/migration_hardening.sql`](supabase/migration_hardening.sql)**
+  (borne les dates ≥ janvier 2026, réserve renommage/retrait d'un enfant à l'admin).
+- **Création de comptes sans déconnexion** : déployez l'Edge Function
+  [`supabase/functions/create-user`](supabase/functions/create-user/) —
+  `supabase functions deploy create-user`. Tant qu'elle n'est pas déployée, l'app
+  bascule automatiquement sur l'ancienne méthode (qui peut déconnecter l'admin).
+
 ---
 
 ## ✨ Fonctionnalités
@@ -88,10 +96,12 @@ pré-remplies pour visualiser les récaps et les graphiques.
 - **Statistiques** : moyenne annuelle d'enfants par jour + détail mensuel, graphique,
   avec **export PDF** (moyennes + graphique inclus).
 - **Export PDF** : fiche mensuelle par employée (tableau début/fin, totaux, signatures).
-- **Sauvegarde & RGPD** (admin) : export **JSON complet** + **CSV** des prestations et des
-  présences ; **purge** des présences anciennes et **anonymisation** d'un enfant. Lecture
-  des prestations restreinte à « soi-même ou admin ». Voir
-  [`docs/confidentialite.md`](docs/confidentialite.md).
+- **Sauvegarde & RGPD** (admin) : export **JSON complet** + **CSV** (prestations, présences),
+  **restauration** d'une sauvegarde JSON, **purge** des présences anciennes et
+  **anonymisation** d'un enfant. Lecture des prestations restreinte à « soi-même ou admin ».
+  Voir [`docs/confidentialite.md`](docs/confidentialite.md).
+- **Export PDF récap global** (admin) : une page reprenant toutes les employées d'un mois
+  (prévu, presté, écart, soldes, statut), en plus de la fiche individuelle par employée.
 - **Employées** : ajout, **archivage** (données conservées en lecture seule), réactivation.
 - **Temps réel** : mise à jour automatique sur tous les appareils connectés.
 - **Fiabilité** : filet anti-crash (jamais d'écran blanc), enregistrement automatique.
@@ -109,9 +119,12 @@ pré-remplies pour visualiser les récaps et les graphiques.
 │   ├── config.js         # Clés Supabase (vide = mode démo)
 │   ├── store.js          # Couche de données : démo (localStorage) OU Supabase
 │   └── app.js            # Interface, calculs, vues, PDF, graphiques
+├── offline.html          # Page de repli hors-ligne (PWA)
 ├── supabase/
-│   ├── schema.sql            # Schéma PostgreSQL de référence : tables + RLS
-│   └── migration_cleanup.sql # Migration pour une base existante (confidentialité + nettoyage)
+│   ├── schema.sql              # Schéma PostgreSQL de référence : tables + RLS
+│   ├── migration_cleanup.sql   # Migration base existante (confidentialité + nettoyage)
+│   ├── migration_hardening.sql # Migration base existante (CHECK dates + RLS enfants)
+│   └── functions/create-user/  # Edge Function : créer un compte sans déconnecter l'admin
 ├── tests/                # Tests end-to-end Playwright (mode démo)
 ├── docs/
 │   ├── ARCHITECTURE.md       # Architecture + schéma de BDD + écrans
