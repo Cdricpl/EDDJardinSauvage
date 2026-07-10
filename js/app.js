@@ -25,20 +25,17 @@ const daysInMonth = (y, m) => new Date(y, m, 0).getDate();
 const monthName = (y, m) => new Date(y, m - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
-/* Encodage par heure de début/fin. Champ time natif, tranches de 15 minutes (step=900). */
+/* Encodage par heure de début/fin — menu déroulant limité aux quarts d'heure. */
 function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function minToTime(min) { return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`; }
-// Arrondit une heure "HH:MM" au quart d'heure le plus proche (00, 15, 30, 45).
-function snapQuarter(t) {
-  const m = timeToMin(t);
-  if (m == null) return '';
-  const r = Math.min(1425, Math.max(0, Math.round(m / 15) * 15));
-  return minToTime(r);
+// Liste des heures autorisées : uniquement les quarts d'heure (minutes 00/15/30/45).
+const TIME_LIST = (() => { const o = []; for (let m = 6 * 60; m <= 21 * 60; m += 15) o.push(minToTime(m)); return o; })();
+function timeOptionsHTML(value) {
+  return '<option value="">--:--</option>' +
+    TIME_LIST.map((t) => `<option value="${t}"${t === value ? ' selected' : ''}>${t}</option>`).join('');
 }
-const TIME_OPTIONS = (() => { const o = []; for (let m = 6 * 60; m <= 21 * 60; m += 15) o.push(minToTime(m)); return o; })();
-// Champ heure léger (input natif) : DOM minimal, sélecteur natif fluide sur mobile.
 function timeSelect(k, date, value, disabled) {
-  return `<input type="time" step="900" class="cell time" data-k="${k}" data-date="${date}" value="${value || ''}" ${disabled ? 'disabled' : ''}/>`;
+  return `<select class="cell time" data-k="${k}" data-date="${date}" ${disabled ? 'disabled' : ''}>${timeOptionsHTML(value || '')}</select>`;
 }
 // Heures PRÉVUES : durée définie par l'admin via heure de début/fin prévue.
 function plannedMinutes(e) {
@@ -383,8 +380,6 @@ async function viewSheet() {
   app.querySelectorAll('input.cell, select.cell').forEach((el) => {
     el.addEventListener('change', async () => {
       const date = el.dataset.date, k = el.dataset.k;
-      // Force l'arrondi au quart d'heure et reflète la correction dans le champ.
-      if (el.classList.contains('time') && el.value) el.value = snapQuarter(el.value);
       const prev = byDate[date] || {};
       const patch = { employee_id: empId, entry_date: date };
 
@@ -493,7 +488,7 @@ function templateHasSlots(tpl) {
   return tpl && Object.values(tpl).some((s) => s && s.start && s.end);
 }
 function templateCardHTML(tpl, month) {
-  const tin = (id, v) => `<input type="time" step="900" id="${id}" value="${v || ''}" style="width:120px"/>`;
+  const tin = (id, v) => `<select id="${id}" style="width:110px">${timeOptionsHTML(v || '')}</select>`;
   const rows = WEEK_ORDER.map((w) => {
     const s = (tpl && tpl[w]) || {};
     return `<tr>
@@ -528,9 +523,7 @@ function wireTemplateCard(empId, month) {
   if (save) save.onclick = async () => {
     const slots = {};
     for (const w of WEEK_ORDER) {
-      const sEl = document.getElementById(`tpl_${w}_s`), eEl = document.getElementById(`tpl_${w}_e`);
-      const s = snapQuarter(sEl.value), e = snapQuarter(eEl.value);
-      sEl.value = s; eEl.value = e;   // reflète l'arrondi au quart d'heure
+      const s = document.getElementById(`tpl_${w}_s`).value, e = document.getElementById(`tpl_${w}_e`).value;
       if (s && e) {
         if (timeToMin(e) <= timeToMin(s)) {
           document.getElementById('tplMsg').innerHTML = `<div class="msg error">${DOW_FULL[w]} : la fin doit être après le début.</div>`;

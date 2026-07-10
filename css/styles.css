@@ -63,8 +63,7 @@ th { background:#f1f3f5; position:sticky; top:0; }
 .grid input.cell { border:none; width:70px; padding:6px; text-align:center; }
 .grid input.cell.wide { width:100%; min-width:120px; text-align:left; }
 .grid select.cell { border:none; padding:6px; }
-.grid input.cell.time { width:104px; border:none; padding:5px; text-align:center; }
-.grid input.cell.time:focus { outline:2px solid var(--primary); border-radius:4px; }
+.grid select.cell.time { width:84px; }
 /* Éclat vert bref quand une cellule vient d'être enregistrée */
 .cell.saved { animation:savedFlash .7s ease-out; }
 @keyframes savedFlash { 0%{ background:#d3f9d8; } 100%{ background:transparent; } }
