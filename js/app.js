@@ -127,7 +127,9 @@ async function afterLogin() {
   }
   VIEW = 'sheet';
   document.body.dataset.role = ME.role;   // thème couleur : admin=bleu, employée=vert
-  document.getElementById('login').style.display = 'none';
+  const loginEl = document.getElementById('login');
+  loginEl.style.display = 'none';
+  loginEl.innerHTML = '';   // retire le champ mot de passe du DOM (sinon le mobile propose de l'enregistrer en boucle)
   document.getElementById('appShell').style.display = 'block';
   document.getElementById('meName').textContent = ME.full_name + (ME.role === 'admin' ? ' (Admin)' : '');
   buildNav();
