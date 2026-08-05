@@ -1,34 +1,60 @@
-name: Garder Supabase éveillé
+name: Garder Supabase éveillé (+ réveil auto)
 
-# Empêche la mise en veille du projet Supabase (plan gratuit : pause après ~7 jours
-# d'inactivité). Ce robot envoie une petite requête à la base 2 fois par semaine.
-# Aucune donnée n'est modifiée : c'est une simple lecture qui compte comme "activité".
+# Deux protections contre la mise en veille du projet Supabase (offre gratuite) :
+#   1. Une requête d'activité QUOTIDIENNE (la doc Supabase recommande « quelques
+#      requêtes par jour » — l'ancien rythme 2×/semaine était trop espacé).
+#   2. Un RÉVEIL AUTOMATIQUE : si le projet est malgré tout en pause, on le restaure
+#      via l'API de gestion Supabase (nécessite le secret SUPABASE_ACCESS_TOKEN).
+#
+# Configuration requise (une seule fois) :
+#   - Créez un jeton d'accès : https://supabase.com/dashboard/account/tokens
+#   - Ajoutez-le dans GitHub → Settings → Secrets and variables → Actions →
+#     New repository secret → nom : SUPABASE_ACCESS_TOKEN
 
 on:
   schedule:
-    # Lundi et jeudi à 06:00 UTC (jamais plus de ~3-4 jours entre deux réveils).
-    - cron: '0 6 * * 1,4'
-  workflow_dispatch: {}   # permet aussi de le lancer à la main depuis l'onglet Actions
+    - cron: '0 6 * * *'     # tous les jours à 06:00 UTC
+  workflow_dispatch: {}      # bouton « Run workflow » dans l'onglet Actions
 
 jobs:
-  ping:
+  keepalive:
     runs-on: ubuntu-latest
+    env:
+      PROJECT_REF: sbuwxpecmsglbkeiaikz
+      SUPABASE_URL: https://sbuwxpecmsglbkeiaikz.supabase.co
+      # Clé "anon" publique (déjà présente dans js/config.js) — sécurisée par la RLS.
+      SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNidXd4cGVjbXNnbGJrZWlhaWt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM2NDkzMTcsImV4cCI6MjA5OTIyNTMxN30.-_YtmodUzMCbVPHzYGT6sdyLro86mK1pqBEg8QcCN-c
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
     steps:
-      - name: Réveiller la base Supabase
-        env:
-          SUPABASE_URL: https://sbuwxpecmsglbkeiaikz.supabase.co
-          # Clé "anon" publique (déjà présente dans js/config.js) — sécurisée par la RLS.
-          SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNidXd4cGVjbXNnbGJrZWlhaWt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM2NDkzMTcsImV4cCI6MjA5OTIyNTMxN30.-_YtmodUzMCbVPHzYGT6sdyLro86mK1pqBEg8QcCN-c
+      - name: Réveil automatique si le projet est en pause
         run: |
-          echo "Ping de la base Supabase pour la garder active..."
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "⚠️  Secret SUPABASE_ACCESS_TOKEN absent : le réveil auto est désactivé."
+            echo "    (Ajoutez le secret pour activer la restauration automatique.)"
+            exit 0
+          fi
+          status=$(curl -s -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF" | jq -r '.status // "unknown"')
+          echo "Statut du projet : $status"
+          case "$status" in
+            INACTIVE|PAUSED)
+              echo "→ Projet en pause : demande de restauration…"
+              http=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+                -H "Content-Type: application/json" -d '{}' \
+                "https://api.supabase.com/v1/projects/$PROJECT_REF/restore")
+              echo "Restauration envoyée (HTTP $http). Le projet sera de nouveau accessible dans quelques minutes."
+              ;;
+            *)
+              echo "→ Aucun réveil nécessaire."
+              ;;
+          esac
+
+      - name: Requête d'activité (prévention)
+        run: |
+          echo "Ping d'activité de la base…"
           code=$(curl -s -o /dev/null -w "%{http_code}" \
             "$SUPABASE_URL/rest/v1/profiles?select=id&limit=1" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY")
-          echo "Réponse HTTP : $code"
-          # 200 (ok) ou 401/403 (RLS) comptent tous comme une activité valide.
-          if [ "$code" = "200" ] || [ "$code" = "401" ] || [ "$code" = "403" ]; then
-            echo "OK — la base a bien reçu la requête, elle reste éveillée."
-          else
-            echo "Réponse inattendue ($code), mais la requête a tout de même touché le projet."
-          fi
+          echo "Réponse HTTP : $code (200/401/403 = activité valide ; autre = base peut-être en cours de réveil)."
