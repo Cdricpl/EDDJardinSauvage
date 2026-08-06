@@ -1,6 +1,6 @@
 /* Service worker — stratégie "réseau d'abord" (toujours la dernière version),
  * avec repli sur le cache hors ligne. N'intercepte QUE les fichiers de l'app
- * (même origine) : Supabase et les CDN passent en direct. */
+ * (même origine) : Firebase et les CDN passent en direct. */
 
 /* IMPORTANT : bumper cette version à CHAQUE déploiement d'un fichier applicatif
  * (index.html, css, js, sw). Sinon un appareil hors ligne peut servir une
