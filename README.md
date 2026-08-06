@@ -110,10 +110,9 @@ L'application choisit son hébergement automatiquement selon `js/config.js` :
 - **Statistiques** : moyenne annuelle d'enfants par jour + détail mensuel, graphique,
   avec **export PDF** (moyennes + graphique inclus).
 - **Export PDF** : fiche mensuelle par employée (tableau début/fin, totaux, signatures).
-- **Sauvegarde & RGPD** (admin) : export **JSON complet** + **CSV** (prestations, présences),
-  **restauration** d'une sauvegarde JSON, **purge** des présences anciennes et
-  **anonymisation** d'un enfant. Lecture des prestations restreinte à « soi-même ou admin ».
-  Voir [`docs/confidentialite.md`](docs/confidentialite.md).
+- **Sauvegarde** (admin) : export **JSON complet** + **CSV** (prestations, présences) et
+  **restauration** d'une sauvegarde JSON. Lecture des prestations restreinte à
+  « soi-même ou admin ».
 - **Export PDF récap global** (admin) : une page reprenant toutes les employées d'un mois
   (prévu, presté, écart, soldes, statut), en plus de la fiche individuelle par employée.
 - **Employées** : ajout, **archivage** (données conservées en lecture seule), réactivation.
@@ -142,7 +141,7 @@ L'application choisit son hébergement automatiquement selon `js/config.js` :
 ├── tests/                # Tests end-to-end Playwright (mode démo)
 ├── docs/
 │   ├── ARCHITECTURE.md       # Architecture + schéma de BDD + écrans
-│   └── confidentialite.md    # Note de confidentialité & politique de rétention (RGPD)
+│   └── migration-firebase.md # Guide de migration vers Firebase
 └── README.md
 ```
 

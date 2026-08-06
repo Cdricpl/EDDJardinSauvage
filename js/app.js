@@ -804,7 +804,6 @@ async function exportStatsPDF(stats, chartDaily, chartMonthly) {
 async function viewEmployees() {
   const app = document.getElementById('app');
   const profs = await STORE.listProfiles();
-  const allKids = await STORE.listKids(true);
   const roleLbl = (r) => (r === 'admin' ? 'Administrateur' : 'Employée');
   const rows = profs.map((p) => {
     const activeBtn = p.role === 'employee'
@@ -812,8 +811,8 @@ async function viewEmployees() {
                   : `<button class="small green" data-react="${p.id}">Réactiver</button>`)
       : '';
     return `<tr>
-      <td>${p.full_name}</td>
-      <td class="nowrap">${p.email || '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email">✏️</button></td>
+      <td class="nowrap">${p.full_name} <button class="small gray" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
+      <td class="nowrap">${p.email || '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
       <td><span class="badge ${p.role === 'admin' ? 'validated' : 'open'}">${roleLbl(p.role)}</span></td>
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
       <td class="nowrap">
@@ -829,7 +828,7 @@ async function viewEmployees() {
         <tbody>${rows}</tbody></table></div>
       <p class="muted small">
         🔒 Le rôle <strong>Administrateur est fixe</strong> : une employée ne peut pas être promue admin.
-        « ✏️ » modifie l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
+        « ✏️ » modifie le nom ou l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
         Archiver conserve les données en lecture seule.
         ${isCloud() ? "En cloud, l'email modifié sert de contact/réinitialisation." : ''}
       </p>
@@ -848,9 +847,9 @@ async function viewEmployees() {
       <button id="saveEmp" style="margin-top:10px">Créer</button>
     </div>
     <div class="card" id="dataCard">
-      <h2>🗄️ Données &amp; confidentialité</h2>
-      <p class="muted small">Sauvegardez régulièrement vos données (protection contre une perte).
-        La purge et l'anonymisation sont <strong>irréversibles</strong>.</p>
+      <h2>🗄️ Données</h2>
+      <p class="muted small">Sauvegardez régulièrement vos données : c'est votre protection
+        en cas de perte ou de fausse manipulation.</p>
       <h3 style="margin-bottom:6px">Sauvegarde / export</h3>
       <div class="row" style="flex-wrap:wrap; gap:10px">
         <button class="small" id="expJson">⬇️ Exporter tout (JSON)</button>
@@ -864,23 +863,6 @@ async function viewEmployees() {
         <input id="impFile" type="file" accept="application/json,.json" aria-label="Fichier de sauvegarde JSON à restaurer" style="max-width:100%"/>
         <button class="small red" id="impBtn">⬆️ Restaurer</button>
       </div>
-      <h3 style="margin:16px 0 6px">Rétention (RGPD)</h3>
-      <div class="row" style="align-items:end; flex-wrap:wrap; gap:10px">
-        <div><label for="purgeYear">Purger les présences enfants avant le 1ᵉʳ janvier</label>
-          <input id="purgeYear" type="number" min="2026" value="${CUR.y}" style="width:110px"/></div>
-        <button class="small red" id="purgeBtn">🧹 Purger</button>
-      </div>
-      <div class="row" style="align-items:end; flex-wrap:wrap; gap:10px; margin-top:12px">
-        <div><label for="anonSel">Anonymiser un enfant</label>
-          <select id="anonSel" style="min-width:200px">
-            <option value="">— choisir —</option>
-            ${allKids.map((k) => `<option value="${k.id}">${(k.last_name ? k.last_name.toUpperCase() + ' ' : '') + k.first_name}${k.active ? '' : ' (retiré)'}</option>`).join('')}
-          </select></div>
-        <button class="small red" id="anonBtn">🕶️ Anonymiser</button>
-      </div>
-      <p class="muted small" style="margin-top:12px">
-        📄 <a href="docs/confidentialite.md" target="_blank" rel="noopener">Note de confidentialité &amp; politique de rétention</a>
-      </p>
     </div>`;
 
   document.getElementById('addBtn').onclick = () => document.getElementById('addForm').classList.toggle('hidden');
@@ -897,6 +879,13 @@ async function viewEmployees() {
       toast('Employée ajoutée'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
+  app.querySelectorAll('[data-name]').forEach((b) => b.onclick = async () => {
+    const p = profs.find((x) => x.id === b.dataset.name) || {};
+    const name = prompt('Nom complet (Prénom Nom) :', p.full_name || '');
+    if (name == null) return;
+    try { await STORE.setFullName(b.dataset.name, name); toast('Nom mis à jour'); render(); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  });
   app.querySelectorAll('[data-email]').forEach((b) => b.onclick = async () => {
     const p = profs.find((x) => x.id === b.dataset.email) || {};
     const email = prompt(`Nouvel email pour ${p.full_name} :`, p.email || '');
@@ -965,21 +954,6 @@ async function viewEmployees() {
       downloadFile(`presences_enfants_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
       toast('CSV présences téléchargé');
     } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
-  };
-  document.getElementById('purgeBtn').onclick = async () => {
-    const year = parseInt(document.getElementById('purgeYear').value, 10);
-    if (!year || year < 2026) { toast('Année invalide.', 'error'); return; }
-    const before = `${year}-01-01`;
-    if (!confirm(`Supprimer DÉFINITIVEMENT toutes les présences enfants avant le ${before} ?\nPensez à exporter une sauvegarde avant.`)) return;
-    try { const n = await STORE.purgeKidAttendanceBefore(before); toast(`${n} présence(s) purgée(s).`); render(); }
-    catch (e) { toast('Purge impossible : ' + e.message, 'error'); }
-  };
-  document.getElementById('anonBtn').onclick = async () => {
-    const id = document.getElementById('anonSel').value;
-    if (!id) { toast('Choisissez un enfant.', 'error'); return; }
-    if (!confirm("Anonymiser cet enfant ? Son nom et prénom seront remplacés définitivement (les présences restent comptées).")) return;
-    try { await STORE.anonymizeKid(id); toast('Enfant anonymisé.'); render(); }
-    catch (e) { toast('Anonymisation impossible : ' + e.message, 'error'); }
   };
 }
 

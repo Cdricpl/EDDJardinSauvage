@@ -170,6 +170,13 @@ class DemoStore {
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.email = email; this._save(db); }
   }
+  async setFullName(id, full_name) {
+    full_name = (full_name || '').trim();
+    if (!full_name) throw new Error('Le nom ne peut pas être vide.');
+    const db = this._db();
+    const p = db.profiles.find(x => x.id === id);
+    if (p) { p.full_name = full_name; this._save(db); }
+  }
   async sendPasswordReset(email) {
     // Pas d'envoi d'email possible en mode démo.
     throw new Error("Envoi d'email indisponible en mode démo (fonctionne en mode cloud).");
@@ -258,22 +265,6 @@ class DemoStore {
     const byDate = {};
     this._db().kidatt.forEach(a => { byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1; });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
-  }
-
-  /* ---- RGPD : rétention / anonymisation ---- */
-  // Supprime les présences enfants strictement antérieures à `beforeISO` (AAAA-MM-JJ).
-  async purgeKidAttendanceBefore(beforeISO) {
-    const db = this._db();
-    const before = db.kidatt.length;
-    db.kidatt = db.kidatt.filter(a => a.entry_date >= beforeISO);
-    this._save(db);
-    return before - db.kidatt.length;
-  }
-  // Anonymise un enfant (remplace nom/prénom) tout en conservant ses présences comptées.
-  async anonymizeKid(id) {
-    const db = this._db();
-    const k = db.kids.find(x => x.id === id);
-    if (k) { k.first_name = 'Enfant'; k.last_name = '#' + String(id).slice(0, 6); k.active = false; this._save(db); }
   }
 
   /* ---- Export / sauvegarde ---- */
@@ -380,6 +371,13 @@ class SupabaseStore {
     email = (email || '').trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Adresse email invalide.');
     const { error } = await this.sb.from('profiles').update({ email }).eq('id', id);
+    if (error) throw new Error(error.message);
+    this._profilesCache = null;
+  }
+  async setFullName(id, full_name) {
+    full_name = (full_name || '').trim();
+    if (!full_name) throw new Error('Le nom ne peut pas être vide.');
+    const { error } = await this.sb.from('profiles').update({ full_name }).eq('id', id);
     if (error) throw new Error(error.message);
     this._profilesCache = null;
   }
@@ -501,19 +499,6 @@ class SupabaseStore {
     const byDate = {};
     (data || []).forEach((a) => { byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1; });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
-  }
-
-  /* ---- RGPD : rétention / anonymisation ---- */
-  async purgeKidAttendanceBefore(beforeISO) {
-    const { data, error } = await this.sb.from('kid_attendance')
-      .delete().lt('entry_date', beforeISO).select('kid_id');
-    if (error) throw new Error(error.message);
-    return (data || []).length;
-  }
-  async anonymizeKid(id) {
-    const { error } = await this.sb.from('kids')
-      .update({ first_name: 'Enfant', last_name: '#' + String(id).slice(0, 6), active: false }).eq('id', id);
-    if (error) throw new Error(error.message);
   }
 
   /* ---- Export / sauvegarde ---- */
@@ -678,6 +663,12 @@ class FirebaseStore {
     await this.db.collection('profiles').doc(id).set({ email }, { merge: true });
     this._profilesCache = null;
   }
+  async setFullName(id, full_name) {
+    full_name = (full_name || '').trim();
+    if (!full_name) throw new Error('Le nom ne peut pas être vide.');
+    await this.db.collection('profiles').doc(id).set({ full_name }, { merge: true });
+    this._profilesCache = null;
+  }
   async sendPasswordReset(email) {
     try { await this.auth.sendPasswordResetEmail((email || '').trim()); }
     catch (e) { throw new Error(this._authMsg(e)); }
@@ -776,17 +767,6 @@ class FirebaseStore {
     const byDate = {};
     snap.docs.forEach((d) => { const dt = d.data().entry_date; byDate[dt] = (byDate[dt] || 0) + 1; });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
-  }
-
-  /* ---- RGPD ---- */
-  async purgeKidAttendanceBefore(beforeISO) {
-    const snap = await this.db.collection('kid_attendance').where('entry_date', '<', beforeISO).get();
-    await this._commit(snap.docs.map((d) => ({ ref: d.ref, delete: true })));
-    return snap.size;
-  }
-  async anonymizeKid(id) {
-    await this.db.collection('kids').doc(id)
-      .set({ first_name: 'Enfant', last_name: '#' + String(id).slice(0, 6), active: false }, { merge: true });
   }
 
   /* ---- Export / restauration ---- */

@@ -37,7 +37,7 @@ quelques centaines).
    [`firebase/firestore.rules`](../firebase/firestore.rules) de ce dépôt.
 3. **Publier**.
 
-Ces règles reproduisent la confidentialité mise en place côté Supabase : une employée
+Ces règles reproduisent le cloisonnement mis en place côté Supabase : une employée
 ne voit **que ses propres prestations**, ne peut pas se promouvoir administratrice, et
 seule l'admin peut renommer/retirer un enfant.
 

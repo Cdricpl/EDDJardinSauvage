@@ -7,7 +7,8 @@
 > solde SQL** (`carry_in_minutes`, `propagate_carry` — désormais **recalculé côté app**),
 > et les colonnes `kind`/`break_minutes`. Pour l'état **réel** du schéma et de la sécurité,
 > faire foi à **[`supabase/schema.sql`](../supabase/schema.sql)** et aux migrations
-> `supabase/migration_*.sql`. Voir aussi **[`confidentialite.md`](confidentialite.md)**.
+> `supabase/migration_*.sql`. L'hébergement actuel est **Firebase** : voir
+> **[`migration-firebase.md`](migration-firebase.md)** et `firebase/firestore.rules`.
 
 ## 1. Vue d'ensemble
 
