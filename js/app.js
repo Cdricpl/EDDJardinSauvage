@@ -155,6 +155,7 @@ async function afterLogin() {
   const backupBtn = document.getElementById('backupBtn');
   if (ME.role === 'admin') { backupBtn.style.display = ''; backupBtn.onclick = () => backupJSON(); }
   else { backupBtn.style.display = 'none'; }
+  startIdleTimer();   // déconnexion auto après 15 min d'inactivité
   buildNav();
   render();
 }
@@ -185,6 +186,13 @@ function renderLogin() {
   const loginMsg = (html, kind = 'error') => {
     document.getElementById('loginMsg').innerHTML = `<div class="msg ${kind}">${html}</div>`;
   };
+  // Message informatif après une déconnexion automatique pour inactivité.
+  try {
+    if (sessionStorage.getItem('autoLogout')) {
+      sessionStorage.removeItem('autoLogout');
+      loginMsg('Vous avez été déconnecté après 15 minutes d\'inactivité. Reconnectez-vous.', 'ok');
+    }
+  } catch {}
   const go = async () => {
     try {
       ME = await STORE.signIn(document.getElementById('email').value.trim(), document.getElementById('pwd').value);
@@ -224,18 +232,23 @@ async function toolbar(showEmployee) {
     empSel = `<select id="empSel">${profs.map((p) =>
       `<option value="${p.id}" ${p.id === SEL_EMP ? 'selected' : ''}>${p.full_name}${p.active ? '' : ' (archivée)'}</option>`).join('')}</select>`;
   }
+  const now = new Date();
+  const onCurrentMonth = CUR.y === now.getFullYear() && CUR.m === now.getMonth() + 1;
   return `<div class="toolbar">
     <button class="small" id="prevM" ${atOrBeforeMin() ? 'disabled title="Janvier 2026 = premier mois"' : ''}>◀</button>
     <strong style="min-width:170px;text-align:center;text-transform:capitalize">${monthName(CUR.y, CUR.m)}</strong>
     <button class="small" id="nextM">▶</button>
+    <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours">📅 Aujourd'hui</button>
     ${empSel}
     <span style="flex:1"></span>
   </div>`;
 }
 function wireToolbar() {
-  const p = document.getElementById('prevM'), n = document.getElementById('nextM'), s = document.getElementById('empSel');
+  const p = document.getElementById('prevM'), n = document.getElementById('nextM'),
+        t = document.getElementById('todayM'), s = document.getElementById('empSel');
   if (p) p.onclick = () => { if (atOrBeforeMin()) return; CUR.m--; if (CUR.m < 1) { CUR.m = 12; CUR.y--; } clampMonth(); render(); };
   if (n) n.onclick = () => { CUR.m++; if (CUR.m > 12) { CUR.m = 1; CUR.y++; } render(); };
+  if (t) t.onclick = () => { const d = new Date(); CUR.y = d.getFullYear(); CUR.m = d.getMonth() + 1; clampMonth(); render(); };
   if (s) s.onchange = () => { SEL_EMP = s.value; render(); };
 }
 
@@ -371,7 +384,7 @@ async function viewSheet() {
         <span class="legend"><span class="sw grp-plan-h"></span> Horaire prévu (défini par l'admin)</span>
         <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employée)</span>
         <span class="legend"><span class="dot">●</span> jour modifié</span>
-        <span class="legend"><span class="pos">▲ heures sup.</span> / <span class="neg">▼ à récupérer</span></span><br>
+        <span class="legend"><span class="pos">▲ vert = heures supplémentaires</span> / <span class="neg">▼ rouge = heures récupérées</span></span><br>
         Heures par tranches de 15 min. Enregistrement automatique.
       </p>
     </div>`;
@@ -653,7 +666,8 @@ async function viewChildren() {
     }).join('');
     return `<tr>
       <th scope="row" class="kidname nowrap">${kidLabel(k)}
-        ${ME.role === 'admin' ? `<button class="linkx" data-arch="${k.id}" aria-label="Retirer ${kidLabel(k).replace(/"/g, '&quot;')} de la liste" title="Retirer de la liste">✕</button>` : ''}</th>
+        ${ME.role === 'admin' ? `<button class="linkx" data-editkid="${k.id}" aria-label="Modifier le nom de ${kidLabel(k).replace(/"/g, '&quot;')}" title="Modifier le nom">✏️</button>
+        <button class="linkx" data-arch="${k.id}" aria-label="Retirer ${kidLabel(k).replace(/"/g, '&quot;')} de la liste" title="Retirer de la liste">✕</button>` : ''}</th>
       ${cells}
       <td class="kidtot"><strong id="kidtot_${k.id}">${kidPresentCount(k)}</strong></td>
     </tr>`;
@@ -689,6 +703,16 @@ async function viewChildren() {
       toast('Enfant ajouté'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
+  // Modifier le prénom/nom d'un enfant.
+  app.querySelectorAll('[data-editkid]').forEach((b) => b.onclick = async () => {
+    const k = kids.find((x) => x.id === b.dataset.editkid) || {};
+    const first = prompt('Prénom :', k.first_name || '');
+    if (first == null) return;
+    const last = prompt('Nom :', k.last_name || '');
+    if (last == null) return;
+    try { await STORE.setKidName(b.dataset.editkid, first, last); toast('Enfant modifié'); render(); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  });
   // Retirer un enfant (archivage : données conservées).
   app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
     if (!confirm('Retirer cet enfant de la liste ? (ses présences passées restent comptées)')) return;
@@ -812,16 +836,23 @@ async function exportStatsPDF(stats, chartDaily, chartMonthly) {
 async function viewEmployees() {
   const app = document.getElementById('app');
   const profs = await STORE.listProfiles();
-  const roleLbl = (r) => (r === 'admin' ? 'Administrateur' : 'Employée');
+  const nbAdmins = profs.filter((p) => p.role === 'admin' && p.active).length;
   const rows = profs.map((p) => {
     const activeBtn = p.role === 'employee'
       ? (p.active ? `<button class="small red" data-arch="${p.id}">Archiver</button>`
                   : `<button class="small green" data-react="${p.id}">Réactiver</button>`)
       : '';
+    // Sélecteur de rôle. On empêche de retirer le dernier administrateur (sinon
+    // plus personne ne pourrait gérer les utilisateurs).
+    const isLastAdmin = p.role === 'admin' && nbAdmins <= 1;
+    const roleSel = `<select class="rolesel" data-role="${p.id}" ${isLastAdmin ? 'disabled title="Dernier administrateur"' : ''}>
+        <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employée</option>
+        <option value="admin" ${p.role === 'admin' ? 'selected' : ''}>Administrateur</option>
+      </select>`;
     return `<tr>
       <td class="nowrap">${p.full_name} <button class="small gray" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
       <td class="nowrap">${p.email || '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
-      <td><span class="badge ${p.role === 'admin' ? 'validated' : 'open'}">${roleLbl(p.role)}</span></td>
+      <td>${roleSel}</td>
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
       <td class="nowrap">
         <button class="small" data-reset="${p.id}">✉️ Réinit. mot de passe</button>
@@ -835,10 +866,10 @@ async function viewEmployees() {
         <thead><tr><th>Nom</th><th>Email</th><th>Rôle</th><th>Statut</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <p class="muted small">
-        🔒 Le rôle <strong>Administrateur est fixe</strong> : une employée ne peut pas être promue admin.
+        Le <strong>rôle</strong> se change directement dans la liste (le dernier administrateur ne peut pas être rétrogradé).
         « ✏️ » modifie le nom ou l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
         Archiver conserve les données en lecture seule.
-        ${isCloud() ? "En cloud, l'email modifié sert de contact/réinitialisation." : ''}
+        ${isCloud() ? "L'email modifié sert de contact/réinitialisation." : ''}
       </p>
     </div>
     <div class="card hidden" id="addForm">
@@ -893,6 +924,13 @@ async function viewEmployees() {
     if (name == null) return;
     try { await STORE.setFullName(b.dataset.name, name); toast('Nom mis à jour'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  });
+  app.querySelectorAll('select.rolesel').forEach((s) => s.onchange = async () => {
+    const p = profs.find((x) => x.id === s.dataset.role) || {};
+    const role = s.value, label = role === 'admin' ? 'administrateur' : 'employée';
+    if (!confirm(`Changer le rôle de ${p.full_name} en « ${label} » ?`)) { s.value = p.role; return; }
+    try { await STORE.setRole(s.dataset.role, role); toast('Rôle mis à jour'); render(); }
+    catch (e) { s.value = p.role; toast('Erreur : ' + e.message, 'error'); }
   });
   app.querySelectorAll('[data-email]').forEach((b) => b.onclick = async () => {
     const p = profs.find((x) => x.id === b.dataset.email) || {};
@@ -1073,10 +1111,28 @@ async function exportSheetPDF(empId) {
 }
 
 /* ---------------- Déconnexion ---------------- */
-async function doLogout() {
+async function doLogout(auto) {
+  stopIdleTimer();
   try { await STORE.signOut(); } catch (e) { console.error('[logout]', e); }
-  ME = null; location.reload();
+  ME = null;
+  if (auto) { try { sessionStorage.setItem('autoLogout', '1'); } catch {} }
+  location.reload();
 }
+
+/* ---------------- Déconnexion automatique après inactivité ---------------- */
+const IDLE_MINUTES = 15;
+let _idleTimer = null;
+function resetIdleTimer() {
+  if (!ME) return;
+  clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(() => doLogout(true), IDLE_MINUTES * 60 * 1000);
+}
+function startIdleTimer() {
+  ['click', 'keydown', 'mousemove', 'touchstart', 'scroll', 'change'].forEach((ev) =>
+    window.addEventListener(ev, resetIdleTimer, { passive: true }));
+  resetIdleTimer();
+}
+function stopIdleTimer() { clearTimeout(_idleTimer); }
 
 /* ---------------- Filet de sécurité global ---------------- */
 window.addEventListener('error', (ev) => {

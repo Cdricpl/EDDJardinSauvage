@@ -145,6 +145,19 @@ class DemoStore {
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.active = active; this._save(db); }
   }
+  async setRole(id, role) {
+    if (role !== 'admin' && role !== 'employee') throw new Error('Rôle invalide.');
+    const db = this._db();
+    const p = db.profiles.find(x => x.id === id);
+    if (p) { p.role = role; this._save(db); }
+  }
+  async setKidName(id, first_name, last_name) {
+    first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
+    if (!first_name) throw new Error('Le prénom est requis.');
+    const db = this._db();
+    const k = db.kids.find(x => x.id === id);
+    if (k) { k.first_name = first_name; k.last_name = last_name; this._save(db); }
+  }
 
   /* ---- Horaire type ---- */
   async getTemplate(employee_id) {
@@ -656,6 +669,11 @@ class FirebaseStore {
     await this.db.collection('profiles').doc(id).set({ active }, { merge: true });
     this._profilesCache = null;
   }
+  async setRole(id, role) {
+    if (role !== 'admin' && role !== 'employee') throw new Error('Rôle invalide.');
+    await this.db.collection('profiles').doc(id).set({ role }, { merge: true });
+    this._profilesCache = null;
+  }
   async setEmail(id, email) {
     email = (email || '').trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Adresse email invalide.');
@@ -750,6 +768,11 @@ class FirebaseStore {
   }
   async setKidActive(id, active) {
     await this.db.collection('kids').doc(id).set({ active }, { merge: true });
+  }
+  async setKidName(id, first_name, last_name) {
+    first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
+    if (!first_name) throw new Error('Le prénom est requis.');
+    await this.db.collection('kids').doc(id).set({ first_name, last_name }, { merge: true });
   }
   async kidAttendanceForMonth(year, month) {
     const p = Util.monthKey(year, month);
