@@ -872,7 +872,21 @@ class FirebaseStore {
  * Priorité : Firebase → Supabase → démo (localStorage)
  * ================================================================ */
 async function createStore() {
-  if (HAS_FIREBASE && window.firebase) {
+  // Choix forcé par l'URL (utile pendant une migration) :
+  //   ...?store=supabase  → ancien hébergement (pour exporter une sauvegarde)
+  //   ...?store=firebase  → nouvel hébergement   ·   ...?store=demo → données locales
+  const forced = new URLSearchParams(location.search).get('store');
+
+  if (forced === 'demo') {
+    const s = new DemoStore(); await s.init(); return { store: s, mode: 'demo' };
+  }
+  if (forced === 'supabase' && HAS_SUPABASE && window.supabase) {
+    const sb = window.supabase.createClient(
+      window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
+    const s = new SupabaseStore(sb); await s.init(); return { store: s, mode: 'cloud' };
+  }
+
+  if (HAS_FIREBASE && window.firebase && forced !== 'supabase') {
     const app = firebase.apps && firebase.apps.length
       ? firebase.app() : firebase.initializeApp(window.APP_CONFIG.FIREBASE_CONFIG);
     const s = new FirebaseStore(app);
