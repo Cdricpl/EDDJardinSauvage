@@ -173,6 +173,20 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
 .attend .kidtot { background:#faf5ec; min-width:44px; }
 .attend tfoot td { background:#f2ead9; font-weight:700; }
 .attend input.pres { width:18px; height:18px; margin:0; accent-color:var(--primary); cursor:pointer; }
+/* Cellule de présence à 3 états (présent / absent / vide) */
+.attend .presbtn {
+  width:26px; height:26px; padding:0; border:1px solid var(--border-strong); border-radius:6px;
+  background:#fff; color:var(--text); font-size:15px; font-weight:700; line-height:1; cursor:pointer;
+  box-shadow:none;
+}
+.attend .presbtn.pres-p { background:#e7f4ec; border-color:var(--green); color:var(--green-dark); }
+.attend .presbtn.pres-a { background:#f8e2e1; border-color:var(--red); color:var(--red-dark); }
+.attend .presbtn.pres-exp { color:var(--muted); border-style:dashed; }  /* jour habituel non marqué */
+.attend .presbtn:hover { filter:brightness(.97); }
+.attend .presbtn:focus { outline:2px solid var(--primary); }
+.daychks { display:flex; flex-wrap:wrap; gap:10px; margin-top:4px; }
+.daychk { display:inline-flex; align-items:center; gap:5px; font-weight:600; font-size:13px; color:var(--text); }
+.daychk input { width:auto; }
 .linkx { background:transparent; color:var(--muted); box-shadow:none; padding:0 4px; font-size:13px; margin-left:4px; }
 .linkx:hover { background:transparent; color:var(--red); }
 
@@ -235,6 +249,7 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
   input:not([type=checkbox]), select, button { min-height:44px; font-size:16px; }
   button.small { min-height:38px; }
   .attend input.pres { width:22px; height:22px; }
+  .attend .presbtn { width:30px; height:32px; font-size:16px; }
   .grid input.cell, .grid select.cell { min-height:38px; font-size:15px; }
   .grid select.cell.time { width:98px; }
   th, td { padding:9px 8px; }

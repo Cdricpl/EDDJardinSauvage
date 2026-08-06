@@ -79,8 +79,8 @@ test('enfants : ajouter un enfant puis cocher une présence incrémente son tota
 
   const row = page.locator('table.attend tbody tr', { hasText: 'Testprenom' });
   await expect(row).toHaveCount(1);
-  // Un enfant neuf a 0 présence ; on coche le premier jour.
-  await row.locator('input.pres').first().check();
+  // Un enfant neuf a 0 présence ; un clic sur la 1re case = présent (✓).
+  await row.locator('button.presbtn').first().click();
   await expect(row.locator('.kidtot strong')).toHaveText('1');
 });
 

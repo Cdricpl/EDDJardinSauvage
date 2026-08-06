@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.06-3';
+const APP_VERSION = 'v2026.08.06-4';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -50,6 +50,16 @@ function ageAt(birthdate, dateISO) {
   const m = d.getMonth() - b.getMonth();
   if (m < 0 || (m === 0 && d.getDate() < b.getDate())) a--;
   return a;
+}
+// Jours de la semaine (0=Dim..6=Sam) ↔ texte "lun,mar,jeu".
+function dowListToStr(arr) { return (arr || []).slice().sort().map((w) => DOW[w].toLowerCase()).join(','); }
+function parseDows(str) {
+  const map = { dim: 0, lun: 1, mar: 2, mer: 3, jeu: 4, ven: 5, sam: 6 };
+  const out = new Set();
+  (str || '').toLowerCase().split(/[\s,;/]+/).forEach((t) => {
+    t = t.slice(0, 3); if (t in map) out.add(map[t]);
+  });
+  return [...out].sort();
 }
 // Numéro de semaine ISO (pour compter les semaines d'ouverture).
 function isoWeekKey(dateISO) {
@@ -673,31 +683,39 @@ async function viewChildren() {
   const app = document.getElementById('app');
   const kids = await STORE.listKids();
   const att = await STORE.kidAttendanceForMonth(CUR.y, CUR.m);
-  const present = new Set(att.map((a) => a.kid_id + '|' + a.entry_date));
+  // Statut par (kid,date) : 'present' | 'absent'. Ancien enregistrement sans statut = présent.
+  const stat = new Map();
+  att.forEach((a) => stat.set(a.kid_id + '|' + a.entry_date, a.status === 'absent' ? 'absent' : 'present'));
+  const getSt = (kid, date) => stat.get(kid + '|' + date);
   const dim = daysInMonth(CUR.y, CUR.m);
   const days = [];
   for (let d = 1; d <= dim; d++) {
     const dow = new Date(CUR.y, CUR.m - 1, d).getDay();
     days.push({ d, dow, date: `${CUR.y}-${pad(CUR.m)}-${pad(d)}`, weekend: dow === 0 || dow === 6 });
   }
-  const kidPresentCount = (kid) => days.reduce((n, day) => n + (present.has(kid.id + '|' + day.date) ? 1 : 0), 0);
-  const dayPresentCount = (day) => kids.reduce((n, k) => n + (present.has(k.id + '|' + day.date) ? 1 : 0), 0);
+  const isExpected = (kid, dow) => Array.isArray(kid.days) && kid.days.includes(dow);
+  const kidPresentCount = (kid) => days.reduce((n, day) => n + (getSt(kid.id, day.date) === 'present' ? 1 : 0), 0);
+  const dayPresentCount = (day) => kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0);
+  const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
 
-  // En-têtes des jours (numéro + initiale du jour).
   const headDays = days.map((day) =>
     `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}"><div>${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
 
   const kidLabel = (k) => `${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name}`.trim();
+  const cellHtml = (k, day) => {
+    const st = getSt(k.id, day.date);
+    const expected = isExpected(k, day.dow);
+    const cls = st === 'present' ? 'pres-p' : st === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : '');
+    const sym = st === 'present' ? '✓' : st === 'absent' ? '✗' : (expected ? '·' : '');
+    const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${st === 'present' ? 'présent' : st === 'absent' ? 'absent' : 'non marqué'}`;
+    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absent → vide" aria-label="${lbl.replace(/"/g, '&quot;')}">${sym}</button></td>`;
+  };
   const kidRows = kids.length ? kids.map((k) => {
-    const cells = days.map((day) => {
-      const on = present.has(k.id + '|' + day.date);
-      const lbl = `Présence de ${kidLabel(k)} le ${day.d}/${pad(CUR.m)}`;
-      return `<td class="daycell${day.weekend ? ' weekend' : ''}">
-        <input type="checkbox" class="pres" data-kid="${k.id}" data-date="${day.date}" aria-label="${lbl.replace(/"/g, '&quot;')}" ${on ? 'checked' : ''}/></td>`;
-    }).join('');
+    const cells = days.map((day) => cellHtml(k, day)).join('');
+    const jours = (k.days || []).length ? `<span class="muted small nowrap"> · ${(k.days || []).slice().sort().map((w) => DOW[w]).join(' ')}</span>` : '';
     return `<tr>
-      <th scope="row" class="kidname nowrap">${kidLabel(k)}
-        ${ME.role === 'admin' ? `<button class="linkx" data-editkid="${k.id}" aria-label="Modifier le nom de ${kidLabel(k).replace(/"/g, '&quot;')}" title="Modifier le nom">✏️</button>
+      <th scope="row" class="kidname nowrap">${kidLabel(k)}${jours}
+        ${ME.role === 'admin' ? `<button class="linkx" data-editkid="${k.id}" aria-label="Modifier ${kidLabel(k).replace(/"/g, '&quot;')}" title="Modifier (nom, école, naissance, jours)">✏️</button>
         <button class="linkx" data-arch="${k.id}" aria-label="Retirer ${kidLabel(k).replace(/"/g, '&quot;')} de la liste" title="Retirer de la liste">✕</button>` : ''}</th>
       ${cells}
       <td class="kidtot"><strong id="kidtot_${k.id}">${kidPresentCount(k)}</strong></td>
@@ -705,39 +723,46 @@ async function viewChildren() {
   }).join('') : `<tr><td colspan="${dim + 2}" class="muted" style="padding:16px">Aucun enfant. Ajoutez-en ci-dessus.</td></tr>`;
 
   const footCells = days.map((day) => `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong id="daytot_${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+  const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="kd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
 
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
-      <h2>🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
-      <div class="row" style="align-items:end; max-width:820px">
+      <div class="row-between"><h2 style="margin:0">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
+        <button class="small" id="prefillBtn" title="Marque « présent » les jours habituels de chaque enfant (jusqu'à aujourd'hui), sans écraser les absences déjà notées">⤵️ Pré-remplir présents</button></div>
+      <div class="row" style="align-items:end; max-width:900px">
         <div><label for="kFirst">Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
         <div><label for="kLast">Nom</label><input id="kLast" placeholder="Nom"/></div>
         <div><label for="kSchool">École</label><select id="kSchool">${schoolOptions('')}</select></div>
         <div><label for="kBirth">Naissance</label><input id="kBirth" type="date"/></div>
         <div style="flex:0"><label aria-hidden="true">&nbsp;</label><button id="kAdd">+ Ajouter</button></div>
       </div>
+      <div style="margin-top:6px"><label>Jours habituels de présence</label><div class="daychks">${dayCheckboxes}</div></div>
       <div id="kMsg"></div>
-      <p class="muted small">Cochez les jours de présence de chaque enfant. Une case décochée un jour d'ouverture = absence.</p>
+      <p class="muted small">Cliquez une case pour basculer <span class="pos">✓ présent</span> → <span class="neg">✗ absent</span> → vide.
+        Les jours habituels de l'enfant sont marqués « · ». « ⤵️ Pré-remplir présents » remplit ces jours en une fois.</p>
       <div class="table-wrap" style="margin-top:8px"><table class="attend">
-        <caption class="sr-only">Présences des enfants pour ${monthName(CUR.y, CUR.m)}. Cochez les jours de présence.</caption>
+        <caption class="sr-only">Présences et absences des enfants pour ${monthName(CUR.y, CUR.m)}.</caption>
         <thead><tr><th scope="col" class="kidname">Enfant</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr></thead>
         <tbody>${kidRows}</tbody>
-        <tfoot><tr><th scope="row" class="kidname">Total / jour</th>${footCells}<td class="kidtot"><strong>${att.length}</strong></td></tr></tfoot>
+        <tfoot><tr><th scope="row" class="kidname">Total présents / jour</th>${footCells}<td class="kidtot"><strong id="grandtot">${totalPresent}</strong></td></tr></tfoot>
       </table></div>
-      <p class="muted small">« Prés. » = nombre de jours de présence de l'enfant ce mois-ci. La moyenne annuelle est dans l'onglet 📈 Statistiques.</p>
+      <p class="muted small">« Prés. » = jours de présence de l'enfant ce mois-ci. La moyenne annuelle est dans l'onglet 📈 Statistiques.</p>
     </div>`;
   wireToolbar();
+
+  const readDays = () => [...app.querySelectorAll('input.kd:checked')].map((c) => Number(c.dataset.w));
+  const daysLabel = (arr) => (arr || []).slice().sort().map((w) => DOW[w]).join(' ') || '(aucun)';
 
   // Ajout d'un enfant.
   document.getElementById('kAdd').onclick = async () => {
     const msg = document.getElementById('kMsg');
     try {
       await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value,
-        document.getElementById('kSchool').value, document.getElementById('kBirth').value);
+        document.getElementById('kSchool').value, document.getElementById('kBirth').value, readDays());
       toast('Enfant ajouté'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
-  // Modifier prénom/nom/école/naissance d'un enfant.
+  // Modifier un enfant (nom, école, naissance, jours habituels).
   app.querySelectorAll('[data-editkid]').forEach((b) => b.onclick = async () => {
     const k = kids.find((x) => x.id === b.dataset.editkid) || {};
     const first = prompt('Prénom :', k.first_name || '');
@@ -748,7 +773,9 @@ async function viewChildren() {
     if (school == null) return;
     const birthdate = prompt('Date de naissance (AAAA-MM-JJ) :', k.birthdate || '');
     if (birthdate == null) return;
-    try { await STORE.setKidInfo(b.dataset.editkid, { first_name: first, last_name: last, school, birthdate }); toast('Enfant modifié'); render(); }
+    const daysStr = prompt('Jours habituels (ex : lun,mar,jeu) :', dowListToStr(k.days || []));
+    if (daysStr == null) return;
+    try { await STORE.setKidInfo(b.dataset.editkid, { first_name: first, last_name: last, school, birthdate, days: parseDows(daysStr) }); toast('Enfant modifié'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
   // Retirer un enfant (archivage : données conservées).
@@ -757,18 +784,47 @@ async function viewChildren() {
     try { await STORE.setKidActive(b.dataset.arch, false); toast('Enfant retiré'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
-  // Cocher/décocher une présence — sans re-rendu (mise à jour ciblée des totaux).
-  app.querySelectorAll('input.pres').forEach((el) => el.addEventListener('change', async () => {
-    const kid = el.dataset.kid, date = el.dataset.date, on = el.checked;
-    const key = kid + '|' + date;
-    if (on) present.add(key); else present.delete(key);
-    // Totaux ligne + colonne + total général, en place.
-    const dNum = Number(date.slice(8));
-    const kt = document.getElementById('kidtot_' + kid); if (kt) kt.textContent = kids.reduce ? days.reduce((n, day) => n + (present.has(kid + '|' + day.date) ? 1 : 0), 0) : 0;
-    const dt = document.getElementById('daytot_' + dNum); if (dt) dt.textContent = kids.reduce((n, k) => n + (present.has(k.id + '|' + date) ? 1 : 0), 0);
-    try { await STORE.setKidPresence(kid, date, on); }
-    catch (e) { el.checked = !on; if (on) present.delete(key); else present.add(key); toast('Erreur : ' + e.message, 'error'); }
-  }));
+
+  const setGrandTotal = () => {
+    const el = document.getElementById('grandtot');
+    if (el) el.textContent = days.reduce((s, day) => s + kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0), 0);
+  };
+  // Cellule à 3 états : présent (✓) → absent (✗) → vide. Mise à jour ciblée.
+  app.querySelectorAll('button.presbtn').forEach((el) => el.onclick = async () => {
+    const kid = el.dataset.kid, date = el.dataset.date, key = kid + '|' + date;
+    const cur = stat.get(key);                              // 'present' | 'absent' | undefined
+    const next = cur === 'present' ? 'absent' : cur === 'absent' ? null : 'present';
+    if (next) stat.set(key, next); else stat.delete(key);
+    // Rendu de la cellule.
+    el.classList.remove('pres-p', 'pres-a', 'pres-exp');
+    const day = days.find((d) => d.date === date);
+    const expected = kids.find((k) => k.id === kid) && isExpected(kids.find((k) => k.id === kid), day.dow);
+    el.textContent = next === 'present' ? '✓' : next === 'absent' ? '✗' : (expected ? '·' : '');
+    el.classList.add(next === 'present' ? 'pres-p' : next === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : 'x'));
+    // Totaux en place.
+    const kt = document.getElementById('kidtot_' + kid);
+    if (kt) kt.textContent = days.reduce((n, d) => n + (getSt(kid, d.date) === 'present' ? 1 : 0), 0);
+    const dt = document.getElementById('daytot_' + Number(date.slice(8)));
+    if (dt) dt.textContent = kids.reduce((n, k) => n + (getSt(k.id, date) === 'present' ? 1 : 0), 0);
+    setGrandTotal();
+    try { await STORE.setKidAttendance(kid, date, next); }
+    catch (e) { if (cur) stat.set(key, cur); else stat.delete(key); toast('Erreur : ' + e.message, 'error'); render(); }
+  });
+
+  // Pré-remplir « présent » les jours habituels (jusqu'à aujourd'hui), sans écraser l'existant.
+  document.getElementById('prefillBtn').onclick = async () => {
+    const todayStr = todayISO();
+    const toWrite = [];
+    kids.forEach((k) => days.forEach((day) => {
+      if (day.date > todayStr) return;
+      if (!isExpected(k, day.dow)) return;
+      if (stat.get(k.id + '|' + day.date)) return;   // déjà marqué (présent/absent) → on ne touche pas
+      toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
+    }));
+    if (!toWrite.length) { toast('Rien à pré-remplir (jours habituels déjà marqués ou non définis).'); return; }
+    try { await STORE.setKidAttendances(toWrite); toast(`${toWrite.length} présence(s) pré-remplie(s).`); render(); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  };
 }
 
 /* ---------------- Vue : Statistiques (graphiques) ---------------- */
@@ -802,6 +858,7 @@ async function viewStats() {
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
   const byDay = {};
   att.forEach((a) => {
+    if (a.status === 'absent') return; // les absences ne comptent pas comme présence
     const k = kidById[a.kid_id]; if (!k) return;
     (byDay[a.entry_date] = byDay[a.entry_date] || { total: 0, eligible: 0 }).total++;
     const age = ageAt(k.birthdate, a.entry_date);
@@ -811,7 +868,7 @@ async function viewStats() {
   const avgEligible = openDays.length
     ? openDays.reduce((s, d) => s + byDay[d].eligible, 0) / openDays.length : 0;
   // Écoles représentées parmi les enfants présents cette année.
-  const presentKidIds = new Set(att.map((a) => a.kid_id));
+  const presentKidIds = new Set(att.filter((a) => a.status !== 'absent').map((a) => a.kid_id));
   const schoolsPresent = new Set();
   presentKidIds.forEach((id) => { const s = (kidById[id] || {}).school; if (s) schoolsPresent.add(s); });
   const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
