@@ -7,9 +7,9 @@ gestion et archivage des employées — avec **synchronisation temps réel** ent
 plusieurs appareils via le cloud.
 
 > **Deux modes, un même code :**
-> - 🧪 **Mode démo** (par défaut) : données locales au navigateur — pour tester tout
->   de suite, sans rien installer. Sert aussi de maquette interactive.
-> - ☁️ **Mode cloud** (Supabase) : données partagées et synchronisées en temps réel.
+> - 🧪 **Mode démo** : données locales au navigateur — pour tester sans rien installer.
+> - 🔥 **Mode Firebase** (production) : données partagées et synchronisées en temps réel,
+>   sur l'offre gratuite Firebase (qui ne se met jamais en pause).
 
 ---
 
@@ -36,53 +36,18 @@ pré-remplies pour visualiser les récaps et les graphiques.
 
 ---
 
-## 🔥 Hébergement recommandé : Firebase (gratuit, sans mise en pause)
+## 🔥 Hébergement : Firebase (gratuit, sans mise en pause)
 
-L'offre gratuite **Supabase met le projet en pause** après ~7 jours d'inactivité
-(les données sont conservées, mais l'app devient inaccessible le temps de la relancer).
-L'offre gratuite **Firebase (Spark) ne se met jamais en pause**.
+L'application tourne sur **Firebase** (Firestore + Authentication), offre gratuite
+**Spark** qui ne se met jamais en pause. La configuration est dans
+[`js/config.js`](js/config.js) (`FIREBASE_CONFIG`) et les règles de sécurité dans
+[`firebase/firestore.rules`](firebase/firestore.rules).
 
-👉 **[Guide de migration pas à pas — `docs/migration-firebase.md`](docs/migration-firebase.md)**
-(~20 min, vos données existantes sont transférées).
+👉 Pour (re)mettre en place un projet Firebase depuis zéro, suivre
+**[`docs/migration-firebase.md`](docs/migration-firebase.md)**.
 
-L'application choisit son hébergement automatiquement selon `js/config.js` :
-**Firebase** (si `FIREBASE_CONFIG` est rempli) → **Supabase** → **démo locale**.
-
----
-
-## ☁️ Mode cloud alternatif (Supabase) — synchronisation multi-appareils
-
-1. Crée un compte gratuit sur **https://supabase.com** puis un nouveau projet.
-2. Dans **SQL Editor**, colle et exécute le contenu de [`supabase/schema.sql`](supabase/schema.sql)
-   (crée les tables et la sécurité par rôle / RLS).
-   > Si votre base contient déjà l'ancien schéma, exécutez d'abord
-   > [`supabase/migration_cleanup.sql`](supabase/migration_cleanup.sql) : il resserre la
-   > confidentialité des prestations et retire l'infrastructure devenue inutile.
-3. Dans **Authentication → Users**, crée les comptes (admin + employées).
-   Puis dans **SQL Editor** passe l'admin en administrateur :
-   ```sql
-   update public.profiles set role = 'admin' where full_name = 'Admin';
-   ```
-4. Dans **Settings → API**, copie l'**URL du projet** et la clé **anon public**.
-5. Colle-les dans [`js/config.js`](js/config.js) :
-   ```js
-   window.APP_CONFIG = {
-     SUPABASE_URL: 'https://xxxx.supabase.co',
-     SUPABASE_ANON_KEY: 'eyJhbGciOi...',
-   };
-   ```
-6. Recharge la page : le badge en haut passe de **🧪 Démo** à **☁️ Cloud**.
-
-> La clé « anon » est publique par conception : la sécurité est assurée côté serveur
-> par les règles **RLS** définies dans `schema.sql`.
-
-### Durcissement (recommandé)
-- Exécutez aussi **[`supabase/migration_hardening.sql`](supabase/migration_hardening.sql)**
-  (borne les dates ≥ janvier 2026, réserve renommage/retrait d'un enfant à l'admin).
-- **Création de comptes sans déconnexion** : déployez l'Edge Function
-  [`supabase/functions/create-user`](supabase/functions/create-user/) —
-  `supabase functions deploy create-user`. Tant qu'elle n'est pas déployée, l'app
-  bascule automatiquement sur l'ancienne méthode (qui peut déconnecter l'admin).
+Ces clés sont **publiques par conception** : la sécurité est assurée côté serveur par
+les **règles Firestore**, pas par le secret.
 
 ---
 
@@ -90,7 +55,7 @@ L'application choisit son hébergement automatiquement selon `js/config.js` :
 
 - **Horaires prévus (admin)** : l'admin définit, par jour, une **heure de début** et une
   **heure de fin** prévues (tranches de 15 min), dans un tableau mensuel type Excel ;
-  verrouillage / déverrouillage / validation d'un mois.
+  validation d'un mois (un mois validé n'est plus modifiable par l'employée).
 - **Horaire type hebdomadaire (admin)** : un modèle Lun→Dim par employée qui **pré-remplit
   automatiquement les nouveaux mois**. Modifiable à tout moment ; les **mois validés ne
   sont jamais recalculés**, et les jours déjà modifiés gardent leur horaire réel.
@@ -104,7 +69,7 @@ L'application choisit son hébergement automatiquement selon `js/config.js` :
 - **Calculs automatiques** : écart journalier, totaux mensuels, **solde reporté de mois
   en mois** (recalculé à la volée côté application), heures sup. et heures à récupérer.
 - **Validation d'un mois** : un mois validé n'est plus modifiable par l'employée (seul
-  l'admin peut intervenir) — imposé côté base via RLS.
+  l'admin peut intervenir) — imposé côté serveur via les règles Firestore.
 - **Présences enfants** : liste nominative (prénom + nom) et **grille de présences**
   journalières par enfant (case décochée un jour d'ouverture = absence).
 - **Statistiques** : moyenne annuelle d'enfants par jour + détail mensuel, graphique,
@@ -129,19 +94,16 @@ L'application choisit son hébergement automatiquement selon `js/config.js` :
 ├── assets/logo.svg       # Logo (accueil, entête, PDF)
 ├── css/styles.css        # Styles (responsive, couleurs par rôle)
 ├── js/
-│   ├── config.js         # Clés Supabase (vide = mode démo)
-│   ├── store.js          # Couche de données : démo (localStorage) OU Supabase
+│   ├── config.js         # Config Firebase (vide = mode démo)
+│   ├── store.js          # Couche de données : démo (localStorage) OU Firebase
 │   └── app.js            # Interface, calculs, vues, PDF, graphiques
 ├── offline.html          # Page de repli hors-ligne (PWA)
-├── supabase/
-│   ├── schema.sql              # Schéma PostgreSQL de référence : tables + RLS
-│   ├── migration_cleanup.sql   # Migration base existante (confidentialité + nettoyage)
-│   ├── migration_hardening.sql # Migration base existante (CHECK dates + RLS enfants)
-│   └── functions/create-user/  # Edge Function : créer un compte sans déconnecter l'admin
+├── firebase/
+│   └── firestore.rules   # Règles de sécurité Firestore (cloisonnement des données)
 ├── tests/                # Tests end-to-end Playwright (mode démo)
 ├── docs/
-│   ├── ARCHITECTURE.md       # Architecture + schéma de BDD + écrans
-│   └── migration-firebase.md # Guide de migration vers Firebase
+│   ├── ARCHITECTURE.md       # Architecture + écrans
+│   └── migration-firebase.md # Mise en place d'un projet Firebase
 └── README.md
 ```
 
@@ -164,7 +126,7 @@ automatiquement sur l'accueil, dans l'entête et dans les PDF.
 
 - **Filet anti-crash** : toute erreur affiche un message clair (jamais d'écran blanc), avec
   bouton « Recharger ». Gestionnaires globaux `error` / `unhandledrejection` + logs console.
-- **Performances** : en mode cloud, les entrées **et** les profils sont **mis en cache**
+- **Performances** : en mode Firebase, les entrées **et** les profils sont **mis en cache**
   (moins de requêtes par rendu) ; la feuille se met à jour **cellule par cellule** sans
   reconstruire le tableau (saisie fluide, focus préservé, éclat « enregistré ») ; le
   pré-remplissage d'un mois est envoyé **en un seul lot** ; rendus temps réel **groupés
@@ -177,10 +139,10 @@ automatiquement sur l'accueil, dans l'entête et dans les PDF.
   export/sauvegarde, tout modifier).
 - **Employée** : encode ses prestations tant que le mois est ouvert ; ne peut pas
   modifier ses horaires imposés ni un mois validé ; **ne voit pas** les prestations d'une
-  collègue (cloisonnement RLS).
+  collègue (cloisonnement Firestore).
 - Une employée **archivée** ne peut plus se connecter ; ses données restent consultables.
 
-En **mode cloud**, ces règles sont **imposées par la base** (RLS) et pas seulement par
+En mode Firebase, ces règles sont **imposées côté serveur** (règles Firestore) et pas seulement par
 l'interface — elles ne peuvent donc pas être contournées.
 
 ---

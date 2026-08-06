@@ -1,11 +1,13 @@
 /* Service worker — stratégie "réseau d'abord" (toujours la dernière version),
  * avec repli sur le cache hors ligne. N'intercepte QUE les fichiers de l'app
- * (même origine) : Supabase et les CDN passent en direct. */
+ * (même origine) : Firebase et les CDN passent en direct. */
 
 /* IMPORTANT : bumper cette version à CHAQUE déploiement d'un fichier applicatif
  * (index.html, css, js, sw). Sinon un appareil hors ligne peut servir une
- * ancienne version depuis le cache. Convention : date du déploiement. */
-const CACHE = 'edd-jardin-sauvage-2026-08-06-fb3';
+ * ancienne version depuis le cache.
+ * ⚠️ Doit rester IDENTIQUE à APP_VERSION dans js/app.js (numéro affiché dans
+ *    l'entête) : c'est ce qui permet de vérifier qu'un appareil est à jour. */
+const CACHE = 'edd-jardin-sauvage-v2026.08.06-2';
 const APP_SHELL = [
   './', 'index.html', 'offline.html', 'css/styles.css',
   'js/config.js', 'js/store.js', 'js/app.js',
