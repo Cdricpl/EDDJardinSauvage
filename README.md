@@ -36,7 +36,21 @@ pré-remplies pour visualiser les récaps et les graphiques.
 
 ---
 
-## ☁️ Passer en mode cloud (Supabase) — synchronisation multi-appareils
+## 🔥 Hébergement recommandé : Firebase (gratuit, sans mise en pause)
+
+L'offre gratuite **Supabase met le projet en pause** après ~7 jours d'inactivité
+(les données sont conservées, mais l'app devient inaccessible le temps de la relancer).
+L'offre gratuite **Firebase (Spark) ne se met jamais en pause**.
+
+👉 **[Guide de migration pas à pas — `docs/migration-firebase.md`](docs/migration-firebase.md)**
+(~20 min, vos données existantes sont transférées).
+
+L'application choisit son hébergement automatiquement selon `js/config.js` :
+**Firebase** (si `FIREBASE_CONFIG` est rempli) → **Supabase** → **démo locale**.
+
+---
+
+## ☁️ Mode cloud alternatif (Supabase) — synchronisation multi-appareils
 
 1. Crée un compte gratuit sur **https://supabase.com** puis un nouveau projet.
 2. Dans **SQL Editor**, colle et exécute le contenu de [`supabase/schema.sql`](supabase/schema.sql)

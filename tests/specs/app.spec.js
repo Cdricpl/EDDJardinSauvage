@@ -11,7 +11,7 @@ const { test, expect } = require('@playwright/test');
 async function setupDemo(page) {
   await page.route('**/js/config.js', (route) =>
     route.fulfill({ contentType: 'application/javascript', body: 'window.APP_CONFIG = {};' }));
-  await page.route(/cdn\.jsdelivr\.net/, (route) => route.abort());
+  await page.route(/cdn\.jsdelivr\.net|gstatic\.com/, (route) => route.abort());
 }
 
 async function loginAdmin(page) {
@@ -37,15 +37,34 @@ test('connexion admin puis navigation entre les 5 onglets sans écran blanc', as
   }
 });
 
+/**
+ * Indice de la première ligne de la feuille correspondant à un jour REELLEMENT
+ * travaillé (horaire renseigné). Indispensable : selon le mois affiché, les
+ * premiers jours peuvent tomber un week-end (aucun horaire) — un test qui
+ * viserait « la première ligne » serait fragile au changement de mois.
+ */
+async function firstWorkedRow(page) {
+  const idx = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#sheetTable tbody tr')];
+    return rows.findIndex((r) => {
+      const s = r.querySelector('[data-k="start_time"]');
+      const e = r.querySelector('[data-k="end_time"]');
+      return s && e && s.value && e.value;
+    });
+  });
+  expect(idx, 'aucun jour travaillé trouvé dans la feuille').toBeGreaterThanOrEqual(0);
+  return page.locator('#sheetTable tbody tr').nth(idx);
+}
+
 test('feuille du mois : modifier l’horaire réel met à jour le total presté', async ({ page }) => {
   await loginAdmin(page);
   await page.locator('.navbtn[data-v="sheet"]').click();
   await expect(page.locator('#tWorked')).toBeVisible();
 
   const before = await page.locator('#tWorked').textContent();
-  // Premier sélecteur d'heure de fin réelle modifiable → on l'allonge à 21:00.
-  const endSel = page.locator('select[data-k="end_time"]:not([disabled])').first();
-  await endSel.selectOption('21:00');
+  // On allonge l'horaire réel d'un jour travaillé jusqu'à 21:00.
+  const row = await firstWorkedRow(page);
+  await row.locator('[data-k="end_time"]').selectOption('21:00');
 
   await expect(page.locator('#tWorked')).not.toHaveText(before || '');
 });
@@ -113,8 +132,9 @@ test('feuille : un écart non justifié affiche la bannière d’avertissement',
   await loginAdmin(page);
   await page.locator('.navbtn[data-v="sheet"]').click();
   await expect(page.locator('#warnBanner')).toBeHidden();
-  // On allonge l'horaire réel du 1er jour → écart sans justification.
-  await page.locator('select[data-k="end_time"]:not([disabled])').first().selectOption('21:00');
+  // On allonge l'horaire réel d'un jour travaillé → écart sans justification.
+  const row = await firstWorkedRow(page);
+  await row.locator('[data-k="end_time"]').selectOption('21:00');
   await expect(page.locator('#warnBanner')).toBeVisible();
 });
 

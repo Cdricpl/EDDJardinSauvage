@@ -5,7 +5,7 @@
 /* IMPORTANT : bumper cette version à CHAQUE déploiement d'un fichier applicatif
  * (index.html, css, js, sw). Sinon un appareil hors ligne peut servir une
  * ancienne version depuis le cache. Convention : date du déploiement. */
-const CACHE = 'edd-jardin-sauvage-2026-07-10c';
+const CACHE = 'edd-jardin-sauvage-2026-08-06-firebase';
 const APP_SHELL = [
   './', 'index.html', 'offline.html', 'css/styles.css',
   'js/config.js', 'js/store.js', 'js/app.js',

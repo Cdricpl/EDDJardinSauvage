@@ -17,6 +17,8 @@ function clampMonth() {
   if (ymNum(CUR.y, CUR.m) < ymNum(MIN_YM.y, MIN_YM.m)) { CUR.y = MIN_YM.y; CUR.m = MIN_YM.m; }
 }
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+/* Modes « en ligne » (données partagées + envoi d'emails) : Supabase ou Firebase. */
+const isCloud = () => MODE === 'cloud' || MODE === 'firebase';
 
 /* ---------------- Helpers temps ---------------- */
 const pad = (n) => String(n).padStart(2, '0');
@@ -110,8 +112,10 @@ async function boot() {
   clampMonth();
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
-  document.getElementById('modeBadge').textContent = MODE === 'cloud' ? '☁️ Cloud' : '🧪 Démo (local)';
-  document.getElementById('modeBadge').className = 'badge ' + (MODE === 'cloud' ? 'validated' : 'pending');
+  const CLOUD = MODE === 'cloud' || MODE === 'firebase';
+  document.getElementById('modeBadge').textContent =
+    MODE === 'firebase' ? '🔥 Firebase' : MODE === 'cloud' ? '☁️ Cloud' : '🧪 Démo (local)';
+  document.getElementById('modeBadge').className = 'badge ' + (CLOUD ? 'validated' : 'pending');
 
   // Temps réel : re-rendu groupé (debounce) pour éviter les rendus en rafale,
   // et jamais pendant une saisie active (sinon on volerait le focus du champ).
@@ -185,7 +189,7 @@ function renderLogin() {
     e.preventDefault();
     const email = document.getElementById('email').value.trim();
     if (!email) { loginMsg('Entrez d\'abord votre email, puis cliquez sur « Mot de passe oublié ».'); return; }
-    if (MODE !== 'cloud') { loginMsg('La réinitialisation par email est disponible en mode cloud uniquement.'); return; }
+    if (!isCloud()) { loginMsg('La réinitialisation par email est disponible en mode cloud uniquement.'); return; }
     try {
       await STORE.sendPasswordReset(email);
       loginMsg('Un email de réinitialisation a été envoyé à ' + email + ' (pensez à vérifier les spams).', 'ok');
@@ -332,7 +336,7 @@ async function viewSheet() {
       ${!monthEditable && empId === ME.id && ME.role === 'employee'
         ? '<div class="msg">Ce mois est validé : vous ne pouvez plus le modifier. Contactez l\'administrateur si besoin.</div>' : ''}
       <div class="table-wrap">
-        <table class="grid">
+        <table class="grid" id="sheetTable">
           <thead>
             <tr>
               <th rowspan="2">Date</th><th rowspan="2">Jour</th>
@@ -827,7 +831,7 @@ async function viewEmployees() {
         🔒 Le rôle <strong>Administrateur est fixe</strong> : une employée ne peut pas être promue admin.
         « ✏️ » modifie l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
         Archiver conserve les données en lecture seule.
-        ${MODE === 'cloud' ? "En cloud, l'email modifié sert de contact/réinitialisation." : ''}
+        ${isCloud() ? "En cloud, l'email modifié sert de contact/réinitialisation." : ''}
       </p>
     </div>
     <div class="card hidden" id="addForm">
@@ -839,7 +843,8 @@ async function viewEmployees() {
       </div>
       <div id="addMsg"></div>
       <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employée</strong>. Le rôle admin est réservé et contrôlé.
-        ${MODE === 'cloud' ? "En cloud, si l'Edge Function « create-user » est déployée, la création ne vous déconnecte pas ; sinon un repli peut vous déconnecter (reconnectez-vous)." : ''}</p>
+        ${MODE === 'firebase' ? 'La création ne vous déconnecte pas.'
+          : MODE === 'cloud' ? "En cloud, si l'Edge Function « create-user » est déployée, la création ne vous déconnecte pas ; sinon un repli peut vous déconnecter (reconnectez-vous)." : ''}</p>
       <button id="saveEmp" style="margin-top:10px">Créer</button>
     </div>
     <div class="card" id="dataCard">
@@ -854,7 +859,7 @@ async function viewEmployees() {
       </div>
       <h3 style="margin:16px 0 6px">Restauration</h3>
       <p class="muted small" style="margin-top:0">Réimporte une sauvegarde <strong>JSON</strong>. Les données existantes
-        sont <strong>remplacées</strong>${MODE === 'cloud' ? ' (les comptes de connexion ne sont pas modifiés)' : ''}. Faites d'abord un export.</p>
+        sont <strong>remplacées</strong>${isCloud() ? ' (les comptes de connexion ne sont pas modifiés)' : ''}. Faites d'abord un export.</p>
       <div class="row" style="flex-wrap:wrap; gap:10px">
         <input id="impFile" type="file" accept="application/json,.json" aria-label="Fichier de sauvegarde JSON à restaurer" style="max-width:100%"/>
         <button class="small red" id="impBtn">⬆️ Restaurer</button>
@@ -902,7 +907,7 @@ async function viewEmployees() {
   app.querySelectorAll('[data-reset]').forEach((b) => b.onclick = async () => {
     const p = profs.find((x) => x.id === b.dataset.reset) || {};
     if (!p.email) { toast("Cet utilisateur n'a pas d'email.", 'error'); return; }
-    if (MODE !== 'cloud') { toast("Envoi d'email disponible uniquement en mode cloud.", 'error'); return; }
+    if (!isCloud()) { toast("Envoi d'email disponible uniquement en mode cloud.", 'error'); return; }
     if (!confirm(`Envoyer un email de réinitialisation à ${p.email} ?`)) return;
     try { await STORE.sendPasswordReset(p.email); toast('Email de réinitialisation envoyé à ' + p.email); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }

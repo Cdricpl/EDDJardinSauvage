@@ -1,0 +1,88 @@
+rules_version = '2';
+
+// ============================================================================
+// Règles de sécurité Firestore — EDD Jardin Sauvage
+// ----------------------------------------------------------------------------
+// Équivalent des règles RLS utilisées côté Supabase :
+//   - les PRESTATIONS ne sont lisibles que par leur employée ou par l'admin
+//   - une employée n'écrit que SES jours, et seulement si le mois est « ouvert »
+//   - les ENFANTS sont visibles/ajoutables par l'équipe ; renommage et retrait
+//     sont réservés à l'admin
+//   - le RÔLE et le statut ACTIF ne sont modifiables que par l'admin
+//     (une employée ne peut donc jamais se promouvoir)
+//   - aucune prestation avant janvier 2026
+//
+// À coller dans : console Firebase → Firestore Database → Règles → Publier.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn()  { return request.auth != null; }
+    function myProfile() { return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data; }
+    function isAdmin()   { return signedIn() && myProfile().role == 'admin'; }
+    function isActive()  { return signedIn() && myProfile().active == true; }
+
+    // Le mois d'une prestation est-il encore modifiable ? (absent = ouvert)
+    function monthOpen(emp, dateStr) {
+      return !exists(/databases/$(database)/documents/months/$(emp + '_' + dateStr[0:7]))
+        || get(/databases/$(database)/documents/months/$(emp + '_' + dateStr[0:7])).data.status == 'open';
+    }
+    // Règle métier : le système démarre en janvier 2026.
+    function validDate(d) { return d is string && d.size() == 10 && d >= '2026-01-01'; }
+
+    // ---- PROFILS : lisibles par les comptes connectés ; écriture admin ----
+    // (aucune écriture par l'employée : elle ne peut pas changer son rôle)
+    match /profiles/{uid} {
+      allow read:   if signedIn();
+      allow write:  if isAdmin();
+      // Exception : un compte créé dans la console Firebase peut initialiser SON
+      // profil — uniquement en 'employee'. Personne ne peut donc s'auto-promouvoir
+      // administrateur : ce changement se fait dans la console Firebase.
+      allow create: if signedIn() && uid == request.auth.uid
+                    && request.resource.data.role == 'employee'
+                    && request.resource.data.active == true;
+    }
+
+    // ---- MOIS : lecture pour tous ; seule l'admin valide/rouvre ----
+    match /months/{id} {
+      allow read:  if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---- PRESTATIONS : confidentialité RH ----
+    match /day_entries/{id} {
+      allow read: if isAdmin()
+                  || (signedIn() && resource.data.employee_id == request.auth.uid);
+      allow write: if isAdmin()
+                   || (isActive()
+                       && request.resource.data.employee_id == request.auth.uid
+                       && validDate(request.resource.data.entry_date)
+                       && monthOpen(request.auth.uid, request.resource.data.entry_date));
+    }
+
+    // ---- HORAIRE TYPE : lecture pour tous ; écriture admin ----
+    match /schedule_templates/{empId} {
+      allow read:  if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---- ENFANTS : l'équipe voit et ajoute ; l'admin seul renomme/retire ----
+    match /kids/{id} {
+      allow read:   if signedIn();
+      allow create: if isActive();
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- PRÉSENCES : encodage quotidien par l'équipe ----
+    match /kid_attendance/{id} {
+      allow read:  if signedIn();
+      allow write: if isActive();
+    }
+
+    // Tout le reste est refusé par défaut.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
