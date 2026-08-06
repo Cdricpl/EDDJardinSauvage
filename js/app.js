@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.06-2';
+const APP_VERSION = 'v2026.08.06-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -30,6 +30,37 @@ const pad = (n) => String(n).padStart(2, '0');
 const daysInMonth = (y, m) => new Date(y, m, 0).getDate();
 const monthName = (y, m) => new Date(y, m - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+
+/* Implantations scolaires (critère d'agrément : au moins deux, dont les principales). */
+const SCHOOLS = ['Saint-Remacle', 'Athénée'];
+const REQUIRED_SCHOOLS = ['Saint-Remacle', 'Athénée'];
+function schoolOptions(value) {
+  const opts = ['<option value="">— non précisé —</option>']
+    .concat(SCHOOLS.map((s) => `<option value="${s}"${s === value ? ' selected' : ''}>${s}</option>`));
+  // Conserve une valeur personnalisée éventuelle (ex. import).
+  if (value && !SCHOOLS.includes(value)) opts.push(`<option value="${value}" selected>${value}</option>`);
+  return opts.join('');
+}
+// Âge (en années) à une date donnée, depuis une date de naissance "AAAA-MM-JJ".
+function ageAt(birthdate, dateISO) {
+  if (!birthdate || !dateISO) return null;
+  const b = new Date(birthdate), d = new Date(dateISO);
+  if (isNaN(b) || isNaN(d)) return null;
+  let a = d.getFullYear() - b.getFullYear();
+  const m = d.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && d.getDate() < b.getDate())) a--;
+  return a;
+}
+// Numéro de semaine ISO (pour compter les semaines d'ouverture).
+function isoWeekKey(dateISO) {
+  const d = new Date(dateISO); if (isNaN(d)) return dateISO;
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
+  return `${t.getUTCFullYear()}-S${String(week).padStart(2, '0')}`;
+}
 
 /* Encodage par heure de début/fin — menu déroulant limité aux quarts d'heure. */
 function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
@@ -678,9 +709,11 @@ async function viewChildren() {
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <h2>🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
-      <div class="row" style="align-items:end; max-width:560px">
+      <div class="row" style="align-items:end; max-width:820px">
         <div><label for="kFirst">Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
         <div><label for="kLast">Nom</label><input id="kLast" placeholder="Nom"/></div>
+        <div><label for="kSchool">École</label><select id="kSchool">${schoolOptions('')}</select></div>
+        <div><label for="kBirth">Naissance</label><input id="kBirth" type="date"/></div>
         <div style="flex:0"><label aria-hidden="true">&nbsp;</label><button id="kAdd">+ Ajouter</button></div>
       </div>
       <div id="kMsg"></div>
@@ -699,18 +732,23 @@ async function viewChildren() {
   document.getElementById('kAdd').onclick = async () => {
     const msg = document.getElementById('kMsg');
     try {
-      await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value);
+      await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value,
+        document.getElementById('kSchool').value, document.getElementById('kBirth').value);
       toast('Enfant ajouté'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
-  // Modifier le prénom/nom d'un enfant.
+  // Modifier prénom/nom/école/naissance d'un enfant.
   app.querySelectorAll('[data-editkid]').forEach((b) => b.onclick = async () => {
     const k = kids.find((x) => x.id === b.dataset.editkid) || {};
     const first = prompt('Prénom :', k.first_name || '');
     if (first == null) return;
     const last = prompt('Nom :', k.last_name || '');
     if (last == null) return;
-    try { await STORE.setKidName(b.dataset.editkid, first, last); toast('Enfant modifié'); render(); }
+    const school = prompt(`École (${SCHOOLS.join(' / ')}) :`, k.school || '');
+    if (school == null) return;
+    const birthdate = prompt('Date de naissance (AAAA-MM-JJ) :', k.birthdate || '');
+    if (birthdate == null) return;
+    try { await STORE.setKidInfo(b.dataset.editkid, { first_name: first, last_name: last, school, birthdate }); toast('Enfant modifié'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
   // Retirer un enfant (archivage : données conservées).
@@ -754,6 +792,56 @@ async function viewStats() {
   }
   const stats = { dailyYear, annualTotal, annualDays: inYear.length, year: CUR.y };
 
+  // ---- Critères d'agrément (public accueilli + ouverture) — admin uniquement,
+  // car le calcul lit les prestations de toutes les employées (cloisonnées côté serveur).
+  let crit = null;
+  if (ME.role === 'admin') {
+  const kidsAll = await STORE.listKids(true);
+  const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
+  const att = await STORE.kidAttendanceForYear(CUR.y);
+  // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
+  const byDay = {};
+  att.forEach((a) => {
+    const k = kidById[a.kid_id]; if (!k) return;
+    (byDay[a.entry_date] = byDay[a.entry_date] || { total: 0, eligible: 0 }).total++;
+    const age = ageAt(k.birthdate, a.entry_date);
+    if (age == null || (age >= 6 && age <= 15)) byDay[a.entry_date].eligible++;
+  });
+  const openDays = Object.keys(byDay);
+  const avgEligible = openDays.length
+    ? openDays.reduce((s, d) => s + byDay[d].eligible, 0) / openDays.length : 0;
+  // Écoles représentées parmi les enfants présents cette année.
+  const presentKidIds = new Set(att.map((a) => a.kid_id));
+  const schoolsPresent = new Set();
+  presentKidIds.forEach((id) => { const s = (kidById[id] || {}).school; if (s) schoolsPresent.add(s); });
+  const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
+  // Semaines d'ouverture : semaines ISO avec ≥ 2h de prestation (heures d'ouverture).
+  const entriesYear = await STORE.allEntriesForYear(CUR.y);
+  const weekMinutes = {};
+  entriesYear.forEach((e) => {
+    const w = effectiveWorked(e); if (!w) return;
+    const key = isoWeekKey(e.entry_date); weekMinutes[key] = (weekMinutes[key] || 0) + w;
+  });
+  const openWeeks = Object.values(weekMinutes).filter((min) => min >= 120).length;
+  const kidsNoBirth = kidsAll.filter((k) => k.active && !k.birthdate).length;
+  const kidsNoSchool = kidsAll.filter((k) => k.active && !k.school).length;
+
+  crit = [
+    { ok: avgEligible >= 8,
+      label: 'Au moins 8 enfants de 6 à 15 ans par jour (moyenne annuelle)',
+      val: `${avgEligible.toFixed(1)} enfant(s)/jour`,
+      note: kidsNoBirth ? `${kidsNoBirth} enfant(s) sans date de naissance (comptés par défaut)` : '' },
+    { ok: missingSchools.length === 0,
+      label: 'Enfants d’au moins deux implantations (Saint-Remacle et Athénée)',
+      val: schoolsPresent.size ? [...schoolsPresent].join(', ') : 'aucune renseignée',
+      note: missingSchools.length ? `manque : ${missingSchools.join(', ')}` : (kidsNoSchool ? `${kidsNoSchool} enfant(s) sans école` : '') },
+    { ok: openWeeks >= 20,
+      label: 'Ouvert ≥ 2 h/semaine sur au moins 20 semaines',
+      val: `${openWeeks} semaine(s) ≥ 2 h`,
+      note: '' },
+  ];
+  }
+
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <div class="row-between">
@@ -765,6 +853,16 @@ async function viewStats() {
         <div class="lbl2">enfants en moyenne <strong>par jour</strong> sur l'année ${CUR.y}</div>
         <div class="muted small">${annualTotal} enfants encodés · ${inYear.length} jour(s) avec encodage</div>
       </div>
+      ${crit ? `<h3 style="margin-top:20px">✅ Critères d'agrément — ${CUR.y}</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Critère</th><th>Situation</th><th>État</th></tr></thead>
+        <tbody>${crit.map((c) => `<tr>
+          <td>${c.label}</td>
+          <td>${c.val}${c.note ? `<br><span class="muted small">${c.note}</span>` : ''}</td>
+          <td class="nowrap ${c.ok ? 'pos' : 'neg'}">${c.ok ? '✔ atteint' : '✘ non atteint'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <p class="muted small" style="margin-top:8px">Renseignez l'<strong>école</strong> et la <strong>date de naissance</strong> de chaque enfant (onglet 🧒 Enfants) pour un calcul exact.</p>` : ''}
       <h3 class="muted" style="margin-top:22px">Moyenne d'enfants par jour, mois par mois</h3>
       <canvas id="chartMonthly" height="130"></canvas>
       <div class="table-wrap" style="margin-top:14px"><table>

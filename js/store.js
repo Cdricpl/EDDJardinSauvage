@@ -146,13 +146,6 @@ class DemoStore {
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.role = role; this._save(db); }
   }
-  async setKidName(id, first_name, last_name) {
-    first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
-    if (!first_name) throw new Error('Le prénom est requis.');
-    const db = this._db();
-    const k = db.kids.find(x => x.id === id);
-    if (k) { k.first_name = first_name; k.last_name = last_name; this._save(db); }
-  }
 
   /* ---- Horaire type ---- */
   async getTemplate(employee_id) {
@@ -246,11 +239,20 @@ class DemoStore {
       .filter(k => includeArchived || k.active)
       .sort((a, b) => (a.last_name + a.first_name).localeCompare(b.last_name + b.first_name));
   }
-  async addKid(first_name, last_name) {
+  async addKid(first_name, last_name, school, birthdate) {
     const db = this._db();
-    const k = { id: Util.uuid(), first_name: (first_name || '').trim(), last_name: (last_name || '').trim(), active: true };
+    const k = { id: Util.uuid(), first_name: (first_name || '').trim(), last_name: (last_name || '').trim(),
+      school: school || '', birthdate: birthdate || '', active: true };
     if (!k.first_name) throw new Error('Le prénom est requis.');
     db.kids.push(k); this._save(db); return k;
+  }
+  async setKidInfo(id, info) {
+    const first = (info.first_name || '').trim();
+    if (!first) throw new Error('Le prénom est requis.');
+    const db = this._db();
+    const k = db.kids.find(x => x.id === id);
+    if (k) { k.first_name = first; k.last_name = (info.last_name || '').trim();
+      k.school = info.school || ''; k.birthdate = info.birthdate || ''; this._save(db); }
   }
   async setKidActive(id, active) {
     const db = this._db();
@@ -260,6 +262,12 @@ class DemoStore {
   async kidAttendanceForMonth(year, month) {
     const prefix = Util.monthKey(year, month);
     return this._db().kidatt.filter(a => a.entry_date.startsWith(prefix));
+  }
+  async kidAttendanceForYear(year) {
+    return this._db().kidatt.filter(a => (a.entry_date || '').startsWith(`${year}-`));
+  }
+  async allEntriesForYear(year) {
+    return this._db().entries.filter(e => (e.entry_date || '').startsWith(`${year}-`));
   }
   async setKidPresence(kid_id, entry_date, present) {
     const db = this._db();
@@ -511,26 +519,39 @@ class FirebaseStore {
       .filter((k) => includeArchived || k.active !== false)
       .sort((a, b) => ((a.last_name || '') + a.first_name).localeCompare((b.last_name || '') + b.first_name));
   }
-  async addKid(first_name, last_name) {
+  async addKid(first_name, last_name, school, birthdate) {
     first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
     if (!first_name) throw new Error('Le prénom est requis.');
-    const ref = await this.db.collection('kids').add({
-      first_name, last_name, active: true, created_at: new Date().toISOString(),
-    });
-    return { id: ref.id, first_name, last_name, active: true };
+    const data = { first_name, last_name, school: school || '', birthdate: birthdate || '',
+      active: true, created_at: new Date().toISOString() };
+    const ref = await this.db.collection('kids').add(data);
+    return { id: ref.id, ...data };
   }
   async setKidActive(id, active) {
     await this.db.collection('kids').doc(id).set({ active }, { merge: true });
   }
-  async setKidName(id, first_name, last_name) {
-    first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
+  async setKidInfo(id, info) {
+    const first_name = (info.first_name || '').trim();
     if (!first_name) throw new Error('Le prénom est requis.');
-    await this.db.collection('kids').doc(id).set({ first_name, last_name }, { merge: true });
+    await this.db.collection('kids').doc(id).set({
+      first_name, last_name: (info.last_name || '').trim(),
+      school: info.school || '', birthdate: info.birthdate || '',
+    }, { merge: true });
   }
   async kidAttendanceForMonth(year, month) {
     const p = Util.monthKey(year, month);
     const snap = await this.db.collection('kid_attendance')
       .where('entry_date', '>=', `${p}-01`).where('entry_date', '<=', `${p}-31`).get();
+    return this._docs(snap);
+  }
+  async kidAttendanceForYear(year) {
+    const snap = await this.db.collection('kid_attendance')
+      .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
+    return this._docs(snap);
+  }
+  async allEntriesForYear(year) {
+    const snap = await this.db.collection('day_entries')
+      .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
     return this._docs(snap);
   }
   async setKidPresence(kid_id, entry_date, present) {
