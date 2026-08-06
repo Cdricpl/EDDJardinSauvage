@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.06-4';
+const APP_VERSION = 'v2026.08.06-5';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -160,10 +160,8 @@ async function boot() {
   STORE = created.store; MODE = created.mode;
   const vEl = document.getElementById('appVersion');
   if (vEl) vEl.textContent = APP_VERSION;
-  const CLOUD = MODE === 'cloud' || MODE === 'firebase';
-  document.getElementById('modeBadge').textContent =
-    MODE === 'firebase' ? '🔥 Firebase' : MODE === 'cloud' ? '☁️ Cloud' : '🧪 Démo (local)';
-  document.getElementById('modeBadge').className = 'badge ' + (CLOUD ? 'validated' : 'pending');
+  document.getElementById('modeBadge').textContent = MODE === 'firebase' ? '🔥 Firebase' : '🧪 Démo (local)';
+  document.getElementById('modeBadge').className = 'badge ' + (MODE === 'firebase' ? 'validated' : 'pending');
 
   // Temps réel : re-rendu groupé (debounce) pour éviter les rendus en rafale,
   // et jamais pendant une saisie active (sinon on volerait le focus du champ).
@@ -798,9 +796,11 @@ async function viewChildren() {
     // Rendu de la cellule.
     el.classList.remove('pres-p', 'pres-a', 'pres-exp');
     const day = days.find((d) => d.date === date);
-    const expected = kids.find((k) => k.id === kid) && isExpected(kids.find((k) => k.id === kid), day.dow);
+    const kk = kids.find((k) => k.id === kid);
+    const expected = kk && isExpected(kk, day.dow);
     el.textContent = next === 'present' ? '✓' : next === 'absent' ? '✗' : (expected ? '·' : '');
-    el.classList.add(next === 'present' ? 'pres-p' : next === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : 'x'));
+    const cls = next === 'present' ? 'pres-p' : next === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : '');
+    if (cls) el.classList.add(cls);
     // Totaux en place.
     const kt = document.getElementById('kidtot_' + kid);
     if (kt) kt.textContent = days.reduce((n, d) => n + (getSt(kid, d.date) === 'present' ? 1 : 0), 0);
@@ -1035,9 +1035,8 @@ async function viewEmployees() {
         <div><label for="nPwd">Mot de passe initial</label><input id="nPwd" placeholder="au moins 6 caractères"/></div>
       </div>
       <div id="addMsg"></div>
-      <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employée</strong>. Le rôle admin est réservé et contrôlé.
-        ${MODE === 'firebase' ? 'La création ne vous déconnecte pas.'
-          : MODE === 'cloud' ? "En cloud, si l'Edge Function « create-user » est déployée, la création ne vous déconnecte pas ; sinon un repli peut vous déconnecter (reconnectez-vous)." : ''}</p>
+      <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employée</strong> ; vous pourrez ensuite changer leur rôle dans la liste.
+        ${MODE === 'firebase' ? 'La création ne vous déconnecte pas.' : ''}</p>
       <button id="saveEmp" style="margin-top:10px">Créer</button>
     </div>
     <div class="card" id="dataCard">
