@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.06-1';
+const APP_VERSION = 'v2026.08.06-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -22,8 +22,8 @@ function clampMonth() {
   if (ymNum(CUR.y, CUR.m) < ymNum(MIN_YM.y, MIN_YM.m)) { CUR.y = MIN_YM.y; CUR.m = MIN_YM.m; }
 }
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
-/* Modes « en ligne » (données partagées + envoi d'emails) : Supabase ou Firebase. */
-const isCloud = () => MODE === 'cloud' || MODE === 'firebase';
+/* Mode « en ligne » (données partagées + envoi d'emails de réinitialisation). */
+const isCloud = () => MODE === 'firebase';
 
 /* ---------------- Helpers temps ---------------- */
 const pad = (n) => String(n).padStart(2, '0');

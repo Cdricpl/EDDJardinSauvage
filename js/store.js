@@ -2,17 +2,12 @@
  * store.js — Couche de données unifiée.
  *
  * Expose un objet `Store` avec la même interface, que l'on soit :
- *   - en MODE DÉMO   (localStorage) si aucune clé Supabase n'est fournie
- *   - en MODE CLOUD  (Supabase) si config.js contient les clés
+ *   - en MODE FIREBASE (Firestore) si config.js contient FIREBASE_CONFIG
+ *   - en MODE DÉMO     (localStorage) sinon — pour tester sans hébergement
  *
  * Toutes les méthodes sont asynchrones (retournent des promesses), pour que
  * le reste de l'application soit identique dans les deux modes.
  * ------------------------------------------------------------------ */
-
-const HAS_SUPABASE =
-  window.APP_CONFIG &&
-  window.APP_CONFIG.SUPABASE_URL &&
-  window.APP_CONFIG.SUPABASE_ANON_KEY;
 
 const HAS_FIREBASE =
   window.APP_CONFIG &&
@@ -323,252 +318,10 @@ class DemoStore {
 }
 
 /* ================================================================
- * MODE CLOUD — Supabase
- * ================================================================ */
-class SupabaseStore {
-  constructor(sb) { this.sb = sb; this._profile = null; this._entriesCache = {}; this._profilesCache = null; }
-  async init() {}
-
-  async signIn(email, password) {
-    const { error } = await this.sb.auth.signInWithPassword({ email, password });
-    if (error) throw new Error(error.message);
-    return this.getCurrentUser();
-  }
-  async signOut() { await this.sb.auth.signOut(); this._profile = null; }
-  async getCurrentUser() {
-    const { data: { user } } = await this.sb.auth.getUser();
-    if (!user) return null;
-    const { data } = await this.sb.from('profiles').select('*').eq('id', user.id).single();
-    this._profile = data;
-    return data;
-  }
-
-  // Profils mis en cache (rarement modifiés) : évite 1 à 2 requêtes par rendu.
-  async listProfiles() {
-    if (this._profilesCache) return this._profilesCache;
-    const { data, error } = await this.sb.from('profiles').select('*').order('full_name');
-    if (error) throw new Error(error.message);
-    return (this._profilesCache = data || []);
-  }
-  async addProfile({ full_name, email, password, role }) {
-    // Voie privilégiée : Edge Function "create-user" (clé service_role) qui crée
-    // le compte SANS déconnecter l'admin. Repli sur signUp si la fonction n'est
-    // pas déployée (l'admin peut alors être déconnecté — limite Supabase).
-    try {
-      const { data, error } = await this.sb.functions.invoke('create-user', {
-        body: { full_name, email, password },
-      });
-      if (error) throw error;
-      if (data && data.error) throw new Error(data.error);
-      this._profilesCache = null;
-      return data && data.user;
-    } catch (e) {
-      // 404 / fonction absente / réseau → repli signUp.
-      const status = e && (e.status || (e.context && e.context.status));
-      const missing = status === 404 || /not\s*found|failed to (fetch|send)/i.test(e && e.message || '');
-      if (!missing) throw new Error(e && e.message ? e.message : String(e));
-      const { data, error } = await this.sb.auth.signUp({
-        email, password, options: { data: { full_name } },
-      });
-      if (error) throw new Error(error.message);
-      this._profilesCache = null;
-      return data.user;
-    }
-  }
-  async setActive(id, active) {
-    const { error } = await this.sb.from('profiles').update({ active }).eq('id', id);
-    if (error) throw new Error(error.message);
-    this._profilesCache = null;
-  }
-  async setEmail(id, email) {
-    email = (email || '').trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Adresse email invalide.');
-    const { error } = await this.sb.from('profiles').update({ email }).eq('id', id);
-    if (error) throw new Error(error.message);
-    this._profilesCache = null;
-  }
-  async setFullName(id, full_name) {
-    full_name = (full_name || '').trim();
-    if (!full_name) throw new Error('Le nom ne peut pas être vide.');
-    const { error } = await this.sb.from('profiles').update({ full_name }).eq('id', id);
-    if (error) throw new Error(error.message);
-    this._profilesCache = null;
-  }
-  async sendPasswordReset(email) {
-    const { error } = await this.sb.auth.resetPasswordForEmail((email || '').trim(), {
-      redirectTo: location.origin + location.pathname,
-    });
-    if (error) throw new Error(error.message);
-  }
-
-  async getTemplate(employee_id) {
-    const { data } = await this.sb.from('schedule_templates').select('slots').eq('employee_id', employee_id).maybeSingle();
-    return data ? data.slots : {};
-  }
-  async setTemplate(employee_id, slots) {
-    const { error } = await this.sb.from('schedule_templates')
-      .upsert({ employee_id, slots }, { onConflict: 'employee_id' });
-    if (error) throw new Error(error.message);
-  }
-
-  async getMonth(employee_id, year, month) {
-    const { data } = await this.sb.from('months').select('*')
-      .eq('employee_id', employee_id).eq('year', year).eq('month', month).maybeSingle();
-    return data || { employee_id, year, month, status: 'open' };
-  }
-  async setMonthStatus(employee_id, year, month, status) {
-    const patch = { employee_id, year, month, status };
-    const { data, error } = await this.sb.from('months')
-      .upsert(patch, { onConflict: 'employee_id,year,month' }).select().single();
-    if (error) throw error;
-    return data;
-  }
-
-  // Cache : une seule requête "toutes les entrées de l'employée" par session,
-  // réutilisée pour le mois affiché et le calcul du solde reporté. Invalidée
-  // à chaque écriture (locale) et sur tout changement temps réel.
-  async entriesForEmployee(employee_id) {
-    if (this._entriesCache[employee_id]) return this._entriesCache[employee_id];
-    const { data, error } = await this.sb.from('day_entries').select('*').eq('employee_id', employee_id);
-    if (error) throw new Error(error.message);
-    const list = data || [];
-    this._entriesCache[employee_id] = list;
-    return list;
-  }
-  async entriesForMonth(employee_id, year, month) {
-    const prefix = Util.monthKey(year, month);
-    const all = await this.entriesForEmployee(employee_id);
-    return all.filter((e) => (e.entry_date || '').startsWith(prefix));
-  }
-  async upsertEntry(entry) {
-    const { data, error } = await this.sb.from('day_entries')
-      .upsert({ ...entry }, { onConflict: 'employee_id,entry_date' }).select().single();
-    if (error) throw new Error(error.message);
-    // Met à jour le cache local sans refaire une requête.
-    const list = this._entriesCache[entry.employee_id];
-    if (list) {
-      const i = list.findIndex((e) => e.entry_date === data.entry_date);
-      if (i >= 0) list[i] = data; else list.push(data);
-    }
-    return data;
-  }
-  // Écriture groupée (un seul aller-retour réseau) — utilisée par le pré-remplissage.
-  async upsertEntries(entries) {
-    if (!entries || !entries.length) return [];
-    const { data, error } = await this.sb.from('day_entries')
-      .upsert(entries, { onConflict: 'employee_id,entry_date' }).select();
-    if (error) throw new Error(error.message);
-    // Met à jour le cache local d'un coup.
-    (data || []).forEach((row) => {
-      const list = this._entriesCache[row.employee_id];
-      if (list) {
-        const i = list.findIndex((e) => e.entry_date === row.entry_date);
-        if (i >= 0) list[i] = row; else list.push(row);
-      }
-    });
-    return data || [];
-  }
-
-  /* ---- Enfants (liste nominative + présences) ---- */
-  async listKids(includeArchived = false) {
-    let q = this.sb.from('kids').select('*').order('last_name').order('first_name');
-    if (!includeArchived) q = q.eq('active', true);
-    const { data, error } = await q;
-    if (error) throw new Error(error.message);
-    return data || [];
-  }
-  async addKid(first_name, last_name) {
-    first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
-    if (!first_name) throw new Error('Le prénom est requis.');
-    const { data, error } = await this.sb.from('kids').insert({ first_name, last_name }).select().single();
-    if (error) throw new Error(error.message);
-    return data;
-  }
-  async setKidActive(id, active) {
-    const { error } = await this.sb.from('kids').update({ active }).eq('id', id);
-    if (error) throw new Error(error.message);
-  }
-  async kidAttendanceForMonth(year, month) {
-    const from = `${Util.monthKey(year, month)}-01`, to = `${Util.monthKey(year, month)}-31`;
-    const { data, error } = await this.sb.from('kid_attendance').select('*')
-      .gte('entry_date', from).lte('entry_date', to);
-    if (error) throw new Error(error.message);
-    return data || [];
-  }
-  async setKidPresence(kid_id, entry_date, present) {
-    if (present) {
-      const { error } = await this.sb.from('kid_attendance')
-        .upsert({ kid_id, entry_date }, { onConflict: 'kid_id,entry_date' });
-      if (error) throw new Error(error.message);
-    } else {
-      const { error } = await this.sb.from('kid_attendance')
-        .delete().eq('kid_id', kid_id).eq('entry_date', entry_date);
-      if (error) throw new Error(error.message);
-    }
-  }
-  // Comptes agrégés par jour (nombre d'enfants présents) — pour les statistiques.
-  async allChildren() {
-    const { data } = await this.sb.from('kid_attendance').select('entry_date');
-    const byDate = {};
-    (data || []).forEach((a) => { byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1; });
-    return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
-  }
-
-  /* ---- Export / sauvegarde ---- */
-  async exportAll() {
-    const pick = async (table, cols = '*') => {
-      const { data, error } = await this.sb.from(table).select(cols);
-      if (error) throw new Error(`${table} : ${error.message}`);
-      return data || [];
-    };
-    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance] = await Promise.all([
-      pick('profiles', 'id,full_name,email,role,active,created_at'), // pas de secret : les mots de passe sont gérés par Supabase Auth
-      pick('months'), pick('day_entries'), pick('schedule_templates'),
-      pick('kids'), pick('kid_attendance'),
-    ]);
-    return { exported_at: new Date().toISOString(), mode: 'cloud',
-      profiles, months, day_entries, schedule_templates, kids, kid_attendance };
-  }
-  // Restaure les TABLES DE DONNÉES (pas les comptes : ceux-ci vivent dans Supabase
-  // Auth). Les employee_id/kid_id doivent référencer des comptes/enfants existants.
-  async importAll(data) {
-    if (!data || typeof data !== 'object') throw new Error('Fichier de sauvegarde invalide.');
-    const counts = {};
-    const restore = async (table, rows, conflict) => {
-      if (!Array.isArray(rows) || !rows.length) return;
-      const { error } = await this.sb.from(table).upsert(rows, conflict ? { onConflict: conflict } : undefined);
-      if (error) throw new Error(`${table} : ${error.message}`);
-      counts[table] = rows.length;
-    };
-    // Ordre : enfants avant présences (clé étrangère).
-    await restore('kids', data.kids, 'id');
-    await restore('kid_attendance', data.kid_attendance, 'kid_id,entry_date');
-    await restore('schedule_templates', data.schedule_templates, 'employee_id');
-    await restore('months', data.months, 'employee_id,year,month');
-    await restore('day_entries', data.day_entries, 'employee_id,entry_date');
-    this._entriesCache = {};
-    return counts;
-  }
-
-  onChange(cb) {
-    // Abonnement temps réel Supabase sur les tables clés.
-    ['day_entries', 'months', 'kids', 'kid_attendance', 'profiles', 'schedule_templates'].forEach((t) => {
-      this.sb.channel('rt-' + t)
-        .on('postgres_changes', { event: '*', schema: 'public', table: t }, () => {
-          if (t === 'day_entries') this._entriesCache = {}; // invalide le cache si un autre appareil écrit
-          if (t === 'profiles') this._profilesCache = null;
-          cb();
-        })
-        .subscribe();
-    });
-  }
-}
-
-/* ================================================================
  * MODE FIREBASE — Firestore + Firebase Auth
  * ----------------------------------------------------------------
  * Avantage principal : l'offre gratuite (Spark) ne met JAMAIS le
- * projet en pause, contrairement à Supabase gratuit.
+ * projet en pause (offre gratuite Spark).
  *
  * Identifiants de documents déterministes (= "upsert" naturel) :
  *   profiles/{uid} · months/{emp}_{AAAA-MM} · day_entries/{emp}_{AAAA-MM-JJ}
@@ -584,7 +337,7 @@ class FirebaseStore {
     this._profile = null; this._entriesCache = {}; this._profilesCache = null;
   }
   async init() {
-    // Session conservée sur l'appareil (comme Supabase).
+    // Session conservee sur l'appareil.
     try { await this.auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch {}
   }
 
@@ -713,7 +466,7 @@ class FirebaseStore {
     return data;
   }
 
-  /* ---- Prestations (avec cache, comme en mode Supabase) ---- */
+  /* ---- Prestations (avec cache local) ---- */
   async entriesForEmployee(employee_id) {
     if (this._entriesCache[employee_id]) return this._entriesCache[employee_id];
     const snap = await this.db.collection('day_entries').where('employee_id', '==', employee_id).get();
@@ -734,7 +487,7 @@ class FirebaseStore {
     const data = { ...entry, updated_at: new Date().toISOString() };
     await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date))
       .set(data, { merge: true });
-    // Relit la version fusionnée pour renvoyer l'état complet (comme Supabase).
+    // Relit la version fusionnee pour renvoyer l'etat complet.
     const s = await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date)).get();
     const saved = { id: s.id, ...s.data() };
     this._mergeCache(saved);
@@ -800,7 +553,7 @@ class FirebaseStore {
     return { exported_at: new Date().toISOString(), mode: 'firebase',
       profiles, months, day_entries, schedule_templates, kids, kid_attendance };
   }
-  // Restaure une sauvegarde — y compris celle exportée depuis Supabase.
+  // Restaure une sauvegarde JSON (y compris une ancienne sauvegarde exportee).
   // Les identifiants d'employées diffèrent d'un hébergeur à l'autre : on les
   // REMAPPE via l'email (puis le nom) vers les comptes Firebase existants.
   async importAll(data) {
@@ -872,36 +625,17 @@ class FirebaseStore {
 
 /* ================================================================
  * Fabrique : choisit le bon store
- * Priorité : Firebase → Supabase → démo (localStorage)
+ * Priorité : Firebase (si configuré) → démo (localStorage)
  * ================================================================ */
 async function createStore() {
-  // Choix forcé par l'URL (utile pendant une migration) :
-  //   ...?store=supabase  → ancien hébergement (pour exporter une sauvegarde)
-  //   ...?store=firebase  → nouvel hébergement   ·   ...?store=demo → données locales
+  // ...?store=demo force le mode local (utile pour tester sans toucher au cloud).
   const forced = new URLSearchParams(location.search).get('store');
-
-  if (forced === 'demo') {
-    const s = new DemoStore(); await s.init(); return { store: s, mode: 'demo' };
-  }
-  if (forced === 'supabase' && HAS_SUPABASE && window.supabase) {
-    const sb = window.supabase.createClient(
-      window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
-    const s = new SupabaseStore(sb); await s.init(); return { store: s, mode: 'cloud' };
-  }
-
-  if (HAS_FIREBASE && window.firebase && forced !== 'supabase') {
+  if (forced !== 'demo' && HAS_FIREBASE && window.firebase) {
     const app = firebase.apps && firebase.apps.length
       ? firebase.app() : firebase.initializeApp(window.APP_CONFIG.FIREBASE_CONFIG);
     const s = new FirebaseStore(app);
     await s.init();
     return { store: s, mode: 'firebase' };
-  }
-  if (HAS_SUPABASE && window.supabase) {
-    const sb = window.supabase.createClient(
-      window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
-    const s = new SupabaseStore(sb);
-    await s.init();
-    return { store: s, mode: 'cloud' };
   }
   const s = new DemoStore();
   await s.init();
