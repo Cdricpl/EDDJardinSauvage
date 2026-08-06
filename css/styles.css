@@ -62,6 +62,14 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
 .brand { display:flex; align-items:center; gap:12px; font-family:var(--serif); font-size:20px; font-weight:700; }
 .brand .logo-header { height:38px; width:auto; border-radius:8px; background:#fffdf9; padding:3px 5px; box-shadow:var(--shadow-sm); }
 .who { font-size:14px; opacity:.9; margin-right:8px; }
+/* Groupe de droite de l'entete : reste sur une seule ligne. */
+.topbar > div:last-of-type { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+.topbar .badge { white-space:nowrap; }
+/* Numero de version, centre dans l'entete (verification de mise a jour). */
+.version {
+  flex:1; text-align:center; font-size:12.5px; letter-spacing:.4px;
+  color:#c9b9a4; font-variant-numeric:tabular-nums; white-space:nowrap;
+}
 
 .nav {
   display:flex; gap:6px; flex-wrap:wrap;
@@ -213,10 +221,15 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
   body { font-size:16px; }
   .container { padding:0 10px; margin:16px auto; }
   .card { padding:16px; border-radius:14px; }
-  .topbar { padding:12px 14px; }
-  .brand { font-size:16px; gap:9px; }
+  .topbar { padding:12px 12px; gap:8px; }
+  .brand { font-size:16px; gap:9px; min-width:0; }
   .brand .logo-header { height:32px; }
+  /* Sur petit ecran, le logo suffit : masquer le titre libere la place pour
+     la version et le bouton de deconnexion (qui etait tronque). */
+  .brand > span:not(.badge) { display:none; }
   .who { display:none; }
+  .version { font-size:11px; letter-spacing:0; padding:0 4px; }
+  #logoutBtn { padding:8px 10px; font-size:12.5px; white-space:nowrap; }
   .nav { position:static; flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; padding:9px 10px; gap:7px; }
   .navbtn { white-space:nowrap; padding:10px 14px; font-size:14px; }
   input:not([type=checkbox]), select, button { min-height:44px; font-size:16px; }

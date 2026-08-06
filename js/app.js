@@ -3,6 +3,11 @@
  * Utilise Store (js/store.js) : fonctionne en mode démo ou cloud.
  * ------------------------------------------------------------------ */
 
+/* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
+ * l'appareil utilise bien la dernière version publiée.
+ * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
+const APP_VERSION = 'v2026.08.06-1';
+
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
 let SEL_EMP = null;                 // employée sélectionnée (vue admin)
@@ -112,6 +117,8 @@ async function boot() {
   clampMonth();
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
+  const vEl = document.getElementById('appVersion');
+  if (vEl) vEl.textContent = APP_VERSION;
   const CLOUD = MODE === 'cloud' || MODE === 'firebase';
   document.getElementById('modeBadge').textContent =
     MODE === 'firebase' ? '🔥 Firebase' : MODE === 'cloud' ? '☁️ Cloud' : '🧪 Démo (local)';
@@ -173,6 +180,7 @@ function renderLogin() {
       ${MODE === 'demo' ? `<p class="muted small" style="margin-top:6px">
         Mode démo — comptes de test :<br>
         admin@ecole.be / admin123 · flora@ecole.be / flora123 · sarah@ecole.be / sarah123</p>` : ''}
+      <p class="muted small" id="loginVersion" style="margin-top:14px">${APP_VERSION}</p>
     </div>`;
   const loginMsg = (html, kind = 'error') => {
     document.getElementById('loginMsg').innerHTML = `<div class="msg ${kind}">${html}</div>`;

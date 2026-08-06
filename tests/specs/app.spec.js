@@ -96,6 +96,16 @@ test('sauvegarde : l’export JSON déclenche un téléchargement', async ({ pag
   expect(download.suggestedFilename()).toContain('edd-sauvegarde');
 });
 
+test('entête : le numéro de version est affiché et correspond au cache du service worker', async ({ page }) => {
+  await loginAdmin(page);
+  const version = (await page.locator('#appVersion').textContent() || '').trim();
+  expect(version).toMatch(/^v\d{4}\.\d{2}\.\d{2}-\d+$/);
+  // Le nom du cache doit suivre la version, sinon un appareil hors ligne
+  // afficherait un numero a jour tout en servant d'anciens fichiers.
+  const sw = await (await page.request.get('/sw.js')).text();
+  expect(sw).toContain(`edd-jardin-sauvage-${version}`);
+});
+
 test('entête : le bouton 💾 déclenche une sauvegarde (admin)', async ({ page }) => {
   await loginAdmin(page);
   const backup = page.locator('#backupBtn');
