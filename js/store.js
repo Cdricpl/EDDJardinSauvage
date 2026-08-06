@@ -239,10 +239,10 @@ class DemoStore {
       .filter(k => includeArchived || k.active)
       .sort((a, b) => (a.last_name + a.first_name).localeCompare(b.last_name + b.first_name));
   }
-  async addKid(first_name, last_name, school, birthdate) {
+  async addKid(first_name, last_name, school, birthdate, days) {
     const db = this._db();
     const k = { id: Util.uuid(), first_name: (first_name || '').trim(), last_name: (last_name || '').trim(),
-      school: school || '', birthdate: birthdate || '', active: true };
+      school: school || '', birthdate: birthdate || '', days: Array.isArray(days) ? days : [], active: true };
     if (!k.first_name) throw new Error('Le prénom est requis.');
     db.kids.push(k); this._save(db); return k;
   }
@@ -252,7 +252,9 @@ class DemoStore {
     const db = this._db();
     const k = db.kids.find(x => x.id === id);
     if (k) { k.first_name = first; k.last_name = (info.last_name || '').trim();
-      k.school = info.school || ''; k.birthdate = info.birthdate || ''; this._save(db); }
+      k.school = info.school || ''; k.birthdate = info.birthdate || '';
+      if (Array.isArray(info.days)) k.days = info.days;
+      this._save(db); }
   }
   async setKidActive(id, active) {
     const db = this._db();
@@ -269,17 +271,33 @@ class DemoStore {
   async allEntriesForYear(year) {
     return this._db().entries.filter(e => (e.entry_date || '').startsWith(`${year}-`));
   }
-  async setKidPresence(kid_id, entry_date, present) {
+  // status : 'present' | 'absent' | null (efface l'enregistrement).
+  async setKidAttendance(kid_id, entry_date, status) {
     const db = this._db();
     const i = db.kidatt.findIndex(a => a.kid_id === kid_id && a.entry_date === entry_date);
-    if (present && i < 0) db.kidatt.push({ kid_id, entry_date });
-    if (!present && i >= 0) db.kidatt.splice(i, 1);
+    if (!status) { if (i >= 0) db.kidatt.splice(i, 1); }
+    else if (i >= 0) db.kidatt[i].status = status;
+    else db.kidatt.push({ kid_id, entry_date, status });
     this._save(db);
   }
-  // Comptes agrégés par jour (nombre d'enfants présents) — pour les statistiques.
+  // Écriture groupée (pré-remplissage des présences habituelles).
+  async setKidAttendances(list) {
+    const db = this._db();
+    (list || []).forEach(({ kid_id, entry_date, status }) => {
+      const i = db.kidatt.findIndex(a => a.kid_id === kid_id && a.entry_date === entry_date);
+      if (!status) { if (i >= 0) db.kidatt.splice(i, 1); }
+      else if (i >= 0) db.kidatt[i].status = status;
+      else db.kidatt.push({ kid_id, entry_date, status });
+    });
+    this._save(db);
+  }
+  // Comptes agrégés par jour (enfants PRÉSENTS) — pour les statistiques.
   async allChildren() {
     const byDate = {};
-    this._db().kidatt.forEach(a => { byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1; });
+    this._db().kidatt.forEach(a => {
+      if (a.status === 'absent') return; // absence = pas comptée
+      byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
+    });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
   }
 
@@ -519,11 +537,11 @@ class FirebaseStore {
       .filter((k) => includeArchived || k.active !== false)
       .sort((a, b) => ((a.last_name || '') + a.first_name).localeCompare((b.last_name || '') + b.first_name));
   }
-  async addKid(first_name, last_name, school, birthdate) {
+  async addKid(first_name, last_name, school, birthdate, days) {
     first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
     if (!first_name) throw new Error('Le prénom est requis.');
     const data = { first_name, last_name, school: school || '', birthdate: birthdate || '',
-      active: true, created_at: new Date().toISOString() };
+      days: Array.isArray(days) ? days : [], active: true, created_at: new Date().toISOString() };
     const ref = await this.db.collection('kids').add(data);
     return { id: ref.id, ...data };
   }
@@ -533,10 +551,10 @@ class FirebaseStore {
   async setKidInfo(id, info) {
     const first_name = (info.first_name || '').trim();
     if (!first_name) throw new Error('Le prénom est requis.');
-    await this.db.collection('kids').doc(id).set({
-      first_name, last_name: (info.last_name || '').trim(),
-      school: info.school || '', birthdate: info.birthdate || '',
-    }, { merge: true });
+    const patch = { first_name, last_name: (info.last_name || '').trim(),
+      school: info.school || '', birthdate: info.birthdate || '' };
+    if (Array.isArray(info.days)) patch.days = info.days;
+    await this.db.collection('kids').doc(id).set(patch, { merge: true });
   }
   async kidAttendanceForMonth(year, month) {
     const p = Util.monthKey(year, month);
@@ -554,15 +572,27 @@ class FirebaseStore {
       .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
     return this._docs(snap);
   }
-  async setKidPresence(kid_id, entry_date, present) {
+  // status : 'present' | 'absent' | null (efface l'enregistrement).
+  async setKidAttendance(kid_id, entry_date, status) {
     const ref = this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`);
-    if (present) await ref.set({ kid_id, entry_date });
-    else await ref.delete();
+    if (!status) await ref.delete();
+    else await ref.set({ kid_id, entry_date, status });
+  }
+  async setKidAttendances(list) {
+    if (!list || !list.length) return;
+    const ops = list.map(({ kid_id, entry_date, status }) => ({
+      ref: this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`),
+      data: status ? { kid_id, entry_date, status } : null, delete: !status,
+    }));
+    await this._commit(ops);
   }
   async allChildren() {
     const snap = await this.db.collection('kid_attendance').get();
     const byDate = {};
-    snap.docs.forEach((d) => { const dt = d.data().entry_date; byDate[dt] = (byDate[dt] || 0) + 1; });
+    snap.docs.forEach((d) => {
+      const a = d.data(); if (a.status === 'absent') return;
+      byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
+    });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
   }
 
