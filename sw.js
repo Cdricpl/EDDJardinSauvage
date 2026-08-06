@@ -2,9 +2,12 @@
  * avec repli sur le cache hors ligne. N'intercepte QUE les fichiers de l'app
  * (même origine) : Supabase et les CDN passent en direct. */
 
-const CACHE = 'edd-jardin-sauvage-v1';
+/* IMPORTANT : bumper cette version à CHAQUE déploiement d'un fichier applicatif
+ * (index.html, css, js, sw). Sinon un appareil hors ligne peut servir une
+ * ancienne version depuis le cache. Convention : date du déploiement. */
+const CACHE = 'edd-jardin-sauvage-2026-08-06-fb2';
 const APP_SHELL = [
-  './', 'index.html', 'css/styles.css',
+  './', 'index.html', 'offline.html', 'css/styles.css',
   'js/config.js', 'js/store.js', 'js/app.js',
   'assets/logo.png', 'assets/logo.svg',
   'assets/icon-192.png', 'assets/icon-512.png',
@@ -36,6 +39,9 @@ self.addEventListener('fetch', (e) => {
         caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
         return res;
       })
-      .catch(() => caches.match(req).then((r) => r || caches.match('index.html')))
+      .catch(() => caches.match(req).then((r) =>
+        r || (req.mode === 'navigate'
+          ? caches.match('index.html').then((shell) => shell || caches.match('offline.html'))
+          : undefined)))
   );
 });

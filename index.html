@@ -28,6 +28,7 @@
       </div>
       <div>
         <span class="who" id="meName"></span>
+        <button class="small gray" id="backupBtn" style="display:none" title="Sauvegarder toutes les données (JSON)" aria-label="Sauvegarder toutes les données">💾</button>
         <button class="small gray" id="logoutBtn">Déconnexion</button>
       </div>
     </header>
@@ -36,10 +37,13 @@
   </div>
 
   <div id="loadbar"></div>
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <!-- Bibliothèques externes (mode cloud + graphiques + PDF).
        Chargées via CDN ; l'app fonctionne même si elles manquent (dégradé). -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>

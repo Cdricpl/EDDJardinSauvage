@@ -14,6 +14,12 @@ const HAS_SUPABASE =
   window.APP_CONFIG.SUPABASE_URL &&
   window.APP_CONFIG.SUPABASE_ANON_KEY;
 
+const HAS_FIREBASE =
+  window.APP_CONFIG &&
+  window.APP_CONFIG.FIREBASE_CONFIG &&
+  window.APP_CONFIG.FIREBASE_CONFIG.apiKey &&
+  window.APP_CONFIG.FIREBASE_CONFIG.projectId;
+
 /* ================================================================
  * Utilitaires partagés
  * ================================================================ */
@@ -52,16 +58,14 @@ class DemoStore {
         { id: e1,      full_name: 'Employée 1',  email: 'flora@ecole.be', password: 'flora123', role: 'employee', active: true },
         { id: e2,      full_name: 'Employée 2',  email: 'sarah@ecole.be', password: 'sarah123', role: 'employee', active: true },
       ],
-      months: [],       // { employee_id, year, month, status, carry_in_minutes }
-      entries: [],      // { id, employee_id, entry_date, planned_minutes, worked_minutes, kind, justification }
-      children: [],     // (ancien) présences agrégées par jour — déprécié
+      months: [],       // { employee_id, year, month, status }
+      entries: [],      // { id, employee_id, entry_date, planned_*, start_time, end_time, worked_minutes, justification }
       kids: [           // liste nominative des enfants
         { id: 'k1', first_name: 'Lucas', last_name: 'Martin', active: true },
         { id: 'k2', first_name: 'Emma', last_name: 'Bernard', active: true },
         { id: 'k3', first_name: 'Noah', last_name: 'Dubois', active: true },
       ],
       kidatt: [],       // présences : { kid_id, entry_date }
-      audit: [],        // { id, actor_name, action, entity, entity_id, details, created_at }
       // Horaire type hebdomadaire par employée : slots[weekday] = {start,end} (0=Dim..6=Sam)
       templates: [
         { employee_id: e1, slots: { 1: { start: '14:00', end: '18:00' }, 2: { start: '14:00', end: '18:00' }, 3: { start: '14:00', end: '18:00' }, 4: { start: '14:00', end: '18:00' }, 5: { start: '14:00', end: '18:00' } } },
@@ -89,8 +93,7 @@ class DemoStore {
           id: Util.uuid(), employee_id: emp, entry_date: date,
           planned_start: pStart, planned_end: pEnd, planned_minutes: planned,
           start_time: start, end_time: end, worked_minutes: worked,
-          break_minutes: 0, worked_touched: touched,
-          kind: 'normal',
+          worked_touched: touched,
           justification: touched ? 'Activité prolongée' : '',
         });
       });
@@ -107,15 +110,6 @@ class DemoStore {
     localStorage.setItem(this.KEY, JSON.stringify(db));
     // Notifie les autres onglets (simulation "temps réel").
     localStorage.setItem('ecole_ping', String(Date.now()));
-  }
-  _log(db, action, entity, entity_id, details) {
-    const s = this._session();
-    db.audit.unshift({
-      id: Util.uuid(), actor_name: s ? s.full_name : '?',
-      action, entity, entity_id, details: details || {},
-      created_at: new Date().toISOString(),
-    });
-    db.audit = db.audit.slice(0, 500);
   }
   _session() { try { return JSON.parse(localStorage.getItem(this.SESSION) || 'null'); } catch { return null; } }
 
@@ -143,14 +137,13 @@ class DemoStore {
     if (db.profiles.some(p => p.email === email)) throw new Error('Cet email existe déjà.');
     const prof = { id: Util.uuid(), full_name, email, password: password || 'changeme', role: role || 'employee', active: true };
     db.profiles.push(prof);
-    this._log(db, 'add_employee', 'profile', prof.id, { full_name });
     this._save(db);
     return prof;
   }
   async setActive(id, active) {
     const db = this._db();
     const p = db.profiles.find(x => x.id === id);
-    if (p) { p.active = active; this._log(db, active ? 'reactivate_employee' : 'archive_employee', 'profile', id, { full_name: p.full_name }); this._save(db); }
+    if (p) { p.active = active; this._save(db); }
   }
 
   /* ---- Horaire type ---- */
@@ -165,7 +158,6 @@ class DemoStore {
     let t = db.templates.find(x => x.employee_id === employee_id);
     if (!t) { t = { employee_id, slots }; db.templates.push(t); }
     t.slots = slots;
-    this._log(db, 'set_template', 'template', employee_id, {});
     this._save(db);
   }
 
@@ -176,7 +168,7 @@ class DemoStore {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Adresse email invalide.');
     if (db.profiles.some(p => p.email === email && p.id !== id)) throw new Error('Cet email est déjà utilisé.');
     const p = db.profiles.find(x => x.id === id);
-    if (p) { p.email = email; this._log(db, 'set_email', 'profile', id, { email }); this._save(db); }
+    if (p) { p.email = email; this._save(db); }
   }
   async sendPasswordReset(email) {
     // Pas d'envoi d'email possible en mode démo.
@@ -186,16 +178,13 @@ class DemoStore {
   /* ---- Mois ---- */
   async getMonth(employee_id, year, month) {
     return this._db().months.find(x => x.employee_id === employee_id && x.year === year && x.month === month)
-      || { employee_id, year, month, status: 'open', carry_in_minutes: 0 };
+      || { employee_id, year, month, status: 'open' };
   }
   async setMonthStatus(employee_id, year, month, status) {
     const db = this._db();
     let mo = db.months.find(x => x.employee_id === employee_id && x.year === year && x.month === month);
-    if (!mo) { mo = { employee_id, year, month, status: 'open', carry_in_minutes: 0 }; db.months.push(mo); }
+    if (!mo) { mo = { employee_id, year, month, status: 'open' }; db.months.push(mo); }
     mo.status = status;
-    if (status === 'locked') mo.locked_at = new Date().toISOString();
-    this._log(db, status === 'locked' ? 'lock_month' : status === 'validated' ? 'validate_month' : 'unlock_month',
-      'month', Util.monthKey(year, month), { employee_id });
     this._save(db);
     return mo;
   }
@@ -208,23 +197,32 @@ class DemoStore {
   async entriesForEmployee(employee_id) {
     return this._db().entries.filter(e => e.employee_id === employee_id);
   }
-  async upsertEntry(entry) {
-    const db = this._db();
+  _applyEntry(db, entry) {
     let e = db.entries.find(x => x.employee_id === entry.employee_id && x.entry_date === entry.entry_date);
     if (!e) {
       e = { id: Util.uuid(), employee_id: entry.employee_id, entry_date: entry.entry_date,
             planned_start: '', planned_end: '', planned_minutes: 0, worked_minutes: 0,
-            start_time: '', end_time: '', break_minutes: 0, worked_touched: false,
-            kind: 'normal', justification: '' };
+            start_time: '', end_time: '', worked_touched: false, justification: '' };
       db.entries.push(e);
     }
     ['planned_start', 'planned_end', 'planned_minutes', 'worked_minutes', 'start_time',
-     'end_time', 'break_minutes', 'worked_touched', 'kind', 'justification'].forEach(k => {
+     'end_time', 'worked_touched', 'justification'].forEach(k => {
       if (entry[k] !== undefined) e[k] = entry[k];
     });
-    this._log(db, 'update_entry', 'day_entry', e.entry_date, { employee_id: entry.employee_id });
+    return e;
+  }
+  async upsertEntry(entry) {
+    const db = this._db();
+    const e = this._applyEntry(db, entry);
     this._save(db);
     return e;
+  }
+  // Écriture groupée (un seul enregistrement) — utilisé par le pré-remplissage.
+  async upsertEntries(entries) {
+    const db = this._db();
+    const out = (entries || []).map((entry) => this._applyEntry(db, entry));
+    this._save(db);
+    return out;
   }
 
   /* ---- Enfants (liste nominative + présences) ---- */
@@ -260,6 +258,56 @@ class DemoStore {
     const byDate = {};
     this._db().kidatt.forEach(a => { byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1; });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
+  }
+
+  /* ---- RGPD : rétention / anonymisation ---- */
+  // Supprime les présences enfants strictement antérieures à `beforeISO` (AAAA-MM-JJ).
+  async purgeKidAttendanceBefore(beforeISO) {
+    const db = this._db();
+    const before = db.kidatt.length;
+    db.kidatt = db.kidatt.filter(a => a.entry_date >= beforeISO);
+    this._save(db);
+    return before - db.kidatt.length;
+  }
+  // Anonymise un enfant (remplace nom/prénom) tout en conservant ses présences comptées.
+  async anonymizeKid(id) {
+    const db = this._db();
+    const k = db.kids.find(x => x.id === id);
+    if (k) { k.first_name = 'Enfant'; k.last_name = '#' + String(id).slice(0, 6); k.active = false; this._save(db); }
+  }
+
+  /* ---- Export / sauvegarde ---- */
+  async exportAll() {
+    const db = this._db();
+    return {
+      exported_at: new Date().toISOString(), mode: 'demo',
+      profiles: (db.profiles || []).map(({ password, ...p }) => p), // jamais les mots de passe
+      months: db.months || [], day_entries: db.entries || [],
+      schedule_templates: db.templates || [],
+      kids: db.kids || [], kid_attendance: db.kidatt || [],
+    };
+  }
+  // Restaure une sauvegarde. Remplace les tables de données ; pour les profils on
+  // met à jour les champs sans écraser les mots de passe existants (mode démo).
+  async importAll(data) {
+    if (!data || typeof data !== 'object') throw new Error('Fichier de sauvegarde invalide.');
+    const db = this._db();
+    const counts = {};
+    if (Array.isArray(data.months))             { db.months = data.months;                 counts.months = db.months.length; }
+    if (Array.isArray(data.day_entries))        { db.entries = data.day_entries;            counts.day_entries = db.entries.length; }
+    if (Array.isArray(data.schedule_templates)) { db.templates = data.schedule_templates;   counts.schedule_templates = db.templates.length; }
+    if (Array.isArray(data.kids))               { db.kids = data.kids;                      counts.kids = db.kids.length; }
+    if (Array.isArray(data.kid_attendance))     { db.kidatt = data.kid_attendance;          counts.kid_attendance = db.kidatt.length; }
+    if (Array.isArray(data.profiles)) {
+      data.profiles.forEach((p) => {
+        const ex = db.profiles.find((x) => x.id === p.id);
+        if (ex) Object.assign(ex, p, { password: ex.password }); // conserve le mot de passe local
+        else db.profiles.push({ ...p, password: p.password || 'changeme' });
+      });
+      counts.profiles = db.profiles.length;
+    }
+    this._save(db);
+    return counts;
   }
 
   /* ---- Temps réel (autres onglets) ---- */
@@ -299,17 +347,29 @@ class SupabaseStore {
     return (this._profilesCache = data || []);
   }
   async addProfile({ full_name, email, password, role }) {
-    // Création du compte + profil (nécessite que l'admin soit connecté ;
-    // en production on passera par une Edge Function pour ne pas déconnecter l'admin).
-    const { data, error } = await this.sb.auth.signUp({
-      email, password, options: { data: { full_name } },
-    });
-    if (error) throw new Error(error.message);
-    if (role === 'admin' && data.user) {
-      await this.sb.from('profiles').update({ role: 'admin' }).eq('id', data.user.id);
+    // Voie privilégiée : Edge Function "create-user" (clé service_role) qui crée
+    // le compte SANS déconnecter l'admin. Repli sur signUp si la fonction n'est
+    // pas déployée (l'admin peut alors être déconnecté — limite Supabase).
+    try {
+      const { data, error } = await this.sb.functions.invoke('create-user', {
+        body: { full_name, email, password },
+      });
+      if (error) throw error;
+      if (data && data.error) throw new Error(data.error);
+      this._profilesCache = null;
+      return data && data.user;
+    } catch (e) {
+      // 404 / fonction absente / réseau → repli signUp.
+      const status = e && (e.status || (e.context && e.context.status));
+      const missing = status === 404 || /not\s*found|failed to (fetch|send)/i.test(e && e.message || '');
+      if (!missing) throw new Error(e && e.message ? e.message : String(e));
+      const { data, error } = await this.sb.auth.signUp({
+        email, password, options: { data: { full_name } },
+      });
+      if (error) throw new Error(error.message);
+      this._profilesCache = null;
+      return data.user;
     }
-    this._profilesCache = null;
-    return data.user;
   }
   async setActive(id, active) {
     const { error } = await this.sb.from('profiles').update({ active }).eq('id', id);
@@ -343,7 +403,7 @@ class SupabaseStore {
   async getMonth(employee_id, year, month) {
     const { data } = await this.sb.from('months').select('*')
       .eq('employee_id', employee_id).eq('year', year).eq('month', month).maybeSingle();
-    return data || { employee_id, year, month, status: 'open', carry_in_minutes: 0 };
+    return data || { employee_id, year, month, status: 'open' };
   }
   async setMonthStatus(employee_id, year, month, status) {
     const patch = { employee_id, year, month, status };
@@ -380,6 +440,22 @@ class SupabaseStore {
       if (i >= 0) list[i] = data; else list.push(data);
     }
     return data;
+  }
+  // Écriture groupée (un seul aller-retour réseau) — utilisée par le pré-remplissage.
+  async upsertEntries(entries) {
+    if (!entries || !entries.length) return [];
+    const { data, error } = await this.sb.from('day_entries')
+      .upsert(entries, { onConflict: 'employee_id,entry_date' }).select();
+    if (error) throw new Error(error.message);
+    // Met à jour le cache local d'un coup.
+    (data || []).forEach((row) => {
+      const list = this._entriesCache[row.employee_id];
+      if (list) {
+        const i = list.findIndex((e) => e.entry_date === row.entry_date);
+        if (i >= 0) list[i] = row; else list.push(row);
+      }
+    });
+    return data || [];
   }
 
   /* ---- Enfants (liste nominative + présences) ---- */
@@ -427,6 +503,55 @@ class SupabaseStore {
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
   }
 
+  /* ---- RGPD : rétention / anonymisation ---- */
+  async purgeKidAttendanceBefore(beforeISO) {
+    const { data, error } = await this.sb.from('kid_attendance')
+      .delete().lt('entry_date', beforeISO).select('kid_id');
+    if (error) throw new Error(error.message);
+    return (data || []).length;
+  }
+  async anonymizeKid(id) {
+    const { error } = await this.sb.from('kids')
+      .update({ first_name: 'Enfant', last_name: '#' + String(id).slice(0, 6), active: false }).eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  /* ---- Export / sauvegarde ---- */
+  async exportAll() {
+    const pick = async (table, cols = '*') => {
+      const { data, error } = await this.sb.from(table).select(cols);
+      if (error) throw new Error(`${table} : ${error.message}`);
+      return data || [];
+    };
+    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance] = await Promise.all([
+      pick('profiles', 'id,full_name,email,role,active,created_at'), // pas de secret : les mots de passe sont gérés par Supabase Auth
+      pick('months'), pick('day_entries'), pick('schedule_templates'),
+      pick('kids'), pick('kid_attendance'),
+    ]);
+    return { exported_at: new Date().toISOString(), mode: 'cloud',
+      profiles, months, day_entries, schedule_templates, kids, kid_attendance };
+  }
+  // Restaure les TABLES DE DONNÉES (pas les comptes : ceux-ci vivent dans Supabase
+  // Auth). Les employee_id/kid_id doivent référencer des comptes/enfants existants.
+  async importAll(data) {
+    if (!data || typeof data !== 'object') throw new Error('Fichier de sauvegarde invalide.');
+    const counts = {};
+    const restore = async (table, rows, conflict) => {
+      if (!Array.isArray(rows) || !rows.length) return;
+      const { error } = await this.sb.from(table).upsert(rows, conflict ? { onConflict: conflict } : undefined);
+      if (error) throw new Error(`${table} : ${error.message}`);
+      counts[table] = rows.length;
+    };
+    // Ordre : enfants avant présences (clé étrangère).
+    await restore('kids', data.kids, 'id');
+    await restore('kid_attendance', data.kid_attendance, 'kid_id,entry_date');
+    await restore('schedule_templates', data.schedule_templates, 'employee_id');
+    await restore('months', data.months, 'employee_id,year,month');
+    await restore('day_entries', data.day_entries, 'employee_id,entry_date');
+    this._entriesCache = {};
+    return counts;
+  }
+
   onChange(cb) {
     // Abonnement temps réel Supabase sur les tables clés.
     ['day_entries', 'months', 'kids', 'kid_attendance', 'profiles', 'schedule_templates'].forEach((t) => {
@@ -442,9 +567,332 @@ class SupabaseStore {
 }
 
 /* ================================================================
+ * MODE FIREBASE — Firestore + Firebase Auth
+ * ----------------------------------------------------------------
+ * Avantage principal : l'offre gratuite (Spark) ne met JAMAIS le
+ * projet en pause, contrairement à Supabase gratuit.
+ *
+ * Identifiants de documents déterministes (= "upsert" naturel) :
+ *   profiles/{uid} · months/{emp}_{AAAA-MM} · day_entries/{emp}_{AAAA-MM-JJ}
+ *   schedule_templates/{emp} · kids/{id} · kid_attendance/{kid}_{AAAA-MM-JJ}
+ * ================================================================ */
+const FB_MAX_BATCH = 400;   // limite Firestore = 500 écritures par lot
+
+class FirebaseStore {
+  constructor(app) {
+    this.app = app;
+    this.auth = app.auth();
+    this.db = app.firestore();
+    this._profile = null; this._entriesCache = {}; this._profilesCache = null;
+  }
+  async init() {
+    // Session conservée sur l'appareil (comme Supabase).
+    try { await this.auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch {}
+  }
+
+  /* ---- Helpers ---- */
+  _entryId(emp, date) { return `${emp}_${date}`; }
+  _monthId(emp, y, m) { return `${emp}_${Util.monthKey(y, m)}`; }
+  _docs(snap) { return snap.docs.map((d) => ({ id: d.id, ...d.data() })); }
+  async _commit(ops) {   // ops = [{ref, data, merge}] — découpé en lots
+    for (let i = 0; i < ops.length; i += FB_MAX_BATCH) {
+      const batch = this.db.batch();
+      ops.slice(i, i + FB_MAX_BATCH).forEach((o) => {
+        if (o.delete) batch.delete(o.ref); else batch.set(o.ref, o.data, { merge: true });
+      });
+      await batch.commit();
+    }
+  }
+
+  /* ---- Auth ---- */
+  async signIn(email, password) {
+    try {
+      await this.auth.signInWithEmailAndPassword((email || '').trim(), password);
+    } catch (e) { throw new Error(this._authMsg(e)); }
+    return this.getCurrentUser();
+  }
+  _authMsg(e) {
+    const c = (e && e.code) || '';
+    if (/wrong-password|invalid-credential|user-not-found/.test(c)) return 'Email ou mot de passe incorrect.';
+    if (/too-many-requests/.test(c)) return 'Trop de tentatives. Réessayez dans quelques minutes.';
+    if (/network/.test(c)) return 'Connexion au serveur impossible. Vérifiez votre réseau.';
+    if (/email-already-in-use/.test(c)) return 'Cet email est déjà utilisé.';
+    if (/weak-password/.test(c)) return 'Mot de passe trop court (6 caractères minimum).';
+    return (e && e.message) || String(e);
+  }
+  async signOut() { await this.auth.signOut(); this._profile = null; }
+  async getCurrentUser() {
+    // Attend la restauration de session au démarrage.
+    const user = this.auth.currentUser || await new Promise((resolve) => {
+      const un = this.auth.onAuthStateChanged((u) => { un(); resolve(u); });
+    });
+    if (!user) return null;
+    const snap = await this.db.collection('profiles').doc(user.uid).get();
+    if (!snap.exists) {
+      // Compte créé directement dans la console Firebase : on initialise son profil.
+      // TOUJOURS en 'employee' — le passage en admin se fait dans la console
+      // (les règles Firestore interdisent de s'auto-promouvoir).
+      const prof = {
+        full_name: user.displayName || user.email, email: user.email,
+        role: 'employee', active: true,
+        created_at: new Date().toISOString(),
+      };
+      await this.db.collection('profiles').doc(user.uid).set(prof);
+      this._profilesCache = null;
+      return (this._profile = { id: user.uid, ...prof });
+    }
+    return (this._profile = { id: user.uid, ...snap.data() });
+  }
+
+  /* ---- Profils ---- */
+  async listProfiles() {
+    if (this._profilesCache) return this._profilesCache;
+    const snap = await this.db.collection('profiles').get();
+    const list = this._docs(snap).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
+    return (this._profilesCache = list);
+  }
+  async addProfile({ full_name, email, password, role }) {
+    // Astuce : on crée le compte via une instance SECONDAIRE de Firebase, ce qui
+    // évite de déconnecter l'administrateur (limitation classique côté client).
+    const second = firebase.initializeApp(this.app.options, 'creation-' + Date.now());
+    try {
+      const cred = await second.auth().createUserWithEmailAndPassword((email || '').trim(), password);
+      await this.db.collection('profiles').doc(cred.user.uid).set({
+        full_name, email: (email || '').trim(), role: role === 'admin' ? 'admin' : 'employee',
+        active: true, created_at: new Date().toISOString(),
+      });
+      await second.auth().signOut();
+      this._profilesCache = null;
+      return { id: cred.user.uid };
+    } catch (e) { throw new Error(this._authMsg(e)); }
+    finally { try { await second.delete(); } catch {} }
+  }
+  async setActive(id, active) {
+    await this.db.collection('profiles').doc(id).set({ active }, { merge: true });
+    this._profilesCache = null;
+  }
+  async setEmail(id, email) {
+    email = (email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Adresse email invalide.');
+    // Note : modifie l'email de CONTACT (l'email de connexion se change via Firebase Auth).
+    await this.db.collection('profiles').doc(id).set({ email }, { merge: true });
+    this._profilesCache = null;
+  }
+  async sendPasswordReset(email) {
+    try { await this.auth.sendPasswordResetEmail((email || '').trim()); }
+    catch (e) { throw new Error(this._authMsg(e)); }
+  }
+
+  /* ---- Horaire type ---- */
+  async getTemplate(employee_id) {
+    const s = await this.db.collection('schedule_templates').doc(employee_id).get();
+    return s.exists ? (s.data().slots || {}) : {};
+  }
+  async setTemplate(employee_id, slots) {
+    await this.db.collection('schedule_templates').doc(employee_id)
+      .set({ employee_id, slots, updated_at: new Date().toISOString() }, { merge: true });
+  }
+
+  /* ---- Mois ---- */
+  async getMonth(employee_id, year, month) {
+    const s = await this.db.collection('months').doc(this._monthId(employee_id, year, month)).get();
+    return s.exists ? { id: s.id, ...s.data() } : { employee_id, year, month, status: 'open' };
+  }
+  async setMonthStatus(employee_id, year, month, status) {
+    const data = { employee_id, year, month, status };
+    await this.db.collection('months').doc(this._monthId(employee_id, year, month)).set(data, { merge: true });
+    return data;
+  }
+
+  /* ---- Prestations (avec cache, comme en mode Supabase) ---- */
+  async entriesForEmployee(employee_id) {
+    if (this._entriesCache[employee_id]) return this._entriesCache[employee_id];
+    const snap = await this.db.collection('day_entries').where('employee_id', '==', employee_id).get();
+    return (this._entriesCache[employee_id] = this._docs(snap));
+  }
+  async entriesForMonth(employee_id, year, month) {
+    const prefix = Util.monthKey(year, month);
+    const all = await this.entriesForEmployee(employee_id);
+    return all.filter((e) => (e.entry_date || '').startsWith(prefix));
+  }
+  _mergeCache(entry) {
+    const list = this._entriesCache[entry.employee_id];
+    if (!list) return;
+    const i = list.findIndex((e) => e.entry_date === entry.entry_date);
+    if (i >= 0) list[i] = { ...list[i], ...entry }; else list.push({ ...entry });
+  }
+  async upsertEntry(entry) {
+    const data = { ...entry, updated_at: new Date().toISOString() };
+    await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date))
+      .set(data, { merge: true });
+    // Relit la version fusionnée pour renvoyer l'état complet (comme Supabase).
+    const s = await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date)).get();
+    const saved = { id: s.id, ...s.data() };
+    this._mergeCache(saved);
+    return saved;
+  }
+  async upsertEntries(entries) {
+    if (!entries || !entries.length) return [];
+    const now = new Date().toISOString();
+    await this._commit(entries.map((e) => ({
+      ref: this.db.collection('day_entries').doc(this._entryId(e.employee_id, e.entry_date)),
+      data: { ...e, updated_at: now },
+    })));
+    delete this._entriesCache[entries[0].employee_id];
+    return entries;
+  }
+
+  /* ---- Enfants ---- */
+  async listKids(includeArchived = false) {
+    const snap = await this.db.collection('kids').get();
+    return this._docs(snap)
+      .filter((k) => includeArchived || k.active !== false)
+      .sort((a, b) => ((a.last_name || '') + a.first_name).localeCompare((b.last_name || '') + b.first_name));
+  }
+  async addKid(first_name, last_name) {
+    first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
+    if (!first_name) throw new Error('Le prénom est requis.');
+    const ref = await this.db.collection('kids').add({
+      first_name, last_name, active: true, created_at: new Date().toISOString(),
+    });
+    return { id: ref.id, first_name, last_name, active: true };
+  }
+  async setKidActive(id, active) {
+    await this.db.collection('kids').doc(id).set({ active }, { merge: true });
+  }
+  async kidAttendanceForMonth(year, month) {
+    const p = Util.monthKey(year, month);
+    const snap = await this.db.collection('kid_attendance')
+      .where('entry_date', '>=', `${p}-01`).where('entry_date', '<=', `${p}-31`).get();
+    return this._docs(snap);
+  }
+  async setKidPresence(kid_id, entry_date, present) {
+    const ref = this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`);
+    if (present) await ref.set({ kid_id, entry_date });
+    else await ref.delete();
+  }
+  async allChildren() {
+    const snap = await this.db.collection('kid_attendance').get();
+    const byDate = {};
+    snap.docs.forEach((d) => { const dt = d.data().entry_date; byDate[dt] = (byDate[dt] || 0) + 1; });
+    return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
+  }
+
+  /* ---- RGPD ---- */
+  async purgeKidAttendanceBefore(beforeISO) {
+    const snap = await this.db.collection('kid_attendance').where('entry_date', '<', beforeISO).get();
+    await this._commit(snap.docs.map((d) => ({ ref: d.ref, delete: true })));
+    return snap.size;
+  }
+  async anonymizeKid(id) {
+    await this.db.collection('kids').doc(id)
+      .set({ first_name: 'Enfant', last_name: '#' + String(id).slice(0, 6), active: false }, { merge: true });
+  }
+
+  /* ---- Export / restauration ---- */
+  async exportAll() {
+    const get = async (c) => this._docs(await this.db.collection(c).get());
+    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance] = await Promise.all(
+      ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance'].map(get));
+    return { exported_at: new Date().toISOString(), mode: 'firebase',
+      profiles, months, day_entries, schedule_templates, kids, kid_attendance };
+  }
+  // Restaure une sauvegarde — y compris celle exportée depuis Supabase.
+  // Les identifiants d'employées diffèrent d'un hébergeur à l'autre : on les
+  // REMAPPE via l'email (puis le nom) vers les comptes Firebase existants.
+  async importAll(data) {
+    if (!data || typeof data !== 'object') throw new Error('Fichier de sauvegarde invalide.');
+    const here = await this.listProfiles();
+    const byEmail = {}, byName = {};
+    here.forEach((p) => {
+      if (p.email) byEmail[String(p.email).toLowerCase()] = p.id;
+      if (p.full_name) byName[String(p.full_name).toLowerCase()] = p.id;
+    });
+    const map = {};   // ancien id → nouvel id
+    (data.profiles || []).forEach((p) => {
+      const hit = byEmail[String(p.email || '').toLowerCase()] || byName[String(p.full_name || '').toLowerCase()];
+      if (hit) map[p.id] = hit;
+    });
+    const emp = (id) => map[id] || id;
+    const missing = new Set();
+    (data.day_entries || []).forEach((e) => { if (!map[e.employee_id]) missing.add(e.employee_id); });
+
+    const ops = [];
+    (data.kids || []).forEach((k) => ops.push({
+      ref: this.db.collection('kids').doc(String(k.id)),
+      data: { first_name: k.first_name || '', last_name: k.last_name || '', active: k.active !== false },
+    }));
+    (data.kid_attendance || []).forEach((a) => ops.push({
+      ref: this.db.collection('kid_attendance').doc(`${a.kid_id}_${a.entry_date}`),
+      data: { kid_id: String(a.kid_id), entry_date: a.entry_date },
+    }));
+    (data.schedule_templates || []).forEach((t) => ops.push({
+      ref: this.db.collection('schedule_templates').doc(emp(t.employee_id)),
+      data: { employee_id: emp(t.employee_id), slots: t.slots || {} },
+    }));
+    (data.months || []).forEach((m) => ops.push({
+      ref: this.db.collection('months').doc(this._monthId(emp(m.employee_id), m.year, m.month)),
+      data: { employee_id: emp(m.employee_id), year: m.year, month: m.month, status: m.status === 'validated' ? 'validated' : 'open' },
+    }));
+    (data.day_entries || []).forEach((e) => {
+      const id = emp(e.employee_id);
+      const { id: _drop, ...rest } = e;
+      ops.push({
+        ref: this.db.collection('day_entries').doc(this._entryId(id, e.entry_date)),
+        data: { ...rest, employee_id: id },
+      });
+    });
+    await this._commit(ops);
+    this._entriesCache = {}; this._profilesCache = null;
+    if (missing.size) {
+      throw new Error(`Import effectué, mais ${missing.size} employée(s) de la sauvegarde n'ont pas de compte ici. `
+        + 'Créez leurs comptes avec le MÊME email, puis relancez la restauration.');
+    }
+    return { total: ops.length };
+  }
+
+  /* ---- Temps réel ---- */
+  onChange(cb) {
+    ['day_entries', 'months', 'kids', 'kid_attendance', 'profiles', 'schedule_templates'].forEach((c) => {
+      this.db.collection(c).onSnapshot(
+        { includeMetadataChanges: false },
+        (snap) => {
+          if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
+          if (c === 'day_entries') this._entriesCache = {};
+          if (c === 'profiles') this._profilesCache = null;
+          cb();
+        },
+        (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));
+    });
+  }
+}
+
+/* ================================================================
  * Fabrique : choisit le bon store
+ * Priorité : Firebase → Supabase → démo (localStorage)
  * ================================================================ */
 async function createStore() {
+  // Choix forcé par l'URL (utile pendant une migration) :
+  //   ...?store=supabase  → ancien hébergement (pour exporter une sauvegarde)
+  //   ...?store=firebase  → nouvel hébergement   ·   ...?store=demo → données locales
+  const forced = new URLSearchParams(location.search).get('store');
+
+  if (forced === 'demo') {
+    const s = new DemoStore(); await s.init(); return { store: s, mode: 'demo' };
+  }
+  if (forced === 'supabase' && HAS_SUPABASE && window.supabase) {
+    const sb = window.supabase.createClient(
+      window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
+    const s = new SupabaseStore(sb); await s.init(); return { store: s, mode: 'cloud' };
+  }
+
+  if (HAS_FIREBASE && window.firebase && forced !== 'supabase') {
+    const app = firebase.apps && firebase.apps.length
+      ? firebase.app() : firebase.initializeApp(window.APP_CONFIG.FIREBASE_CONFIG);
+    const s = new FirebaseStore(app);
+    await s.init();
+    return { store: s, mode: 'firebase' };
+  }
   if (HAS_SUPABASE && window.supabase) {
     const sb = window.supabase.createClient(
       window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);

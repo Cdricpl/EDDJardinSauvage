@@ -1,5 +1,14 @@
 # Architecture technique — Application École des devoirs
 
+> ⚠️ **Document de conception initial (prototype).** Certains éléments décrits plus bas
+> ont évolué et **ne sont plus d'actualité** : le **verrouillage** de mois (remplacé par
+> la simple **validation** `open`/`validated`), le **journal d'audit** (`audit_log`), la
+> table `children_attendance` (remplacée par `kids` + `kid_attendance`), le **report de
+> solde SQL** (`carry_in_minutes`, `propagate_carry` — désormais **recalculé côté app**),
+> et les colonnes `kind`/`break_minutes`. Pour l'état **réel** du schéma et de la sécurité,
+> faire foi à **[`supabase/schema.sql`](../supabase/schema.sql)** et aux migrations
+> `supabase/migration_*.sql`. Voir aussi **[`confidentialite.md`](confidentialite.md)**.
+
 ## 1. Vue d'ensemble
 
 Application web **responsive**, hébergée en **frontend statique** (GitHub Pages) qui
