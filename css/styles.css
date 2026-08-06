@@ -172,7 +172,6 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
 .attend .daycell.weekend, .attend .daycol.weekend { background:#f7f2e8; }
 .attend .kidtot { background:#faf5ec; min-width:44px; }
 .attend tfoot td { background:#f2ead9; font-weight:700; }
-.attend input.pres { width:18px; height:18px; margin:0; accent-color:var(--primary); cursor:pointer; }
 /* Cellule de présence à 3 états (présent / absent / vide) */
 .attend .presbtn {
   width:26px; height:26px; padding:0; border:1px solid var(--border-strong); border-radius:6px;
@@ -248,7 +247,6 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
   .navbtn { white-space:nowrap; padding:10px 14px; font-size:14px; }
   input:not([type=checkbox]), select, button { min-height:44px; font-size:16px; }
   button.small { min-height:38px; }
-  .attend input.pres { width:22px; height:22px; }
   .attend .presbtn { width:30px; height:32px; font-size:16px; }
   .grid input.cell, .grid select.cell { min-height:38px; font-size:15px; }
   .grid select.cell.time { width:98px; }
