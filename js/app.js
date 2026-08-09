@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.09-4';
+const APP_VERSION = 'v2026.08.09-5';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -14,6 +14,7 @@ let SEL_EMP = null;                 // employée sélectionnée (vue admin)
 let APPLYING = false;               // garde anti-réentrance du pré-remplissage (feuille)
 let APPLYING_KIDS = false;          // garde anti-réentrance du pré-encodage des présences enfants
 let CHART = null;                   // instance Chart.js courante (détruite avant réutilisation)
+const PREFILLED_KIDS = new Set();   // mois déjà pré-encodés cette session (anti-boucle)
 let CUR = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 
 /* Le système démarre en janvier 2026 : aucun mois antérieur n'est accessible. */
@@ -69,9 +70,13 @@ function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Num
 function minToTime(min) { return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`; }
 // Liste des heures autorisées : uniquement les quarts d'heure (minutes 00/15/30/45).
 const TIME_LIST = (() => { const o = []; for (let m = 6 * 60; m <= 21 * 60; m += 15) o.push(minToTime(m)); return o; })();
+// Chaîne d'options construite UNE seule fois (la feuille du mois affiche ~120
+// menus de 61 options : la reconstruire à chaque fois coûtait cher au rendu).
+const TIME_OPTIONS_BASE = '<option value="">--:--</option>' +
+  TIME_LIST.map((t) => `<option value="${t}">${t}</option>`).join('');
 function timeOptionsHTML(value) {
-  return '<option value="">--:--</option>' +
-    TIME_LIST.map((t) => `<option value="${t}"${t === value ? ' selected' : ''}>${t}</option>`).join('');
+  if (!value) return TIME_OPTIONS_BASE;
+  return TIME_OPTIONS_BASE.replace(`<option value="${value}">`, `<option value="${value}" selected>`);
 }
 function timeSelect(k, date, value, disabled) {
   return `<select class="cell time" data-k="${k}" data-date="${date}" ${disabled ? 'disabled' : ''}>${timeOptionsHTML(value || '')}</select>`;
@@ -160,9 +165,9 @@ async function boot() {
   STORE.onChange(debounce(() => {
     if (!ME) return;
     const ae = document.activeElement;
-    if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.closest('#app')) return;
+    if (ae && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(ae.tagName) && ae.closest('#app')) return;
     render();
-  }, 400));
+  }, 800));
 
   ME = await STORE.getCurrentUser();
   if (ME) await afterLogin(); else renderLogin();
@@ -694,19 +699,24 @@ async function viewChildren() {
   // qu'à basculer les absences. Les mois passés ne sont pas remplis rétroactivement.
   const _now = new Date();
   const monthIsCurrentOrFuture = ymNum(CUR.y, CUR.m) >= ymNum(_now.getFullYear(), _now.getMonth() + 1);
-  if (monthIsCurrentOrFuture && !APPLYING_KIDS) {
+  const prefillKey = `${CUR.y}-${pad(CUR.m)}`;
+  // Verrou : on ne tente le pré-encodage qu'UNE fois par mois et par session.
+  // Indispensable : sinon un échec d'écriture (ou un retour temps réel) relancerait
+  // render() → pré-encodage → render()… en boucle, saturant l'appareil.
+  if (monthIsCurrentOrFuture && !APPLYING_KIDS && !PREFILLED_KIDS.has(prefillKey)) {
     const toWrite = [];
     kids.forEach((k) => days.forEach((day) => {
       if (!isExpected(k, day.dow)) return;
       if (stat.get(k.id + '|' + day.date)) return;   // déjà présent/absent → on ne touche pas
       toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
     }));
+    PREFILLED_KIDS.add(prefillKey);   // marqué comme tenté AVANT l'écriture (anti-boucle)
     if (toWrite.length) {
       APPLYING_KIDS = true;
       try { await STORE.setKidAttendances(toWrite); }
       catch (e) { console.error('[kids:auto-prefill]', e); }
       finally { APPLYING_KIDS = false; }
-      return render();   // redessine avec les présences pré-encodées
+      return render();   // redessine une seule fois avec les présences pré-encodées
     }
   }
 
@@ -791,7 +801,7 @@ async function viewChildren() {
     try {
       await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value,
         document.getElementById('kSchool').value, document.getElementById('kBirth').value, readDays());
-      toast('Enfant ajouté'); render();
+      PREFILLED_KIDS.clear(); toast('Enfant ajouté'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
   // Modifier un enfant : ouvre le formulaire pré-rempli (nom, école, naissance, jours).
@@ -819,7 +829,7 @@ async function viewChildren() {
       birthdate: document.getElementById('eBirth').value,
       days: [...app.querySelectorAll('input.ek:checked')].map((c) => Number(c.dataset.w)),
     };
-    try { await STORE.setKidInfo(id, info); toast('Fiche enfant modifiée'); render(); }
+    try { await STORE.setKidInfo(id, info); PREFILLED_KIDS.clear(); toast('Fiche enfant modifiée'); render(); }
     catch (e) { document.getElementById('eMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
   // Retirer un enfant (archivage : données conservées).
