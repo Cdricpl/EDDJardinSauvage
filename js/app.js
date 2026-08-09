@@ -6,13 +6,14 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.09-3';
+const APP_VERSION = 'v2026.08.09-4';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
 let SEL_EMP = null;                 // employée sélectionnée (vue admin)
 let APPLYING = false;               // garde anti-réentrance du pré-remplissage (feuille)
 let APPLYING_KIDS = false;          // garde anti-réentrance du pré-encodage des présences enfants
+let CHART = null;                   // instance Chart.js courante (détruite avant réutilisation)
 let CUR = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 
 /* Le système démarre en janvier 2026 : aucun mois antérieur n'est accessible. */
@@ -287,6 +288,9 @@ function wireToolbar() {
  * ================================================================ */
 async function render() {
   const map = { sheet: viewSheet, recap: viewRecap, children: viewChildren, stats: viewStats, employees: viewEmployees };
+  // Libère le graphique avant tout nouveau rendu (il sera recréé par viewStats si besoin) :
+  // évite d'accumuler des instances Chart.js orphelines en mémoire.
+  if (CHART) { try { CHART.destroy(); } catch {} CHART = null; }
   const bar = document.getElementById('loadbar');
   if (bar) bar.classList.add('on');
   try {
@@ -967,11 +971,13 @@ async function viewStats() {
     document.getElementById('statsPdfBtn').onclick = () => exportStatsPDF(stats, null, null);
     return;
   }
-  const chartMonthly = new Chart(document.getElementById('chartMonthly'), {
+  if (CHART) { try { CHART.destroy(); } catch {} }   // libère le graphique précédent (évite une fuite mémoire)
+  CHART = new Chart(document.getElementById('chartMonthly'), {
     type: 'bar',
     data: { labels: months.map((m) => m.short), datasets: [{ label: 'Moyenne/jour', data: months.map((m) => +m.avg.toFixed(1)), backgroundColor: '#2f9e44' }] },
     options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
+  const chartMonthly = CHART;
   document.getElementById('statsPdfBtn').onclick = () => exportStatsPDF(stats, null, chartMonthly);
 }
 
@@ -1303,9 +1309,14 @@ async function doLogout(auto) {
 
 /* ---------------- Déconnexion automatique après inactivité ---------------- */
 const IDLE_MINUTES = 15;
-let _idleTimer = null;
+let _idleTimer = null, _idleLast = 0;
 function resetIdleTimer() {
   if (!ME) return;
+  // Throttle : au plus une réinitialisation toutes les 5 s (évite de recréer un
+  // timer à chaque pixel de défilement/souris sur mobile).
+  const now = Date.now();
+  if (now - _idleLast < 5000) return;
+  _idleLast = now;
   clearTimeout(_idleTimer);
   _idleTimer = setTimeout(() => doLogout(true), IDLE_MINUTES * 60 * 1000);
 }
