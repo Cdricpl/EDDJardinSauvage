@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.06-5';
+const APP_VERSION = 'v2026.08.09-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -50,16 +50,6 @@ function ageAt(birthdate, dateISO) {
   const m = d.getMonth() - b.getMonth();
   if (m < 0 || (m === 0 && d.getDate() < b.getDate())) a--;
   return a;
-}
-// Jours de la semaine (0=Dim..6=Sam) ↔ texte "lun,mar,jeu".
-function dowListToStr(arr) { return (arr || []).slice().sort().map((w) => DOW[w].toLowerCase()).join(','); }
-function parseDows(str) {
-  const map = { dim: 0, lun: 1, mar: 2, mer: 3, jeu: 4, ven: 5, sam: 6 };
-  const out = new Set();
-  (str || '').toLowerCase().split(/[\s,;/]+/).forEach((t) => {
-    t = t.slice(0, 3); if (t in map) out.add(map[t]);
-  });
-  return [...out].sort();
 }
 // Numéro de semaine ISO (pour compter les semaines d'ouverture).
 function isoWeekKey(dateISO) {
@@ -736,6 +726,23 @@ async function viewChildren() {
       </div>
       <div style="margin-top:6px"><label>Jours habituels de présence</label><div class="daychks">${dayCheckboxes}</div></div>
       <div id="kMsg"></div>
+      <div class="card hidden" id="editKidCard" style="background:#fbf6ec; margin-top:12px">
+        <h3 style="margin-top:0">✏️ Modifier la fiche de l'enfant</h3>
+        <input type="hidden" id="eId"/>
+        <div class="row" style="align-items:end; max-width:900px">
+          <div><label for="eFirst">Prénom</label><input id="eFirst"/></div>
+          <div><label for="eLast">Nom</label><input id="eLast"/></div>
+          <div><label for="eSchool">École</label><select id="eSchool">${schoolOptions('')}</select></div>
+          <div><label for="eBirth">Naissance</label><input id="eBirth" type="date"/></div>
+        </div>
+        <div style="margin-top:6px"><label>Jours habituels de présence</label>
+          <div class="daychks">${WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="ek" data-w="${w}"/> ${DOW[w]}</label>`).join(' ')}</div></div>
+        <div id="eMsg"></div>
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap">
+          <button class="green" id="eSave">💾 Enregistrer</button>
+          <button class="gray" id="eCancel">Annuler</button>
+        </div>
+      </div>
       <p class="muted small">Cliquez une case pour basculer <span class="pos">✓ présent</span> → <span class="neg">✗ absent</span> → vide.
         Les jours habituels de l'enfant sont marqués « · ». « ⤵️ Pré-remplir présents » remplit ces jours en une fois.</p>
       <div class="table-wrap" style="margin-top:8px"><table class="attend">
@@ -760,22 +767,34 @@ async function viewChildren() {
       toast('Enfant ajouté'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
-  // Modifier un enfant (nom, école, naissance, jours habituels).
-  app.querySelectorAll('[data-editkid]').forEach((b) => b.onclick = async () => {
+  // Modifier un enfant : ouvre le formulaire pré-rempli (nom, école, naissance, jours).
+  const editCard = document.getElementById('editKidCard');
+  app.querySelectorAll('[data-editkid]').forEach((b) => b.onclick = () => {
     const k = kids.find((x) => x.id === b.dataset.editkid) || {};
-    const first = prompt('Prénom :', k.first_name || '');
-    if (first == null) return;
-    const last = prompt('Nom :', k.last_name || '');
-    if (last == null) return;
-    const school = prompt(`École (${SCHOOLS.join(' / ')}) :`, k.school || '');
-    if (school == null) return;
-    const birthdate = prompt('Date de naissance (AAAA-MM-JJ) :', k.birthdate || '');
-    if (birthdate == null) return;
-    const daysStr = prompt('Jours habituels (ex : lun,mar,jeu) :', dowListToStr(k.days || []));
-    if (daysStr == null) return;
-    try { await STORE.setKidInfo(b.dataset.editkid, { first_name: first, last_name: last, school, birthdate, days: parseDows(daysStr) }); toast('Enfant modifié'); render(); }
-    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+    document.getElementById('eId').value = k.id || '';
+    document.getElementById('eFirst').value = k.first_name || '';
+    document.getElementById('eLast').value = k.last_name || '';
+    document.getElementById('eSchool').innerHTML = schoolOptions(k.school || '');
+    document.getElementById('eBirth').value = k.birthdate || '';
+    const set = new Set(k.days || []);
+    app.querySelectorAll('input.ek').forEach((c) => (c.checked = set.has(Number(c.dataset.w))));
+    document.getElementById('eMsg').innerHTML = '';
+    editCard.classList.remove('hidden');
+    editCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
+  document.getElementById('eCancel').onclick = () => editCard.classList.add('hidden');
+  document.getElementById('eSave').onclick = async () => {
+    const id = document.getElementById('eId').value;
+    const info = {
+      first_name: document.getElementById('eFirst').value,
+      last_name: document.getElementById('eLast').value,
+      school: document.getElementById('eSchool').value,
+      birthdate: document.getElementById('eBirth').value,
+      days: [...app.querySelectorAll('input.ek:checked')].map((c) => Number(c.dataset.w)),
+    };
+    try { await STORE.setKidInfo(id, info); toast('Fiche enfant modifiée'); render(); }
+    catch (e) { document.getElementById('eMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
+  };
   // Retirer un enfant (archivage : données conservées).
   app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
     if (!confirm('Retirer cet enfant de la liste ? (ses présences passées restent comptées)')) return;
