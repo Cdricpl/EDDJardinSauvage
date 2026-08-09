@@ -6,12 +6,13 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.09-1';
+const APP_VERSION = 'v2026.08.09-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
 let SEL_EMP = null;                 // employée sélectionnée (vue admin)
-let APPLYING = false;               // garde anti-réentrance du pré-remplissage
+let APPLYING = false;               // garde anti-réentrance du pré-remplissage (feuille)
+let APPLYING_KIDS = false;          // garde anti-réentrance du pré-encodage des présences enfants
 let CUR = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 
 /* Le système démarre en janvier 2026 : aucun mois antérieur n'est accessible. */
@@ -682,6 +683,31 @@ async function viewChildren() {
     days.push({ d, dow, date: `${CUR.y}-${pad(CUR.m)}-${pad(d)}`, weekend: dow === 0 || dow === 6 });
   }
   const isExpected = (kid, dow) => Array.isArray(kid.days) && kid.days.includes(dow);
+
+  // Pré-encodage AUTOMATIQUE : sur le mois en cours, les jours habituels de chaque
+  // enfant (jusqu'à aujourd'hui) sont marqués « présent » s'ils ne sont pas déjà
+  // notés (on n'écrase jamais une présence ou une absence saisie). L'éducatrice
+  // n'a plus qu'à basculer les absences.
+  const _now = new Date();
+  const isCurrentMonth = CUR.y === _now.getFullYear() && CUR.m === _now.getMonth() + 1;
+  if (isCurrentMonth && !APPLYING_KIDS) {
+    const todayStr = todayISO();
+    const toWrite = [];
+    kids.forEach((k) => days.forEach((day) => {
+      if (day.date > todayStr) return;
+      if (!isExpected(k, day.dow)) return;
+      if (stat.get(k.id + '|' + day.date)) return;   // déjà présent/absent → on ne touche pas
+      toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
+    }));
+    if (toWrite.length) {
+      APPLYING_KIDS = true;
+      try { await STORE.setKidAttendances(toWrite); }
+      catch (e) { console.error('[kids:auto-prefill]', e); }
+      finally { APPLYING_KIDS = false; }
+      return render();   // redessine avec les présences pré-encodées
+    }
+  }
+
   const kidPresentCount = (kid) => days.reduce((n, day) => n + (getSt(kid.id, day.date) === 'present' ? 1 : 0), 0);
   const dayPresentCount = (day) => kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0);
   const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
