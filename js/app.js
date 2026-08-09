@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.09-2';
+const APP_VERSION = 'v2026.08.09-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -684,17 +684,15 @@ async function viewChildren() {
   }
   const isExpected = (kid, dow) => Array.isArray(kid.days) && kid.days.includes(dow);
 
-  // Pré-encodage AUTOMATIQUE : sur le mois en cours, les jours habituels de chaque
-  // enfant (jusqu'à aujourd'hui) sont marqués « présent » s'ils ne sont pas déjà
-  // notés (on n'écrase jamais une présence ou une absence saisie). L'éducatrice
-  // n'a plus qu'à basculer les absences.
+  // Pré-encodage AUTOMATIQUE : pour le mois affiché (courant ou à venir), TOUS les
+  // jours habituels de chaque enfant sont marqués « présent » s'ils ne sont pas déjà
+  // notés (on n'écrase jamais une présence/absence saisie). L'éducatrice n'a plus
+  // qu'à basculer les absences. Les mois passés ne sont pas remplis rétroactivement.
   const _now = new Date();
-  const isCurrentMonth = CUR.y === _now.getFullYear() && CUR.m === _now.getMonth() + 1;
-  if (isCurrentMonth && !APPLYING_KIDS) {
-    const todayStr = todayISO();
+  const monthIsCurrentOrFuture = ymNum(CUR.y, CUR.m) >= ymNum(_now.getFullYear(), _now.getMonth() + 1);
+  if (monthIsCurrentOrFuture && !APPLYING_KIDS) {
     const toWrite = [];
     kids.forEach((k) => days.forEach((day) => {
-      if (day.date > todayStr) return;
       if (!isExpected(k, day.dow)) return;
       if (stat.get(k.id + '|' + day.date)) return;   // déjà présent/absent → on ne touche pas
       toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
@@ -741,8 +739,7 @@ async function viewChildren() {
 
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
-      <div class="row-between"><h2 style="margin:0">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
-        <button class="small" id="prefillBtn" title="Marque « présent » les jours habituels de chaque enfant (jusqu'à aujourd'hui), sans écraser les absences déjà notées">⤵️ Pré-remplir présents</button></div>
+      <h2 style="margin:0 0 4px">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
       <div class="row" style="align-items:end; max-width:900px">
         <div><label for="kFirst">Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
         <div><label for="kLast">Nom</label><input id="kLast" placeholder="Nom"/></div>
@@ -769,8 +766,8 @@ async function viewChildren() {
           <button class="gray" id="eCancel">Annuler</button>
         </div>
       </div>
-      <p class="muted small">Cliquez une case pour basculer <span class="pos">✓ présent</span> → <span class="neg">✗ absent</span> → vide.
-        Les jours habituels de l'enfant sont marqués « · ». « ⤵️ Pré-remplir présents » remplit ces jours en une fois.</p>
+      <p class="muted small">Les jours habituels de chaque enfant sont <strong>pré-encodés « présent » automatiquement</strong>.
+        Cliquez une case pour basculer <span class="pos">✓ présent</span> → <span class="neg">✗ absent</span> → vide.</p>
       <div class="table-wrap" style="margin-top:8px"><table class="attend">
         <caption class="sr-only">Présences et absences des enfants pour ${monthName(CUR.y, CUR.m)}.</caption>
         <thead><tr><th scope="col" class="kidname">Enfant</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr></thead>
@@ -856,20 +853,6 @@ async function viewChildren() {
     catch (e) { if (cur) stat.set(key, cur); else stat.delete(key); toast('Erreur : ' + e.message, 'error'); render(); }
   });
 
-  // Pré-remplir « présent » les jours habituels (jusqu'à aujourd'hui), sans écraser l'existant.
-  document.getElementById('prefillBtn').onclick = async () => {
-    const todayStr = todayISO();
-    const toWrite = [];
-    kids.forEach((k) => days.forEach((day) => {
-      if (day.date > todayStr) return;
-      if (!isExpected(k, day.dow)) return;
-      if (stat.get(k.id + '|' + day.date)) return;   // déjà marqué (présent/absent) → on ne touche pas
-      toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
-    }));
-    if (!toWrite.length) { toast('Rien à pré-remplir (jours habituels déjà marqués ou non définis).'); return; }
-    try { await STORE.setKidAttendances(toWrite); toast(`${toWrite.length} présence(s) pré-remplie(s).`); render(); }
-    catch (e) { toast('Erreur : ' + e.message, 'error'); }
-  };
 }
 
 /* ---------------- Vue : Statistiques (graphiques) ---------------- */
