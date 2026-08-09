@@ -3,6 +3,11 @@
  * Utilise Store (js/store.js) : fonctionne en mode démo ou cloud.
  * ------------------------------------------------------------------ */
 
+/* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
+ * l'appareil utilise bien la dernière version publiée.
+ * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
+const APP_VERSION = 'v2026.08.09-1';
+
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
 let SEL_EMP = null;                 // employée sélectionnée (vue admin)
@@ -17,12 +22,45 @@ function clampMonth() {
   if (ymNum(CUR.y, CUR.m) < ymNum(MIN_YM.y, MIN_YM.m)) { CUR.y = MIN_YM.y; CUR.m = MIN_YM.m; }
 }
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+/* Mode « en ligne » (données partagées + envoi d'emails de réinitialisation). */
+const isCloud = () => MODE === 'firebase';
 
 /* ---------------- Helpers temps ---------------- */
 const pad = (n) => String(n).padStart(2, '0');
 const daysInMonth = (y, m) => new Date(y, m, 0).getDate();
 const monthName = (y, m) => new Date(y, m - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+
+/* Implantations scolaires (critère d'agrément : au moins deux, dont les principales). */
+const SCHOOLS = ['Saint-Remacle', 'Athénée'];
+const REQUIRED_SCHOOLS = ['Saint-Remacle', 'Athénée'];
+function schoolOptions(value) {
+  const opts = ['<option value="">— non précisé —</option>']
+    .concat(SCHOOLS.map((s) => `<option value="${s}"${s === value ? ' selected' : ''}>${s}</option>`));
+  // Conserve une valeur personnalisée éventuelle (ex. import).
+  if (value && !SCHOOLS.includes(value)) opts.push(`<option value="${value}" selected>${value}</option>`);
+  return opts.join('');
+}
+// Âge (en années) à une date donnée, depuis une date de naissance "AAAA-MM-JJ".
+function ageAt(birthdate, dateISO) {
+  if (!birthdate || !dateISO) return null;
+  const b = new Date(birthdate), d = new Date(dateISO);
+  if (isNaN(b) || isNaN(d)) return null;
+  let a = d.getFullYear() - b.getFullYear();
+  const m = d.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && d.getDate() < b.getDate())) a--;
+  return a;
+}
+// Numéro de semaine ISO (pour compter les semaines d'ouverture).
+function isoWeekKey(dateISO) {
+  const d = new Date(dateISO); if (isNaN(d)) return dateISO;
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
+  return `${t.getUTCFullYear()}-S${String(week).padStart(2, '0')}`;
+}
 
 /* Encodage par heure de début/fin — menu déroulant limité aux quarts d'heure. */
 function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
@@ -55,10 +93,38 @@ function fmtHM(min) {
   min = Math.abs(Math.round(min));
   return `${sign}${Math.floor(min / 60)}h${pad(min % 60)}`;
 }
+// Écart signé : « + » explicite pour le positif (indice non basé uniquement sur la couleur).
+function fmtDelta(min) { return !min ? '—' : (min > 0 ? '+' : '') + fmtHM(min); }
 function toast(msg, kind = 'ok') {
   const t = document.getElementById('toast');
   t.textContent = msg; t.className = 'toast ' + kind; t.style.display = 'block';
   clearTimeout(t._t); t._t = setTimeout(() => (t.style.display = 'none'), 3000);
+}
+
+/* ---------------- Téléchargement de fichiers (sans dépendance) ---------------- */
+function downloadFile(filename, content, type) {
+  const blob = new Blob([content], { type: type || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// Transforme un tableau de lignes (tableaux) en CSV (séparateur « ; » pour Excel FR).
+function toCSV(rows) {
+  const esc = (v) => {
+    const s = v == null ? '' : String(v);
+    return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  return '﻿' + rows.map((r) => r.map(esc).join(';')).join('\r\n'); // BOM = accents OK dans Excel
+}
+const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+// Sauvegarde complète (JSON) — partagée par la carte « Données » et le bouton 💾 de l'entête.
+async function backupJSON() {
+  try {
+    const data = await STORE.exportAll();
+    downloadFile(`edd-sauvegarde_${todayISO()}.json`, JSON.stringify(data, null, 2), 'application/json');
+    toast('Sauvegarde JSON téléchargée');
+  } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
 }
 
 /* ---------------- Calculs mensuels + solde reporté ---------------- */
@@ -82,8 +148,10 @@ async function boot() {
   clampMonth();
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
-  document.getElementById('modeBadge').textContent = MODE === 'cloud' ? '☁️ Cloud' : '🧪 Démo (local)';
-  document.getElementById('modeBadge').className = 'badge ' + (MODE === 'cloud' ? 'validated' : 'pending');
+  const vEl = document.getElementById('appVersion');
+  if (vEl) vEl.textContent = APP_VERSION;
+  document.getElementById('modeBadge').textContent = MODE === 'firebase' ? '🔥 Firebase' : '🧪 Démo (local)';
+  document.getElementById('modeBadge').className = 'badge ' + (MODE === 'firebase' ? 'validated' : 'pending');
 
   // Temps réel : re-rendu groupé (debounce) pour éviter les rendus en rafale,
   // et jamais pendant une saisie active (sinon on volerait le focus du champ).
@@ -107,9 +175,16 @@ async function afterLogin() {
   }
   VIEW = 'sheet';
   document.body.dataset.role = ME.role;   // thème couleur : admin=bleu, employée=vert
-  document.getElementById('login').style.display = 'none';
+  const loginEl = document.getElementById('login');
+  loginEl.style.display = 'none';
+  loginEl.innerHTML = '';   // retire le champ mot de passe du DOM (sinon le mobile propose de l'enregistrer en boucle)
   document.getElementById('appShell').style.display = 'block';
   document.getElementById('meName').textContent = ME.full_name + (ME.role === 'admin' ? ' (Admin)' : '');
+  // Bouton de sauvegarde rapide dans l'entête (accessible partout) — admin uniquement.
+  const backupBtn = document.getElementById('backupBtn');
+  if (ME.role === 'admin') { backupBtn.style.display = ''; backupBtn.onclick = () => backupJSON(); }
+  else { backupBtn.style.display = 'none'; }
+  startIdleTimer();   // déconnexion auto après 15 min d'inactivité
   buildNav();
   render();
 }
@@ -125,20 +200,28 @@ function renderLogin() {
       <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
       <h1>EDD Jardin Sauvage</h1>
       <p class="muted">Gestion des horaires, prestations et présences</p>
-      <label>Email</label>
-      <input id="email" type="email" value="${MODE === 'demo' ? 'admin@ecole.be' : ''}" placeholder="votre email" />
-      <label>Mot de passe</label>
-      <input id="pwd" type="password" value="${MODE === 'demo' ? 'admin123' : ''}" placeholder="votre mot de passe" />
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" value="${MODE === 'demo' ? 'admin@ecole.be' : ''}" placeholder="votre email" />
+      <label for="pwd">Mot de passe</label>
+      <input id="pwd" type="password" autocomplete="current-password" value="${MODE === 'demo' ? 'admin123' : ''}" placeholder="votre mot de passe" />
       <div id="loginMsg"></div>
       <button class="big" id="loginBtn">Se connecter</button>
       <p class="center" style="margin-top:10px"><a href="#" id="forgotLink" class="muted small">Mot de passe oublié ?</a></p>
       ${MODE === 'demo' ? `<p class="muted small" style="margin-top:6px">
         Mode démo — comptes de test :<br>
         admin@ecole.be / admin123 · flora@ecole.be / flora123 · sarah@ecole.be / sarah123</p>` : ''}
+      <p class="muted small" id="loginVersion" style="margin-top:14px">${APP_VERSION}</p>
     </div>`;
   const loginMsg = (html, kind = 'error') => {
     document.getElementById('loginMsg').innerHTML = `<div class="msg ${kind}">${html}</div>`;
   };
+  // Message informatif après une déconnexion automatique pour inactivité.
+  try {
+    if (sessionStorage.getItem('autoLogout')) {
+      sessionStorage.removeItem('autoLogout');
+      loginMsg('Vous avez été déconnecté après 15 minutes d\'inactivité. Reconnectez-vous.', 'ok');
+    }
+  } catch {}
   const go = async () => {
     try {
       ME = await STORE.signIn(document.getElementById('email').value.trim(), document.getElementById('pwd').value);
@@ -151,7 +234,7 @@ function renderLogin() {
     e.preventDefault();
     const email = document.getElementById('email').value.trim();
     if (!email) { loginMsg('Entrez d\'abord votre email, puis cliquez sur « Mot de passe oublié ».'); return; }
-    if (MODE !== 'cloud') { loginMsg('La réinitialisation par email est disponible en mode cloud uniquement.'); return; }
+    if (!isCloud()) { loginMsg('La réinitialisation par email est disponible en mode cloud uniquement.'); return; }
     try {
       await STORE.sendPasswordReset(email);
       loginMsg('Un email de réinitialisation a été envoyé à ' + email + ' (pensez à vérifier les spams).', 'ok');
@@ -178,18 +261,23 @@ async function toolbar(showEmployee) {
     empSel = `<select id="empSel">${profs.map((p) =>
       `<option value="${p.id}" ${p.id === SEL_EMP ? 'selected' : ''}>${p.full_name}${p.active ? '' : ' (archivée)'}</option>`).join('')}</select>`;
   }
+  const now = new Date();
+  const onCurrentMonth = CUR.y === now.getFullYear() && CUR.m === now.getMonth() + 1;
   return `<div class="toolbar">
     <button class="small" id="prevM" ${atOrBeforeMin() ? 'disabled title="Janvier 2026 = premier mois"' : ''}>◀</button>
     <strong style="min-width:170px;text-align:center;text-transform:capitalize">${monthName(CUR.y, CUR.m)}</strong>
     <button class="small" id="nextM">▶</button>
+    <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours">📅 Aujourd'hui</button>
     ${empSel}
     <span style="flex:1"></span>
   </div>`;
 }
 function wireToolbar() {
-  const p = document.getElementById('prevM'), n = document.getElementById('nextM'), s = document.getElementById('empSel');
+  const p = document.getElementById('prevM'), n = document.getElementById('nextM'),
+        t = document.getElementById('todayM'), s = document.getElementById('empSel');
   if (p) p.onclick = () => { if (atOrBeforeMin()) return; CUR.m--; if (CUR.m < 1) { CUR.m = 12; CUR.y--; } clampMonth(); render(); };
   if (n) n.onclick = () => { CUR.m++; if (CUR.m > 12) { CUR.m = 1; CUR.y++; } render(); };
+  if (t) t.onclick = () => { const d = new Date(); CUR.y = d.getFullYear(); CUR.m = d.getMonth() + 1; clampMonth(); render(); };
   if (s) s.onchange = () => { SEL_EMP = s.value; render(); };
 }
 
@@ -254,7 +342,7 @@ async function viewSheet() {
   for (let d = 1; d <= dim; d++) {
     const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
     const dow = new Date(CUR.y, CUR.m - 1, d).getDay();
-    const e = byDate[date] || { planned_start: '', planned_end: '', start_time: '', end_time: '', worked_touched: false, kind: 'normal', justification: '' };
+    const e = byDate[date] || { planned_start: '', planned_end: '', start_time: '', end_time: '', worked_touched: false, justification: '' };
     const planned = plannedMinutes(e);
     const worked = effectiveWorked(e);
     const delta = worked - planned;
@@ -273,7 +361,7 @@ async function viewSheet() {
       <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked)}</td>
       <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked)}</td>
       <td class="nowrap"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
-      <td class="${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${delta ? fmtHM(delta) : '—'}</td>
+      <td class="${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
       <td><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${(e.justification || '').replace(/"/g, '&quot;')}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
     </tr>`;
   }
@@ -298,7 +386,7 @@ async function viewSheet() {
       ${!monthEditable && empId === ME.id && ME.role === 'employee'
         ? '<div class="msg">Ce mois est validé : vous ne pouvez plus le modifier. Contactez l\'administrateur si besoin.</div>' : ''}
       <div class="table-wrap">
-        <table class="grid">
+        <table class="grid" id="sheetTable">
           <thead>
             <tr>
               <th rowspan="2">Date</th><th rowspan="2">Jour</th>
@@ -317,7 +405,7 @@ async function viewSheet() {
       <div class="stat-grid" style="margin-top:16px">
         <div class="stat"><div class="num" id="tPlanned">${fmtHM(sum.planned)}</div><div class="lbl">Total prévu</div></div>
         <div class="stat"><div class="num" id="tWorked">${fmtHM(sum.worked)}</div><div class="lbl">Total presté</div></div>
-        <div class="stat"><div class="num ${sum.delta >= 0 ? 'pos' : 'neg'}" id="tDelta">${fmtHM(sum.delta)}</div><div class="lbl">Écart du mois</div></div>
+        <div class="stat"><div class="num ${sum.delta >= 0 ? 'pos' : 'neg'}" id="tDelta">${fmtDelta(sum.delta)}</div><div class="lbl">Écart du mois</div></div>
         <div class="stat"><div class="num" id="tCarry">${fmtHM(sum.carryIn)}</div><div class="lbl">Solde reporté</div></div>
         <div class="stat"><div class="num ${sum.closing >= 0 ? 'pos' : 'neg'}" id="tClosing">${fmtHM(sum.closing)}</div><div class="lbl">Solde cumulé</div></div>
       </div>
@@ -325,7 +413,7 @@ async function viewSheet() {
         <span class="legend"><span class="sw grp-plan-h"></span> Horaire prévu (défini par l'admin)</span>
         <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employée)</span>
         <span class="legend"><span class="dot">●</span> jour modifié</span>
-        <span class="legend"><span class="pos">▲ heures sup.</span> / <span class="neg">▼ à récupérer</span></span><br>
+        <span class="legend"><span class="pos">▲ vert = heures supplémentaires</span> / <span class="neg">▼ rouge = heures récupérées</span></span><br>
         Heures par tranches de 15 min. Enregistrement automatique.
       </p>
     </div>`;
@@ -351,7 +439,7 @@ async function viewSheet() {
     tr.children[0].innerHTML = `${dd}/${mo}${modified ? ' <span class="dot" title="Jour modifié">●</span>' : ''}`;
     tr.children[6].innerHTML = `<strong>${worked ? fmtHM(worked) : '—'}</strong>`;   // Presté
     const ec = tr.children[7];                                                       // Écart
-    ec.textContent = delta ? fmtHM(delta) : '—';
+    ec.textContent = fmtDelta(delta);
     ec.className = delta > 0 ? 'pos' : delta < 0 ? 'neg' : '';
     const jinp = tr.children[8].querySelector('input');                              // Justification
     if (jinp) { jinp.classList.toggle('err', needJustif); jinp.placeholder = needJustif ? 'Justification requise' : ''; }
@@ -365,7 +453,7 @@ async function viewSheet() {
     }
     const delta = W - P, closing = baseCarry + delta;
     setTile('tPlanned', fmtHM(P)); setTile('tWorked', fmtHM(W));
-    setTile('tDelta', fmtHM(delta), delta >= 0); setTile('tCarry', fmtHM(baseCarry));
+    setTile('tDelta', fmtDelta(delta), delta >= 0); setTile('tCarry', fmtHM(baseCarry));
     setTile('tClosing', fmtHM(closing), closing >= 0);
     const wb = document.getElementById('warnBanner');
     if (wb) { wb.textContent = warn + ' jour(s) avec un écart non justifié.'; wb.style.display = warn ? '' : 'none'; }
@@ -529,6 +617,8 @@ async function applyTemplate(empId, y, m, slots, silent) {
   const existing = {};
   (await STORE.entriesForMonth(empId, y, m)).forEach((e) => (existing[e.entry_date] = e));
   const dim = daysInMonth(y, m);
+  // On construit tous les jours à écrire puis on les envoie en UN SEUL lot (rapide, moins de latence).
+  const patches = [];
   for (let d = 1; d <= dim; d++) {
     const w = new Date(y, m - 1, d).getDay();
     const slot = slots[w];
@@ -538,8 +628,9 @@ async function applyTemplate(empId, y, m, slots, silent) {
     const ex = existing[date] || {};
     const patch = { employee_id: empId, entry_date: date, planned_start: slot.start, planned_end: slot.end, planned_minutes: dur };
     if (!ex.worked_touched) { patch.start_time = slot.start; patch.end_time = slot.end; patch.worked_minutes = dur; }
-    await STORE.upsertEntry(patch);
+    patches.push(patch);
   }
+  if (patches.length) await STORE.upsertEntries(patches);
   if (!silent) { toast('Horaire type appliqué au mois'); render(); }
 }
 
@@ -547,28 +638,32 @@ async function applyTemplate(empId, y, m, slots, silent) {
 async function viewRecap() {
   const app = document.getElementById('app');
   const profs = (await STORE.listProfiles()).filter((p) => ME.role === 'admin' ? p.role === 'employee' : p.id === ME.id);
-  let rows = '';
-  for (const p of profs) {
-    const s = await monthSummary(p.id, CUR.y, CUR.m);
-    const mo = await STORE.getMonth(p.id, CUR.y, CUR.m);
-    rows += `<tr>
+  // Chargement des soldes EN PARALLÈLE (récap plus rapide que l'attente séquentielle).
+  const data = await Promise.all(profs.map(async (p) => ({
+    p, s: await monthSummary(p.id, CUR.y, CUR.m), mo: await STORE.getMonth(p.id, CUR.y, CUR.m),
+  })));
+  const rows = data.map(({ p, s, mo }) => `<tr>
       <td>${p.full_name}${p.active ? '' : ' <span class="badge open">archivée</span>'}</td>
       <td>${fmtHM(s.planned)}</td><td>${fmtHM(s.worked)}</td>
-      <td class="${s.delta >= 0 ? 'pos' : 'neg'}">${fmtHM(s.delta)}</td>
+      <td class="${s.delta >= 0 ? 'pos' : 'neg'}">${fmtDelta(s.delta)}</td>
       <td>${fmtHM(s.carryIn)}</td>
-      <td class="${s.closing >= 0 ? 'pos' : 'neg'}"><strong>${fmtHM(s.closing)}</strong></td>
+      <td class="${s.closing >= 0 ? 'pos' : 'neg'}"><strong>${fmtDelta(s.closing)}</strong></td>
       <td>${{ open: 'En cours', validated: '✓ Validé' }[mo.status] || 'En cours'}</td>
-    </tr>`;
-  }
+    </tr>`).join('');
+  const pdfBtn = ME.role === 'admin' ? '<button class="small" id="recapPdfBtn">🖨️ Export PDF récap</button>' : '';
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
-      <h2>Récapitulatif — ${monthName(CUR.y, CUR.m)}</h2>
+      <div class="row-between"><h2 style="margin:0">Récapitulatif — ${monthName(CUR.y, CUR.m)}</h2>${pdfBtn}</div>
       <div class="table-wrap"><table>
         <thead><tr><th>Employée</th><th>Prévu</th><th>Presté</th><th>Écart mois</th><th>Solde reporté</th><th>Solde cumulé</th><th>Statut</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <p class="muted small">Le solde cumulé = solde reporté + écart du mois. Un solde positif = heures supplémentaires ; négatif = heures à récupérer.</p>
     </div>`;
   wireToolbar();
+  if (ME.role === 'admin') {
+    const b = document.getElementById('recapPdfBtn');
+    if (b) b.onclick = () => exportRecapPDF(data).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+  }
 }
 
 /* ---------------- Vue : Enfants (liste nominative + présences) ---------------- */
@@ -576,62 +671,129 @@ async function viewChildren() {
   const app = document.getElementById('app');
   const kids = await STORE.listKids();
   const att = await STORE.kidAttendanceForMonth(CUR.y, CUR.m);
-  const present = new Set(att.map((a) => a.kid_id + '|' + a.entry_date));
+  // Statut par (kid,date) : 'present' | 'absent'. Ancien enregistrement sans statut = présent.
+  const stat = new Map();
+  att.forEach((a) => stat.set(a.kid_id + '|' + a.entry_date, a.status === 'absent' ? 'absent' : 'present'));
+  const getSt = (kid, date) => stat.get(kid + '|' + date);
   const dim = daysInMonth(CUR.y, CUR.m);
   const days = [];
   for (let d = 1; d <= dim; d++) {
     const dow = new Date(CUR.y, CUR.m - 1, d).getDay();
     days.push({ d, dow, date: `${CUR.y}-${pad(CUR.m)}-${pad(d)}`, weekend: dow === 0 || dow === 6 });
   }
-  const kidPresentCount = (kid) => days.reduce((n, day) => n + (present.has(kid.id + '|' + day.date) ? 1 : 0), 0);
-  const dayPresentCount = (day) => kids.reduce((n, k) => n + (present.has(k.id + '|' + day.date) ? 1 : 0), 0);
+  const isExpected = (kid, dow) => Array.isArray(kid.days) && kid.days.includes(dow);
+  const kidPresentCount = (kid) => days.reduce((n, day) => n + (getSt(kid.id, day.date) === 'present' ? 1 : 0), 0);
+  const dayPresentCount = (day) => kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0);
+  const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
 
-  // En-têtes des jours (numéro + initiale du jour).
   const headDays = days.map((day) =>
-    `<th class="daycol${day.weekend ? ' weekend' : ''}"><div>${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
+    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}"><div>${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
 
+  const kidLabel = (k) => `${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name}`.trim();
+  const cellHtml = (k, day) => {
+    const st = getSt(k.id, day.date);
+    const expected = isExpected(k, day.dow);
+    const cls = st === 'present' ? 'pres-p' : st === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : '');
+    const sym = st === 'present' ? '✓' : st === 'absent' ? '✗' : (expected ? '·' : '');
+    const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${st === 'present' ? 'présent' : st === 'absent' ? 'absent' : 'non marqué'}`;
+    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absent → vide" aria-label="${lbl.replace(/"/g, '&quot;')}">${sym}</button></td>`;
+  };
   const kidRows = kids.length ? kids.map((k) => {
-    const cells = days.map((day) => {
-      const on = present.has(k.id + '|' + day.date);
-      return `<td class="daycell${day.weekend ? ' weekend' : ''}">
-        <input type="checkbox" class="pres" data-kid="${k.id}" data-date="${day.date}" ${on ? 'checked' : ''}/></td>`;
-    }).join('');
+    const cells = days.map((day) => cellHtml(k, day)).join('');
+    const jours = (k.days || []).length ? `<span class="muted small nowrap"> · ${(k.days || []).slice().sort().map((w) => DOW[w]).join(' ')}</span>` : '';
     return `<tr>
-      <td class="kidname nowrap">${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name}
-        <button class="linkx" data-arch="${k.id}" title="Retirer de la liste">✕</button></td>
+      <th scope="row" class="kidname nowrap">${kidLabel(k)}${jours}
+        ${ME.role === 'admin' ? `<button class="linkx" data-editkid="${k.id}" aria-label="Modifier ${kidLabel(k).replace(/"/g, '&quot;')}" title="Modifier (nom, école, naissance, jours)">✏️</button>
+        <button class="linkx" data-arch="${k.id}" aria-label="Retirer ${kidLabel(k).replace(/"/g, '&quot;')} de la liste" title="Retirer de la liste">✕</button>` : ''}</th>
       ${cells}
       <td class="kidtot"><strong id="kidtot_${k.id}">${kidPresentCount(k)}</strong></td>
     </tr>`;
   }).join('') : `<tr><td colspan="${dim + 2}" class="muted" style="padding:16px">Aucun enfant. Ajoutez-en ci-dessus.</td></tr>`;
 
   const footCells = days.map((day) => `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong id="daytot_${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+  const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="kd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
 
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
-      <h2>🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
-      <div class="row" style="align-items:end; max-width:560px">
-        <div><label>Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
-        <div><label>Nom</label><input id="kLast" placeholder="Nom"/></div>
-        <div style="flex:0"><label>&nbsp;</label><button id="kAdd">+ Ajouter</button></div>
+      <div class="row-between"><h2 style="margin:0">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
+        <button class="small" id="prefillBtn" title="Marque « présent » les jours habituels de chaque enfant (jusqu'à aujourd'hui), sans écraser les absences déjà notées">⤵️ Pré-remplir présents</button></div>
+      <div class="row" style="align-items:end; max-width:900px">
+        <div><label for="kFirst">Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
+        <div><label for="kLast">Nom</label><input id="kLast" placeholder="Nom"/></div>
+        <div><label for="kSchool">École</label><select id="kSchool">${schoolOptions('')}</select></div>
+        <div><label for="kBirth">Naissance</label><input id="kBirth" type="date"/></div>
+        <div style="flex:0"><label aria-hidden="true">&nbsp;</label><button id="kAdd">+ Ajouter</button></div>
       </div>
+      <div style="margin-top:6px"><label>Jours habituels de présence</label><div class="daychks">${dayCheckboxes}</div></div>
       <div id="kMsg"></div>
-      <p class="muted small">Cochez les jours de présence de chaque enfant. Une case décochée un jour d'ouverture = absence.</p>
+      <div class="card hidden" id="editKidCard" style="background:#fbf6ec; margin-top:12px">
+        <h3 style="margin-top:0">✏️ Modifier la fiche de l'enfant</h3>
+        <input type="hidden" id="eId"/>
+        <div class="row" style="align-items:end; max-width:900px">
+          <div><label for="eFirst">Prénom</label><input id="eFirst"/></div>
+          <div><label for="eLast">Nom</label><input id="eLast"/></div>
+          <div><label for="eSchool">École</label><select id="eSchool">${schoolOptions('')}</select></div>
+          <div><label for="eBirth">Naissance</label><input id="eBirth" type="date"/></div>
+        </div>
+        <div style="margin-top:6px"><label>Jours habituels de présence</label>
+          <div class="daychks">${WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="ek" data-w="${w}"/> ${DOW[w]}</label>`).join(' ')}</div></div>
+        <div id="eMsg"></div>
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap">
+          <button class="green" id="eSave">💾 Enregistrer</button>
+          <button class="gray" id="eCancel">Annuler</button>
+        </div>
+      </div>
+      <p class="muted small">Cliquez une case pour basculer <span class="pos">✓ présent</span> → <span class="neg">✗ absent</span> → vide.
+        Les jours habituels de l'enfant sont marqués « · ». « ⤵️ Pré-remplir présents » remplit ces jours en une fois.</p>
       <div class="table-wrap" style="margin-top:8px"><table class="attend">
-        <thead><tr><th class="kidname">Enfant</th>${headDays}<th class="kidtot">Prés.</th></tr></thead>
+        <caption class="sr-only">Présences et absences des enfants pour ${monthName(CUR.y, CUR.m)}.</caption>
+        <thead><tr><th scope="col" class="kidname">Enfant</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr></thead>
         <tbody>${kidRows}</tbody>
-        <tfoot><tr><td class="kidname">Total / jour</td>${footCells}<td class="kidtot"><strong>${att.length}</strong></td></tr></tfoot>
+        <tfoot><tr><th scope="row" class="kidname">Total présents / jour</th>${footCells}<td class="kidtot"><strong id="grandtot">${totalPresent}</strong></td></tr></tfoot>
       </table></div>
-      <p class="muted small">« Prés. » = nombre de jours de présence de l'enfant ce mois-ci. La moyenne annuelle est dans l'onglet 📈 Statistiques.</p>
+      <p class="muted small">« Prés. » = jours de présence de l'enfant ce mois-ci. La moyenne annuelle est dans l'onglet 📈 Statistiques.</p>
     </div>`;
   wireToolbar();
+
+  const readDays = () => [...app.querySelectorAll('input.kd:checked')].map((c) => Number(c.dataset.w));
+  const daysLabel = (arr) => (arr || []).slice().sort().map((w) => DOW[w]).join(' ') || '(aucun)';
 
   // Ajout d'un enfant.
   document.getElementById('kAdd').onclick = async () => {
     const msg = document.getElementById('kMsg');
     try {
-      await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value);
+      await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value,
+        document.getElementById('kSchool').value, document.getElementById('kBirth').value, readDays());
       toast('Enfant ajouté'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
+  };
+  // Modifier un enfant : ouvre le formulaire pré-rempli (nom, école, naissance, jours).
+  const editCard = document.getElementById('editKidCard');
+  app.querySelectorAll('[data-editkid]').forEach((b) => b.onclick = () => {
+    const k = kids.find((x) => x.id === b.dataset.editkid) || {};
+    document.getElementById('eId').value = k.id || '';
+    document.getElementById('eFirst').value = k.first_name || '';
+    document.getElementById('eLast').value = k.last_name || '';
+    document.getElementById('eSchool').innerHTML = schoolOptions(k.school || '');
+    document.getElementById('eBirth').value = k.birthdate || '';
+    const set = new Set(k.days || []);
+    app.querySelectorAll('input.ek').forEach((c) => (c.checked = set.has(Number(c.dataset.w))));
+    document.getElementById('eMsg').innerHTML = '';
+    editCard.classList.remove('hidden');
+    editCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  document.getElementById('eCancel').onclick = () => editCard.classList.add('hidden');
+  document.getElementById('eSave').onclick = async () => {
+    const id = document.getElementById('eId').value;
+    const info = {
+      first_name: document.getElementById('eFirst').value,
+      last_name: document.getElementById('eLast').value,
+      school: document.getElementById('eSchool').value,
+      birthdate: document.getElementById('eBirth').value,
+      days: [...app.querySelectorAll('input.ek:checked')].map((c) => Number(c.dataset.w)),
+    };
+    try { await STORE.setKidInfo(id, info); toast('Fiche enfant modifiée'); render(); }
+    catch (e) { document.getElementById('eMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
   // Retirer un enfant (archivage : données conservées).
   app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
@@ -639,18 +801,49 @@ async function viewChildren() {
     try { await STORE.setKidActive(b.dataset.arch, false); toast('Enfant retiré'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
-  // Cocher/décocher une présence — sans re-rendu (mise à jour ciblée des totaux).
-  app.querySelectorAll('input.pres').forEach((el) => el.addEventListener('change', async () => {
-    const kid = el.dataset.kid, date = el.dataset.date, on = el.checked;
-    const key = kid + '|' + date;
-    if (on) present.add(key); else present.delete(key);
-    // Totaux ligne + colonne + total général, en place.
-    const dNum = Number(date.slice(8));
-    const kt = document.getElementById('kidtot_' + kid); if (kt) kt.textContent = kids.reduce ? days.reduce((n, day) => n + (present.has(kid + '|' + day.date) ? 1 : 0), 0) : 0;
-    const dt = document.getElementById('daytot_' + dNum); if (dt) dt.textContent = kids.reduce((n, k) => n + (present.has(k.id + '|' + date) ? 1 : 0), 0);
-    try { await STORE.setKidPresence(kid, date, on); }
-    catch (e) { el.checked = !on; if (on) present.delete(key); else present.add(key); toast('Erreur : ' + e.message, 'error'); }
-  }));
+
+  const setGrandTotal = () => {
+    const el = document.getElementById('grandtot');
+    if (el) el.textContent = days.reduce((s, day) => s + kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0), 0);
+  };
+  // Cellule à 3 états : présent (✓) → absent (✗) → vide. Mise à jour ciblée.
+  app.querySelectorAll('button.presbtn').forEach((el) => el.onclick = async () => {
+    const kid = el.dataset.kid, date = el.dataset.date, key = kid + '|' + date;
+    const cur = stat.get(key);                              // 'present' | 'absent' | undefined
+    const next = cur === 'present' ? 'absent' : cur === 'absent' ? null : 'present';
+    if (next) stat.set(key, next); else stat.delete(key);
+    // Rendu de la cellule.
+    el.classList.remove('pres-p', 'pres-a', 'pres-exp');
+    const day = days.find((d) => d.date === date);
+    const kk = kids.find((k) => k.id === kid);
+    const expected = kk && isExpected(kk, day.dow);
+    el.textContent = next === 'present' ? '✓' : next === 'absent' ? '✗' : (expected ? '·' : '');
+    const cls = next === 'present' ? 'pres-p' : next === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : '');
+    if (cls) el.classList.add(cls);
+    // Totaux en place.
+    const kt = document.getElementById('kidtot_' + kid);
+    if (kt) kt.textContent = days.reduce((n, d) => n + (getSt(kid, d.date) === 'present' ? 1 : 0), 0);
+    const dt = document.getElementById('daytot_' + Number(date.slice(8)));
+    if (dt) dt.textContent = kids.reduce((n, k) => n + (getSt(k.id, date) === 'present' ? 1 : 0), 0);
+    setGrandTotal();
+    try { await STORE.setKidAttendance(kid, date, next); }
+    catch (e) { if (cur) stat.set(key, cur); else stat.delete(key); toast('Erreur : ' + e.message, 'error'); render(); }
+  });
+
+  // Pré-remplir « présent » les jours habituels (jusqu'à aujourd'hui), sans écraser l'existant.
+  document.getElementById('prefillBtn').onclick = async () => {
+    const todayStr = todayISO();
+    const toWrite = [];
+    kids.forEach((k) => days.forEach((day) => {
+      if (day.date > todayStr) return;
+      if (!isExpected(k, day.dow)) return;
+      if (stat.get(k.id + '|' + day.date)) return;   // déjà marqué (présent/absent) → on ne touche pas
+      toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
+    }));
+    if (!toWrite.length) { toast('Rien à pré-remplir (jours habituels déjà marqués ou non définis).'); return; }
+    try { await STORE.setKidAttendances(toWrite); toast(`${toWrite.length} présence(s) pré-remplie(s).`); render(); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  };
 }
 
 /* ---------------- Vue : Statistiques (graphiques) ---------------- */
@@ -674,6 +867,57 @@ async function viewStats() {
   }
   const stats = { dailyYear, annualTotal, annualDays: inYear.length, year: CUR.y };
 
+  // ---- Critères d'agrément (public accueilli + ouverture) — admin uniquement,
+  // car le calcul lit les prestations de toutes les employées (cloisonnées côté serveur).
+  let crit = null;
+  if (ME.role === 'admin') {
+  const kidsAll = await STORE.listKids(true);
+  const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
+  const att = await STORE.kidAttendanceForYear(CUR.y);
+  // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
+  const byDay = {};
+  att.forEach((a) => {
+    if (a.status === 'absent') return; // les absences ne comptent pas comme présence
+    const k = kidById[a.kid_id]; if (!k) return;
+    (byDay[a.entry_date] = byDay[a.entry_date] || { total: 0, eligible: 0 }).total++;
+    const age = ageAt(k.birthdate, a.entry_date);
+    if (age == null || (age >= 6 && age <= 15)) byDay[a.entry_date].eligible++;
+  });
+  const openDays = Object.keys(byDay);
+  const avgEligible = openDays.length
+    ? openDays.reduce((s, d) => s + byDay[d].eligible, 0) / openDays.length : 0;
+  // Écoles représentées parmi les enfants présents cette année.
+  const presentKidIds = new Set(att.filter((a) => a.status !== 'absent').map((a) => a.kid_id));
+  const schoolsPresent = new Set();
+  presentKidIds.forEach((id) => { const s = (kidById[id] || {}).school; if (s) schoolsPresent.add(s); });
+  const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
+  // Semaines d'ouverture : semaines ISO avec ≥ 2h de prestation (heures d'ouverture).
+  const entriesYear = await STORE.allEntriesForYear(CUR.y);
+  const weekMinutes = {};
+  entriesYear.forEach((e) => {
+    const w = effectiveWorked(e); if (!w) return;
+    const key = isoWeekKey(e.entry_date); weekMinutes[key] = (weekMinutes[key] || 0) + w;
+  });
+  const openWeeks = Object.values(weekMinutes).filter((min) => min >= 120).length;
+  const kidsNoBirth = kidsAll.filter((k) => k.active && !k.birthdate).length;
+  const kidsNoSchool = kidsAll.filter((k) => k.active && !k.school).length;
+
+  crit = [
+    { ok: avgEligible >= 8,
+      label: 'Au moins 8 enfants de 6 à 15 ans par jour (moyenne annuelle)',
+      val: `${avgEligible.toFixed(1)} enfant(s)/jour`,
+      note: kidsNoBirth ? `${kidsNoBirth} enfant(s) sans date de naissance (comptés par défaut)` : '' },
+    { ok: missingSchools.length === 0,
+      label: 'Enfants d’au moins deux implantations (Saint-Remacle et Athénée)',
+      val: schoolsPresent.size ? [...schoolsPresent].join(', ') : 'aucune renseignée',
+      note: missingSchools.length ? `manque : ${missingSchools.join(', ')}` : (kidsNoSchool ? `${kidsNoSchool} enfant(s) sans école` : '') },
+    { ok: openWeeks >= 20,
+      label: 'Ouvert ≥ 2 h/semaine sur au moins 20 semaines',
+      val: `${openWeeks} semaine(s) ≥ 2 h`,
+      note: '' },
+  ];
+  }
+
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <div class="row-between">
@@ -685,6 +929,16 @@ async function viewStats() {
         <div class="lbl2">enfants en moyenne <strong>par jour</strong> sur l'année ${CUR.y}</div>
         <div class="muted small">${annualTotal} enfants encodés · ${inYear.length} jour(s) avec encodage</div>
       </div>
+      ${crit ? `<h3 style="margin-top:20px">✅ Critères d'agrément — ${CUR.y}</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Critère</th><th>Situation</th><th>État</th></tr></thead>
+        <tbody>${crit.map((c) => `<tr>
+          <td>${c.label}</td>
+          <td>${c.val}${c.note ? `<br><span class="muted small">${c.note}</span>` : ''}</td>
+          <td class="nowrap ${c.ok ? 'pos' : 'neg'}">${c.ok ? '✔ atteint' : '✘ non atteint'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <p class="muted small" style="margin-top:8px">Renseignez l'<strong>école</strong> et la <strong>date de naissance</strong> de chaque enfant (onglet 🧒 Enfants) pour un calcul exact.</p>` : ''}
       <h3 class="muted" style="margin-top:22px">Moyenne d'enfants par jour, mois par mois</h3>
       <canvas id="chartMonthly" height="130"></canvas>
       <div class="table-wrap" style="margin-top:14px"><table>
@@ -756,16 +1010,23 @@ async function exportStatsPDF(stats, chartDaily, chartMonthly) {
 async function viewEmployees() {
   const app = document.getElementById('app');
   const profs = await STORE.listProfiles();
-  const roleLbl = (r) => (r === 'admin' ? 'Administrateur' : 'Employée');
+  const nbAdmins = profs.filter((p) => p.role === 'admin' && p.active).length;
   const rows = profs.map((p) => {
     const activeBtn = p.role === 'employee'
       ? (p.active ? `<button class="small red" data-arch="${p.id}">Archiver</button>`
                   : `<button class="small green" data-react="${p.id}">Réactiver</button>`)
       : '';
+    // Sélecteur de rôle. On empêche de retirer le dernier administrateur (sinon
+    // plus personne ne pourrait gérer les utilisateurs).
+    const isLastAdmin = p.role === 'admin' && nbAdmins <= 1;
+    const roleSel = `<select class="rolesel" data-role="${p.id}" ${isLastAdmin ? 'disabled title="Dernier administrateur"' : ''}>
+        <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employée</option>
+        <option value="admin" ${p.role === 'admin' ? 'selected' : ''}>Administrateur</option>
+      </select>`;
     return `<tr>
-      <td>${p.full_name}</td>
-      <td class="nowrap">${p.email || '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email">✏️</button></td>
-      <td><span class="badge ${p.role === 'admin' ? 'validated' : 'open'}">${roleLbl(p.role)}</span></td>
+      <td class="nowrap">${p.full_name} <button class="small gray" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
+      <td class="nowrap">${p.email || '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
+      <td>${roleSel}</td>
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
       <td class="nowrap">
         <button class="small" data-reset="${p.id}">✉️ Réinit. mot de passe</button>
@@ -779,23 +1040,41 @@ async function viewEmployees() {
         <thead><tr><th>Nom</th><th>Email</th><th>Rôle</th><th>Statut</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <p class="muted small">
-        🔒 Le rôle <strong>Administrateur est fixe</strong> : une employée ne peut pas être promue admin.
-        « ✏️ » modifie l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
+        Le <strong>rôle</strong> se change directement dans la liste (le dernier administrateur ne peut pas être rétrogradé).
+        « ✏️ » modifie le nom ou l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
         Archiver conserve les données en lecture seule.
-        ${MODE === 'cloud' ? "En cloud, l'email modifié sert de contact/réinitialisation." : ''}
+        ${isCloud() ? "L'email modifié sert de contact/réinitialisation." : ''}
       </p>
     </div>
     <div class="card hidden" id="addForm">
       <h3>Nouvel utilisateur</h3>
       <div class="row">
-        <div><label>Nom complet</label><input id="nName" placeholder="Prénom Nom"/></div>
-        <div><label>Email</label><input id="nEmail" type="email" placeholder="prenom@ecole.be"/></div>
-        <div><label>Mot de passe initial</label><input id="nPwd" placeholder="au moins 6 caractères"/></div>
+        <div><label for="nName">Nom complet</label><input id="nName" placeholder="Prénom Nom"/></div>
+        <div><label for="nEmail">Email</label><input id="nEmail" type="email" placeholder="prenom@ecole.be"/></div>
+        <div><label for="nPwd">Mot de passe initial</label><input id="nPwd" placeholder="au moins 6 caractères"/></div>
       </div>
       <div id="addMsg"></div>
-      <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employée</strong>. Le rôle admin est réservé et contrôlé.
-        ${MODE === 'cloud' ? "En cloud, la création peut vous déconnecter (limite Supabase) ; reconnectez-vous si besoin." : ''}</p>
+      <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employée</strong> ; vous pourrez ensuite changer leur rôle dans la liste.
+        ${MODE === 'firebase' ? 'La création ne vous déconnecte pas.' : ''}</p>
       <button id="saveEmp" style="margin-top:10px">Créer</button>
+    </div>
+    <div class="card" id="dataCard">
+      <h2>🗄️ Données</h2>
+      <p class="muted small">Sauvegardez régulièrement vos données : c'est votre protection
+        en cas de perte ou de fausse manipulation.</p>
+      <h3 style="margin-bottom:6px">Sauvegarde / export</h3>
+      <div class="row" style="flex-wrap:wrap; gap:10px">
+        <button class="small" id="expJson">⬇️ Exporter tout (JSON)</button>
+        <button class="small" id="expCsvPresta">⬇️ CSV prestations</button>
+        <button class="small" id="expCsvKids">⬇️ CSV présences enfants</button>
+      </div>
+      <h3 style="margin:16px 0 6px">Restauration</h3>
+      <p class="muted small" style="margin-top:0">Réimporte une sauvegarde <strong>JSON</strong>. Les données existantes
+        sont <strong>remplacées</strong>${isCloud() ? ' (les comptes de connexion ne sont pas modifiés)' : ''}. Faites d'abord un export.</p>
+      <div class="row" style="flex-wrap:wrap; gap:10px">
+        <input id="impFile" type="file" accept="application/json,.json" aria-label="Fichier de sauvegarde JSON à restaurer" style="max-width:100%"/>
+        <button class="small red" id="impBtn">⬆️ Restaurer</button>
+      </div>
     </div>`;
 
   document.getElementById('addBtn').onclick = () => document.getElementById('addForm').classList.toggle('hidden');
@@ -812,6 +1091,20 @@ async function viewEmployees() {
       toast('Employée ajoutée'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
+  app.querySelectorAll('[data-name]').forEach((b) => b.onclick = async () => {
+    const p = profs.find((x) => x.id === b.dataset.name) || {};
+    const name = prompt('Nom complet (Prénom Nom) :', p.full_name || '');
+    if (name == null) return;
+    try { await STORE.setFullName(b.dataset.name, name); toast('Nom mis à jour'); render(); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  });
+  app.querySelectorAll('select.rolesel').forEach((s) => s.onchange = async () => {
+    const p = profs.find((x) => x.id === s.dataset.role) || {};
+    const role = s.value, label = role === 'admin' ? 'administrateur' : 'employée';
+    if (!confirm(`Changer le rôle de ${p.full_name} en « ${label} » ?`)) { s.value = p.role; return; }
+    try { await STORE.setRole(s.dataset.role, role); toast('Rôle mis à jour'); render(); }
+    catch (e) { s.value = p.role; toast('Erreur : ' + e.message, 'error'); }
+  });
   app.querySelectorAll('[data-email]').forEach((b) => b.onclick = async () => {
     const p = profs.find((x) => x.id === b.dataset.email) || {};
     const email = prompt(`Nouvel email pour ${p.full_name} :`, p.email || '');
@@ -822,7 +1115,7 @@ async function viewEmployees() {
   app.querySelectorAll('[data-reset]').forEach((b) => b.onclick = async () => {
     const p = profs.find((x) => x.id === b.dataset.reset) || {};
     if (!p.email) { toast("Cet utilisateur n'a pas d'email.", 'error'); return; }
-    if (MODE !== 'cloud') { toast("Envoi d'email disponible uniquement en mode cloud.", 'error'); return; }
+    if (!isCloud()) { toast("Envoi d'email disponible uniquement en mode cloud.", 'error'); return; }
     if (!confirm(`Envoyer un email de réinitialisation à ${p.email} ?`)) return;
     try { await STORE.sendPasswordReset(p.email); toast('Email de réinitialisation envoyé à ' + p.email); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
@@ -835,6 +1128,52 @@ async function viewEmployees() {
     try { await STORE.setActive(b.dataset.react, true); toast('Employée réactivée'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
+
+  // --- Données & confidentialité (export / restauration / rétention) ---
+  document.getElementById('expJson').onclick = () => backupJSON();
+  document.getElementById('impBtn').onclick = async () => {
+    const f = document.getElementById('impFile').files[0];
+    if (!f) { toast('Choisissez d\'abord un fichier de sauvegarde.', 'error'); return; }
+    if (!confirm('Restaurer cette sauvegarde ? Les données actuelles seront REMPLACÉES.')) return;
+    try {
+      const parsed = JSON.parse(await f.text());
+      const counts = await STORE.importAll(parsed);
+      const n = Object.values(counts).reduce((a, b) => a + b, 0);
+      toast(`Sauvegarde restaurée (${n} enregistrement(s)).`); render();
+    } catch (e) { toast('Restauration impossible : ' + e.message, 'error'); }
+  };
+  document.getElementById('expCsvPresta').onclick = async () => {
+    try {
+      const data = await STORE.exportAll();
+      const nameById = {}; (data.profiles || []).forEach((p) => (nameById[p.id] = p.full_name));
+      const rows = [['Employée', 'Date', 'Prévu début', 'Prévu fin', 'Réel début', 'Réel fin', 'Presté (min)', 'Écart (min)', 'Justification']];
+      (data.day_entries || [])
+        .slice().sort((a, b) => (a.entry_date + a.employee_id).localeCompare(b.entry_date + b.employee_id))
+        .forEach((e) => {
+          const p = plannedMinutes(e), w = effectiveWorked(e);
+          rows.push([nameById[e.employee_id] || e.employee_id, e.entry_date,
+            e.planned_start || '', e.planned_end || '', e.start_time || '', e.end_time || '',
+            w, w - p, e.justification || '']);
+        });
+      downloadFile(`prestations_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
+      toast('CSV prestations téléchargé');
+    } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
+  };
+  document.getElementById('expCsvKids').onclick = async () => {
+    try {
+      const data = await STORE.exportAll();
+      const kidById = {}; (data.kids || []).forEach((k) => (kidById[k.id] = k));
+      const rows = [['Nom', 'Prénom', 'Date de présence']];
+      (data.kid_attendance || [])
+        .slice().sort((a, b) => (a.entry_date + a.kid_id).localeCompare(b.entry_date + b.kid_id))
+        .forEach((a) => {
+          const k = kidById[a.kid_id] || {};
+          rows.push([k.last_name || '', k.first_name || '', a.entry_date]);
+        });
+      downloadFile(`presences_enfants_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
+      toast('CSV présences téléchargé');
+    } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
+  };
 }
 
 /* ---------------- Logo pour les PDF (SVG → PNG dataURL, mis en cache) ---------------- */
@@ -868,6 +1207,36 @@ async function pdfHeader(doc, title, subtitle) {
   doc.setFontSize(13); doc.setTextColor(40); doc.text(title, 14, 44);
   if (subtitle) { doc.setFontSize(10); doc.setTextColor(110); doc.text(subtitle, 14, 50); }
   return 56; // ordonnée de départ pour la suite
+}
+
+/* ---------------- Export PDF : récapitulatif global (toutes les employées) ---------------- */
+// `data` = [{ p, s, mo }] déjà calculé par viewRecap.
+async function exportRecapPDF(data) {
+  const title = 'Récapitulatif mensuel';
+  const sub = monthName(CUR.y, CUR.m);
+  const statusLbl = (st) => ({ open: 'En cours', validated: 'Validé' }[st] || 'En cours');
+  const body = data.map(({ p, s, mo }) => [
+    p.full_name + (p.active ? '' : ' (archivée)'),
+    fmtHM(s.planned), fmtHM(s.worked), fmtDelta(s.delta), fmtHM(s.carryIn), fmtDelta(s.closing), statusLbl(mo.status),
+  ]);
+
+  if (!window.jspdf) { // repli impression
+    const w = window.open('', '_blank');
+    w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${title} — ${sub}</h2>
+      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Employée</th><th>Prévu</th><th>Presté</th><th>Écart</th><th>Reporté</th><th>Cumulé</th><th>Statut</th></tr>
+      ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
+      <button onclick="print()">Imprimer</button>`);
+    w.document.close(); return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const startY = await pdfHeader(doc, title, sub);
+  doc.autoTable({
+    startY,
+    head: [['Employée', 'Prévu', 'Presté', 'Écart mois', 'Solde reporté', 'Solde cumulé', 'Statut']],
+    body, styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] },
+  });
+  doc.save(`recapitulatif_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
 /* ---------------- Export PDF : fiche de prestations ---------------- */
@@ -915,10 +1284,28 @@ async function exportSheetPDF(empId) {
 }
 
 /* ---------------- Déconnexion ---------------- */
-async function doLogout() {
+async function doLogout(auto) {
+  stopIdleTimer();
   try { await STORE.signOut(); } catch (e) { console.error('[logout]', e); }
-  ME = null; location.reload();
+  ME = null;
+  if (auto) { try { sessionStorage.setItem('autoLogout', '1'); } catch {} }
+  location.reload();
 }
+
+/* ---------------- Déconnexion automatique après inactivité ---------------- */
+const IDLE_MINUTES = 15;
+let _idleTimer = null;
+function resetIdleTimer() {
+  if (!ME) return;
+  clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(() => doLogout(true), IDLE_MINUTES * 60 * 1000);
+}
+function startIdleTimer() {
+  ['click', 'keydown', 'mousemove', 'touchstart', 'scroll', 'change'].forEach((ev) =>
+    window.addEventListener(ev, resetIdleTimer, { passive: true }));
+  resetIdleTimer();
+}
+function stopIdleTimer() { clearTimeout(_idleTimer); }
 
 /* ---------------- Filet de sécurité global ---------------- */
 window.addEventListener('error', (ev) => {

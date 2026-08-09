@@ -1,19 +1,23 @@
 /* ------------------------------------------------------------------
  * Configuration de l'application.
  *
- * MODE DÉMO (par défaut) : laisse SUPABASE_URL / SUPABASE_ANON_KEY vides.
- *   → Les données sont stockées localement dans le navigateur (localStorage).
- *   → Parfait pour tester l'interface immédiatement, sans rien installer.
+ * L'app choisit automatiquement son hébergement :
+ *   1. FIREBASE — si FIREBASE_CONFIG est rempli (hébergement de production).
+ *   2. DÉMO     — sinon : données locales au navigateur (pour tester).
  *
- * MODE CLOUD (production) : colle l'URL et la clé "anon public" de ton projet
- *   Supabase (Settings → API). Les données sont alors partagées en temps réel
- *   entre tous les appareils.
- *
- * ⚠️ La clé "anon" est conçue pour être publique : la sécurité est assurée
- *    côté serveur par les règles RLS (voir supabase/schema.sql).
+ * ⚠️ Ces clés sont conçues pour être publiques : la sécurité est assurée
+ *    côté serveur par les règles Firestore (firebase/firestore.rules),
+ *    pas par le secret.
  * ------------------------------------------------------------------ */
 
 window.APP_CONFIG = {
-  SUPABASE_URL: 'https://sbuwxpecmsglbkeiaikz.supabase.co',
-  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNidXd4cGVjbXNnbGJrZWlhaWt6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM2NDkzMTcsImV4cCI6MjA5OTIyNTMxN30.-_YtmodUzMCbVPHzYGT6sdyLro86mK1pqBEg8QcCN-c',
+  // Objet fourni par Firebase (Paramètres du projet → Vos applications → Web).
+  FIREBASE_CONFIG: {
+    apiKey: 'AIzaSyDRMIvzpvLPYlGTGDfhapmZZFdLsciGjJ8',
+    authDomain: 'edd-jardin-sauvage.firebaseapp.com',
+    projectId: 'edd-jardin-sauvage',
+    storageBucket: 'edd-jardin-sauvage.firebasestorage.app',
+    messagingSenderId: '497384745382',
+    appId: '1:497384745382:web:fc4ab98d29d81bce9f4767',
+  },
 };

@@ -7,9 +7,9 @@ gestion et archivage des employées — avec **synchronisation temps réel** ent
 plusieurs appareils via le cloud.
 
 > **Deux modes, un même code :**
-> - 🧪 **Mode démo** (par défaut) : données locales au navigateur — pour tester tout
->   de suite, sans rien installer. Sert aussi de maquette interactive.
-> - ☁️ **Mode cloud** (Supabase) : données partagées et synchronisées en temps réel.
+> - 🧪 **Mode démo** : données locales au navigateur — pour tester sans rien installer.
+> - 🔥 **Mode Firebase** (production) : données partagées et synchronisées en temps réel,
+>   sur l'offre gratuite Firebase (qui ne se met jamais en pause).
 
 ---
 
@@ -36,28 +36,18 @@ pré-remplies pour visualiser les récaps et les graphiques.
 
 ---
 
-## ☁️ Passer en mode cloud (Supabase) — synchronisation multi-appareils
+## 🔥 Hébergement : Firebase (gratuit, sans mise en pause)
 
-1. Crée un compte gratuit sur **https://supabase.com** puis un nouveau projet.
-2. Dans **SQL Editor**, colle et exécute le contenu de [`supabase/schema.sql`](supabase/schema.sql)
-   (crée les tables, la sécurité par rôle, l'audit et le report de solde).
-3. Dans **Authentication → Users**, crée les comptes (admin + employées).
-   Puis dans **SQL Editor** passe l'admin en administrateur :
-   ```sql
-   update public.profiles set role = 'admin' where full_name = 'Admin';
-   ```
-4. Dans **Settings → API**, copie l'**URL du projet** et la clé **anon public**.
-5. Colle-les dans [`js/config.js`](js/config.js) :
-   ```js
-   window.APP_CONFIG = {
-     SUPABASE_URL: 'https://xxxx.supabase.co',
-     SUPABASE_ANON_KEY: 'eyJhbGciOi...',
-   };
-   ```
-6. Recharge la page : le badge en haut passe de **🧪 Démo** à **☁️ Cloud**.
+L'application tourne sur **Firebase** (Firestore + Authentication), offre gratuite
+**Spark** qui ne se met jamais en pause. La configuration est dans
+[`js/config.js`](js/config.js) (`FIREBASE_CONFIG`) et les règles de sécurité dans
+[`firebase/firestore.rules`](firebase/firestore.rules).
 
-> La clé « anon » est publique par conception : la sécurité est assurée côté serveur
-> par les règles **RLS** définies dans `schema.sql`.
+👉 Pour (re)mettre en place un projet Firebase depuis zéro, suivre
+**[`docs/migration-firebase.md`](docs/migration-firebase.md)**.
+
+Ces clés sont **publiques par conception** : la sécurité est assurée côté serveur par
+les **règles Firestore**, pas par le secret.
 
 ---
 
@@ -65,9 +55,9 @@ pré-remplies pour visualiser les récaps et les graphiques.
 
 - **Horaires prévus (admin)** : l'admin définit, par jour, une **heure de début** et une
   **heure de fin** prévues (tranches de 15 min), dans un tableau mensuel type Excel ;
-  verrouillage / déverrouillage / validation d'un mois.
+  validation d'un mois (un mois validé n'est plus modifiable par l'employée).
 - **Horaire type hebdomadaire (admin)** : un modèle Lun→Dim par employée qui **pré-remplit
-  automatiquement les nouveaux mois**. Modifiable à tout moment ; les **mois verrouillés ne
+  automatiquement les nouveaux mois**. Modifiable à tout moment ; les **mois validés ne
   sont jamais recalculés**, et les jours déjà modifiés gardent leur horaire réel.
 - **Prestations (employées)** : l'employée voit l'horaire prévu et ne modifie que
   l'**heure de début / fin réelle** (tranches de 15 min) ; le presté et l'écart sont
@@ -77,16 +67,22 @@ pré-remplies pour visualiser les récaps et les graphiques.
 - **Identité visuelle** : logo (accueil, entête, PDF) et **code couleur par rôle**
   (administrateur = bleu, employée = vert) ; jours modifiés et écarts (+/−) mis en évidence.
 - **Calculs automatiques** : écart journalier, totaux mensuels, **solde reporté de mois
-  en mois**, heures supplémentaires et heures à récupérer.
-- **Verrouillage** : un mois verrouillé n'est plus modifiable par l'employée (seul
-  l'admin peut intervenir) — imposé côté base via RLS.
-- **Présences enfants** : encodage quotidien + historique.
-- **Statistiques** : moyennes hebdo / mensuelle / annuelle, histogrammes et courbes,
-  avec **export PDF** (moyennes + graphiques inclus).
+  en mois** (recalculé à la volée côté application), heures sup. et heures à récupérer.
+- **Validation d'un mois** : un mois validé n'est plus modifiable par l'employée (seul
+  l'admin peut intervenir) — imposé côté serveur via les règles Firestore.
+- **Présences enfants** : liste nominative (prénom + nom) et **grille de présences**
+  journalières par enfant (case décochée un jour d'ouverture = absence).
+- **Statistiques** : moyenne annuelle d'enfants par jour + détail mensuel, graphique,
+  avec **export PDF** (moyennes + graphique inclus).
 - **Export PDF** : fiche mensuelle par employée (tableau début/fin, totaux, signatures).
+- **Sauvegarde** (admin) : export **JSON complet** + **CSV** (prestations, présences) et
+  **restauration** d'une sauvegarde JSON. Lecture des prestations restreinte à
+  « soi-même ou admin ».
+- **Export PDF récap global** (admin) : une page reprenant toutes les employées d'un mois
+  (prévu, presté, écart, soldes, statut), en plus de la fiche individuelle par employée.
 - **Employées** : ajout, **archivage** (données conservées en lecture seule), réactivation.
 - **Temps réel** : mise à jour automatique sur tous les appareils connectés.
-- **Bonus** : journal d'audit, sauvegarde automatique, alerte d'erreur d'encodage.
+- **Fiabilité** : filet anti-crash (jamais d'écran blanc), enregistrement automatique.
 
 ---
 
@@ -98,13 +94,16 @@ pré-remplies pour visualiser les récaps et les graphiques.
 ├── assets/logo.svg       # Logo (accueil, entête, PDF)
 ├── css/styles.css        # Styles (responsive, couleurs par rôle)
 ├── js/
-│   ├── config.js         # Clés Supabase (vide = mode démo)
-│   ├── store.js          # Couche de données : démo (localStorage) OU Supabase
+│   ├── config.js         # Config Firebase (vide = mode démo)
+│   ├── store.js          # Couche de données : démo (localStorage) OU Firebase
 │   └── app.js            # Interface, calculs, vues, PDF, graphiques
-├── supabase/
-│   └── schema.sql        # Schéma PostgreSQL : tables, RLS, audit, report de solde
+├── offline.html          # Page de repli hors-ligne (PWA)
+├── firebase/
+│   └── firestore.rules   # Règles de sécurité Firestore (cloisonnement des données)
+├── tests/                # Tests end-to-end Playwright (mode démo)
 ├── docs/
-│   └── ARCHITECTURE.md   # Proposition d'architecture + schéma de BDD + écrans
+│   ├── ARCHITECTURE.md       # Architecture + écrans
+│   └── migration-firebase.md # Mise en place d'un projet Firebase
 └── README.md
 ```
 
@@ -120,34 +119,50 @@ automatiquement sur l'accueil, dans l'entête et dans les PDF.
 ## 🧱 Règles métier (mois)
 
 - Le système **démarre en janvier 2026** : impossible d'accéder à un mois antérieur.
-- **Verrouillage en cascade** : verrouiller un mois verrouille automatiquement **tous les
-  mois précédents** (depuis janvier 2026).
-- Un mois **verrouillé** n'est plus modifiable par l'employée (seul l'admin peut intervenir).
+- Un mois **validé** n'est plus modifiable par l'employée (seul l'admin peut intervenir) ;
+  « Repasser en cours » le rouvre.
 
 ## 🛡️ Stabilité & fiabilité
 
 - **Filet anti-crash** : toute erreur affiche un message clair (jamais d'écran blanc), avec
   bouton « Recharger ». Gestionnaires globaux `error` / `unhandledrejection` + logs console.
-- **Performances** : en mode cloud, les entrées **et** les profils sont **mis en cache**
-  (moins de requêtes par rendu) ; l'audit réseau sur le chemin d'écriture a été supprimé
-  (latence de saisie divisée) ; la feuille se met à jour **cellule par cellule** sans
-  reconstruire le tableau (saisie fluide, focus préservé, éclat « enregistré ») ; les
-  menus d'heures sont des **champs `time` natifs** (DOM allégé, meilleur sur mobile) ;
-  rendus temps réel **groupés (debounce)** ; seul le **mois actif** est chargé ; barre de
-  chargement pendant les requêtes.
+- **Performances** : en mode Firebase, les entrées **et** les profils sont **mis en cache**
+  (moins de requêtes par rendu) ; la feuille se met à jour **cellule par cellule** sans
+  reconstruire le tableau (saisie fluide, focus préservé, éclat « enregistré ») ; le
+  pré-remplissage d'un mois est envoyé **en un seul lot** ; rendus temps réel **groupés
+  (debounce)** ; seul le **mois actif** est chargé ; barre de chargement pendant les requêtes.
 - Toutes les actions (lecture, écriture, navigation) sont encapsulées en `try/catch`.
 
 ## 🔐 Rôles et sécurité
 
-- **Administrateur** : accès complet (horaires, verrouillage, employées, audit, tout modifier).
+- **Administrateur** : accès complet (horaires, validation des mois, utilisateurs,
+  export/sauvegarde, tout modifier).
 - **Employée** : encode ses prestations tant que le mois est ouvert ; ne peut pas
-  modifier ses horaires imposés ni un mois verrouillé/validé.
+  modifier ses horaires imposés ni un mois validé ; **ne voit pas** les prestations d'une
+  collègue (cloisonnement Firestore).
 - Une employée **archivée** ne peut plus se connecter ; ses données restent consultables.
 
-En **mode cloud**, ces règles sont **imposées par la base** (RLS) et pas seulement par
+En mode Firebase, ces règles sont **imposées côté serveur** (règles Firestore) et pas seulement par
 l'interface — elles ne peuvent donc pas être contournées.
 
 ---
+
+## 🧪 Tests
+
+Des tests **end-to-end (Playwright)** couvrent les parcours clés en **mode démo**
+(déterministe, hors-ligne) : connexion + navigation entre les onglets, mise à jour du
+presté sur la feuille, ajout d'un enfant et comptage des présences, export de sauvegarde,
+et blocage du premier mois (janvier 2026).
+
+```bash
+cd tests
+npm install
+npx playwright install chromium   # première fois seulement
+npm test
+```
+
+Ils tournent aussi automatiquement en **intégration continue** (GitHub Actions,
+`.github/workflows/ci.yml`) à chaque *push* et *pull request*.
 
 ## 🧭 Détails techniques
 
