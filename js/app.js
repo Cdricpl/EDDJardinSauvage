@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.13-5';
+const APP_VERSION = 'v2026.08.13-6';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -801,9 +801,10 @@ async function viewChildren() {
   const cellHtml = (k, day) => {
     const st = getSt(k.id, day.date);
     const expected = isExpected(k, day.dow);
-    // Trois états lisibles au premier regard : ✓ vert, ✗ rouge, — gris.
+    // Seuls les états SAISIS portent un symbole : ✓ vert, ✗ rouge. Une case non
+    // définie reste vide — un tiret se confondait avec le ✓ d'un coup d'œil.
     const cls = st === 'present' ? 'pres-p' : st === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : 'pres-v');
-    const sym = st === 'present' ? '✓' : st === 'absent' ? '✗' : '—';
+    const sym = st === 'present' ? '✓' : st === 'absent' ? '✗' : '';
     const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${st === 'present' ? 'présent' : st === 'absent' ? 'absent' : 'non défini'}`;
     return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absent → non défini" aria-label="${lbl.replace(/"/g, '&quot;')}">${sym}</button></td>`;
   };
@@ -839,7 +840,7 @@ async function viewChildren() {
 
   const legende = `<span class="pres-leg"><span class="presbtn pres-p" aria-hidden="true">✓</span> Présent</span>
     <span class="pres-leg"><span class="presbtn pres-a" aria-hidden="true">✗</span> Absent</span>
-    <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true">—</span> Non défini</span>`;
+    <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
   app.innerHTML = `${await toolbar(false, ME.role === 'admin'
       ? '<button id="kToggle" class="addkid">+ Ajouter un enfant</button>' : '')}
