@@ -517,64 +517,62 @@ async function viewSheet() {
   app.onchange = async (ev) => {
     const el = ev.target;
     if (!el || !el.matches || !el.matches('input.cell, select.cell')) return;
-    {
-      const date = el.dataset.date, k = el.dataset.k;
-      const prev = byDate[date] || {};
-      const patch = { employee_id: empId, entry_date: date };
+    const date = el.dataset.date, k = el.dataset.k;
+    const prev = byDate[date] || {};
+    const patch = { employee_id: empId, entry_date: date };
 
-      if (k === 'planned_start' || k === 'planned_end') {
-        // L'admin définit l'horaire prévu (référence).
-        const ps = k === 'planned_start' ? el.value : (prev.planned_start || '');
-        const pe = k === 'planned_end' ? el.value : (prev.planned_end || '');
-        patch.planned_start = ps; patch.planned_end = pe;
-        const s = timeToMin(ps), f = timeToMin(pe);
-        if (s != null && f != null && f <= s) { toast("L'heure de fin doit être après le début.", 'error'); return; }
-        patch.planned_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
-        // Pré-remplissage : tant que l'employée n'a pas modifié, le réel suit le prévu.
-        if (!prev.worked_touched) {
-          patch.start_time = ps; patch.end_time = pe;
-          patch.worked_minutes = patch.planned_minutes;
-        }
-      } else if (k === 'start_time' || k === 'end_time') {
-        // L'employée (ou l'admin) modifie l'horaire réel.
-        // On lit les DEUX sélecteurs réels de la ligne (ce qui est affiché).
-        const tr = el.closest('tr');
-        const start = tr.querySelector('[data-k="start_time"]').value;
-        const end = tr.querySelector('[data-k="end_time"]').value;
-        const s = timeToMin(start), f = timeToMin(end);
-        if (s != null && f != null && f <= s) { toast("L'heure de fin doit être après le début.", 'error'); return; }
-        const bothEmpty = !start && !end;
-        const differsFromPlanned = start !== (prev.planned_start || '') || end !== (prev.planned_end || '');
-        if (bothEmpty || !differsFromPlanned) {
-          // Réel effacé (--:--) ou identique au prévu → jour non « modifié » (retour au pré-rempli).
-          patch.start_time = bothEmpty ? '' : start;
-          patch.end_time = bothEmpty ? '' : end;
-          patch.worked_touched = false;
-          patch.worked_minutes = bothEmpty ? plannedMinutes(prev) : Math.max(0, (f || 0) - (s || 0));
-        } else {
-          patch.start_time = start; patch.end_time = end;
-          patch.worked_touched = true;
-          patch.worked_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
-        }
-      } else if (k === 'justification') {
-        patch.justification = el.value;
+    if (k === 'planned_start' || k === 'planned_end') {
+      // L'admin définit l'horaire prévu (référence).
+      const ps = k === 'planned_start' ? el.value : (prev.planned_start || '');
+      const pe = k === 'planned_end' ? el.value : (prev.planned_end || '');
+      patch.planned_start = ps; patch.planned_end = pe;
+      const s = timeToMin(ps), f = timeToMin(pe);
+      if (s != null && f != null && f <= s) { toast("L'heure de fin doit être après le début.", 'error'); return; }
+      patch.planned_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
+      // Pré-remplissage : tant que l'employée n'a pas modifié, le réel suit le prévu.
+      if (!prev.worked_touched) {
+        patch.start_time = ps; patch.end_time = pe;
+        patch.worked_minutes = patch.planned_minutes;
       }
-      try {
-        const saved = await STORE.upsertEntry(patch);
-        byDate[date] = saved;                      // état local à jour
-        const tr = el.closest('tr');
-        // Si l'admin change le prévu d'un jour non modifié, refléter dans le réel affiché.
-        if ((k === 'planned_start' || k === 'planned_end') && !saved.worked_touched) {
-          setTimeValue(tr.querySelector('[data-k="start_time"]'), saved.start_time);
-          setTimeValue(tr.querySelector('[data-k="end_time"]'), saved.end_time);
-        }
-        refreshRow(tr, date);
-        refreshTotals();
-        flashSaved(el);
-      } catch (e) {
-        console.error('[sheet:save]', e);
-        toast('Enregistrement impossible : ' + e.message, 'error');
+    } else if (k === 'start_time' || k === 'end_time') {
+      // L'employée (ou l'admin) modifie l'horaire réel.
+      // On lit les DEUX sélecteurs réels de la ligne (ce qui est affiché).
+      const tr = el.closest('tr');
+      const start = tr.querySelector('[data-k="start_time"]').value;
+      const end = tr.querySelector('[data-k="end_time"]').value;
+      const s = timeToMin(start), f = timeToMin(end);
+      if (s != null && f != null && f <= s) { toast("L'heure de fin doit être après le début.", 'error'); return; }
+      const bothEmpty = !start && !end;
+      const differsFromPlanned = start !== (prev.planned_start || '') || end !== (prev.planned_end || '');
+      if (bothEmpty || !differsFromPlanned) {
+        // Réel effacé (--:--) ou identique au prévu → jour non « modifié » (retour au pré-rempli).
+        patch.start_time = bothEmpty ? '' : start;
+        patch.end_time = bothEmpty ? '' : end;
+        patch.worked_touched = false;
+        patch.worked_minutes = bothEmpty ? plannedMinutes(prev) : Math.max(0, (f || 0) - (s || 0));
+      } else {
+        patch.start_time = start; patch.end_time = end;
+        patch.worked_touched = true;
+        patch.worked_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
       }
+    } else if (k === 'justification') {
+      patch.justification = el.value;
+    }
+    try {
+      const saved = await STORE.upsertEntry(patch);
+      byDate[date] = saved;                      // état local à jour
+      const tr = el.closest('tr');
+      // Si l'admin change le prévu d'un jour non modifié, refléter dans le réel affiché.
+      if ((k === 'planned_start' || k === 'planned_end') && !saved.worked_touched) {
+        setTimeValue(tr.querySelector('[data-k="start_time"]'), saved.start_time);
+        setTimeValue(tr.querySelector('[data-k="end_time"]'), saved.end_time);
+      }
+      refreshRow(tr, date);
+      refreshTotals();
+      flashSaved(el);
+    } catch (e) {
+      console.error('[sheet:save]', e);
+      toast('Enregistrement impossible : ' + e.message, 'error');
     }
   };
 
