@@ -238,23 +238,27 @@ test('restauration : la fiche complète de l’enfant est conservée (école, na
   await expect(page.locator('input.ek:checked')).toHaveCount(4);
 });
 
-test('enfants : le bouton charge la liste de l’école avec année, école et jours', async ({ page }) => {
+test('liste de l’école : le fichier livré se restaure avec année, école et jours', async ({ page }) => {
   await loginAdmin(page);
-  await page.locator('.navbtn[data-v="children"]').click();
 
-  await page.locator('#kImport').click();
-  const row = page.locator('table.attend tbody tr', { hasText: 'BENALI' });
-  await expect(row).toHaveCount(1);
+  // Le fichier de la liste 2025-2026 est livré avec l'application ; il se charge
+  // par « Restaurer une sauvegarde ». Ce test vérifie qu'il reste bien formé.
+  const liste = await (await page.request.get('/import-enfants-2025-2026.json')).text();
+  expect(JSON.parse(liste).kids).toHaveLength(12);
+
+  await page.locator('.navbtn[data-v="employees"]').click();
+  await page.locator('#impFile').setInputFiles({
+    name: 'liste.json', mimeType: 'application/json', buffer: Buffer.from(liste),
+  });
+  page.on('dialog', (d) => d.accept());
+  await page.locator('#impBtn').click();
+
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend tbody tr')).toHaveCount(12);
   // L'année scolaire et l'implantation sont rappelées à côté du nom.
+  const row = page.locator('table.attend tbody tr', { hasText: 'BENALI' });
   await expect(row.locator('.kidname')).toContainText('5e · ARAHF');
   await expect(row.locator('.kidname')).toContainText('Lun Mar Jeu Ven');
-
-  // Les 12 enfants de l'horaire 2025-2026 sont présents.
-  await expect(page.locator('table.attend tbody tr')).toHaveCount(12 + 3); // + les 3 enfants de démo
-
-  // Rejouable : un second clic ne crée pas de doublon.
-  await page.locator('#kImport').click();
-  await expect(page.locator('table.attend tbody tr', { hasText: 'BENALI' })).toHaveCount(1);
 });
 
 test('enfants : l’année scolaire est enregistrée à la création et modifiable', async ({ page }) => {

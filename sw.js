@@ -7,13 +7,12 @@
  * ancienne version depuis le cache.
  * ⚠️ Doit rester IDENTIQUE à APP_VERSION dans js/app.js (numéro affiché dans
  *    l'entête) : c'est ce qui permet de vérifier qu'un appareil est à jour. */
-const CACHE = 'edd-jardin-sauvage-v2026.08.13-3';
+const CACHE = 'edd-jardin-sauvage-v2026.08.13-4';
 const APP_SHELL = [
   './', 'index.html', 'offline.html', 'css/styles.css',
   'js/config.js', 'js/store.js', 'js/app.js',
   'assets/logo.png', 'assets/logo.svg',
   'assets/icon-192.png', 'assets/icon-512.png',
-  'import-enfants-2025-2026.json',
 ];
 
 self.addEventListener('install', (e) => {
