@@ -258,25 +258,6 @@ class DemoStore {
       if (Array.isArray(info.days)) k.days = info.days;
       this._save(db); }
   }
-  // Charge une liste d'enfants SANS rien supprimer : les fiches déjà présentes
-  // (même identifiant) sont mises à jour, les autres ajoutées. Rejouable sans
-  // créer de doublon.
-  async importKids(list) {
-    const db = this._db();
-    let ajoutes = 0, misAJour = 0;
-    (list || []).forEach((k) => {
-      const fiche = {
-        id: String(k.id), first_name: (k.first_name || '').trim(), last_name: (k.last_name || '').trim(),
-        school: k.school || '', birthdate: k.birthdate || '', grade: k.grade || '',
-        days: Array.isArray(k.days) ? k.days : [], active: k.active !== false,
-      };
-      const i = db.kids.findIndex((x) => x.id === fiche.id);
-      if (i >= 0) { db.kids[i] = { ...db.kids[i], ...fiche }; misAJour++; }
-      else { db.kids.push(fiche); ajoutes++; }
-    });
-    this._save(db);
-    return { ajoutes, misAJour };
-  }
   async setKidActive(id, active) {
     const db = this._db();
     const k = db.kids.find(x => x.id === id);
@@ -566,21 +547,6 @@ class FirebaseStore {
       created_at: new Date().toISOString() };
     const ref = await this.db.collection('kids').add(data);
     return { id: ref.id, ...data };
-  }
-  // Charge une liste d'enfants SANS rien supprimer (voir DemoStore.importKids).
-  async importKids(list) {
-    if (!list || !list.length) return { ajoutes: 0, misAJour: 0 };
-    const connus = new Set((await this.listKids(true)).map((k) => k.id));
-    await this._commit(list.map((k) => ({
-      ref: this.db.collection('kids').doc(String(k.id)),
-      data: {
-        first_name: (k.first_name || '').trim(), last_name: (k.last_name || '').trim(),
-        school: k.school || '', birthdate: k.birthdate || '', grade: k.grade || '',
-        days: Array.isArray(k.days) ? k.days : [], active: k.active !== false,
-      },
-    })));
-    const misAJour = list.filter((k) => connus.has(String(k.id))).length;
-    return { ajoutes: list.length - misAJour, misAJour };
   }
   async setKidActive(id, active) {
     await this.db.collection('kids').doc(id).set({ active }, { merge: true });

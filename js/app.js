@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.13-3';
+const APP_VERSION = 'v2026.08.13-4';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -819,11 +819,6 @@ async function viewChildren() {
       </div>
       <div style="margin-top:6px"><label>Jours habituels de présence</label><div class="daychks">${dayCheckboxes}</div></div>
       <div id="kMsg"></div>
-      ${ME.role === 'admin' ? `<div style="margin-top:10px">
-        <button class="small gray" id="kImport" title="Encode d'un coup les enfants de l'horaire 2025-2026">
-          📋 Charger la liste de l'école (2025-2026)</button>
-        <span class="muted small"> — ajoute ou met à jour les fiches ; aucune présence déjà encodée n'est effacée.</span>
-      </div>` : ''}
       <div class="card hidden" id="editKidCard" style="background:#fbf6ec; margin-top:12px">
         <h3 style="margin-top:0">✏️ Modifier la fiche de l'enfant</h3>
         <input type="hidden" id="eId"/>
@@ -866,26 +861,6 @@ async function viewChildren() {
         document.getElementById('kGrade').value);
       PREFILLED_KIDS.clear(); toast('Enfant ajouté'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
-  };
-  // Chargement en un clic de la liste de l'école (fichier livré avec l'application).
-  // Évite à l'administratrice de ressaisir 12 fiches à la main en début d'année.
-  const impBtn = document.getElementById('kImport');
-  if (impBtn) impBtn.onclick = async () => {
-    const msg = document.getElementById('kMsg');
-    impBtn.disabled = true;
-    try {
-      const rep = await fetch('import-enfants-2025-2026.json', { cache: 'no-store' });
-      if (!rep.ok) throw new Error('liste introuvable (' + rep.status + ')');
-      const liste = (await rep.json()).kids || [];
-      if (!liste.length) throw new Error('la liste est vide');
-      const { ajoutes, misAJour } = await STORE.importKids(liste);
-      PREFILLED_KIDS.clear();   // les nouveaux enfants doivent être pré-encodés
-      toast(`${ajoutes} enfant(s) ajouté(s), ${misAJour} mis à jour`);
-      render();
-    } catch (e) {
-      impBtn.disabled = false;
-      msg.innerHTML = `<div class="msg error">Chargement impossible : ${e.message}</div>`;
-    }
   };
   // Modifier un enfant : ouvre le formulaire pré-rempli (nom, école, naissance, jours).
   const editCard = document.getElementById('editKidCard');
