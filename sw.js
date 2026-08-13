@@ -7,12 +7,13 @@
  * ancienne version depuis le cache.
  * ⚠️ Doit rester IDENTIQUE à APP_VERSION dans js/app.js (numéro affiché dans
  *    l'entête) : c'est ce qui permet de vérifier qu'un appareil est à jour. */
-const CACHE = 'edd-jardin-sauvage-v2026.08.13-2';
+const CACHE = 'edd-jardin-sauvage-v2026.08.13-3';
 const APP_SHELL = [
   './', 'index.html', 'offline.html', 'css/styles.css',
   'js/config.js', 'js/store.js', 'js/app.js',
   'assets/logo.png', 'assets/logo.svg',
   'assets/icon-192.png', 'assets/icon-512.png',
+  'import-enfants-2025-2026.json',
 ];
 
 self.addEventListener('install', (e) => {
@@ -34,8 +35,16 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // Supabase / CDN : réseau direct
 
+  /* « Réseau d'abord » doit VRAIMENT aller au réseau : un simple fetch(req)
+   * peut être servi par le cache HTTP du navigateur, qui renvoie alors
+   * l'ancien fichier — l'appareil reste bloqué sur une version périmée même
+   * après plusieurs rechargements. `cache: 'no-store'` force la relecture.
+   * On repasse par le fetch normal si le navigateur refuse cette option. */
+  const auReseau = () =>
+    fetch(req.url, { cache: 'no-store', credentials: 'same-origin' }).catch(() => fetch(req));
+
   e.respondWith(
-    fetch(req)
+    auReseau()
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});

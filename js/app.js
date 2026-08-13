@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.13-2';
+const APP_VERSION = 'v2026.08.13-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -37,6 +37,15 @@ const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 /* Implantations scolaires (critère d'agrément : au moins deux, dont les principales). */
 const SCHOOLS = ['Saint-Remacle', 'ARAHF'];
 const REQUIRED_SCHOOLS = ['Saint-Remacle', 'ARAHF'];
+
+/* Année scolaire suivie par l'enfant (colonne « Année » de l'horaire papier). */
+const GRADES = ['M1', 'M2', 'M3', '1re', '2e', '3e', '4e', '5e', '6e'];
+function gradeOptions(value) {
+  const opts = ['<option value="">— non précisée —</option>']
+    .concat(GRADES.map((g) => `<option value="${g}"${g === value ? ' selected' : ''}>${g}</option>`));
+  if (value && !GRADES.includes(value)) opts.push(`<option value="${value}" selected>${value}</option>`);
+  return opts.join('');
+}
 function schoolOptions(value) {
   const opts = ['<option value="">— non précisé —</option>']
     .concat(SCHOOLS.map((s) => `<option value="${s}"${s === value ? ' selected' : ''}>${s}</option>`));
@@ -782,8 +791,11 @@ async function viewChildren() {
   const kidRows = kids.length ? kids.map((k) => {
     const cells = days.map((day) => cellHtml(k, day)).join('');
     const jours = (k.days || []).length ? `<span class="muted small nowrap"> · ${(k.days || []).slice().sort().map((w) => DOW[w]).join(' ')}</span>` : '';
+    // Année scolaire + implantation, reprises de l'horaire papier.
+    const infos = [k.grade, k.school].filter(Boolean).join(' · ');
+    const annee = infos ? `<span class="muted small nowrap"> — ${infos}</span>` : '';
     return `<tr>
-      <th scope="row" class="kidname nowrap">${kidLabel(k)}${jours}
+      <th scope="row" class="kidname nowrap">${kidLabel(k)}${annee}${jours}
         ${ME.role === 'admin' ? `<button class="linkx" data-editkid="${k.id}" aria-label="Modifier ${kidLabel(k).replace(/"/g, '&quot;')}" title="Modifier (nom, école, naissance, jours)">✏️</button>
         <button class="linkx" data-arch="${k.id}" aria-label="Retirer ${kidLabel(k).replace(/"/g, '&quot;')} de la liste" title="Retirer de la liste">✕</button>` : ''}</th>
       ${cells}
@@ -801,11 +813,17 @@ async function viewChildren() {
         <div><label for="kFirst">Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
         <div><label for="kLast">Nom</label><input id="kLast" placeholder="Nom"/></div>
         <div><label for="kSchool">École</label><select id="kSchool">${schoolOptions('')}</select></div>
+        <div style="flex:0 0 110px"><label for="kGrade">Année</label><select id="kGrade">${gradeOptions('')}</select></div>
         <div><label for="kBirth">Naissance</label><input id="kBirth" type="date"/></div>
         <div style="flex:0"><label aria-hidden="true">&nbsp;</label><button id="kAdd">+ Ajouter</button></div>
       </div>
       <div style="margin-top:6px"><label>Jours habituels de présence</label><div class="daychks">${dayCheckboxes}</div></div>
       <div id="kMsg"></div>
+      ${ME.role === 'admin' ? `<div style="margin-top:10px">
+        <button class="small gray" id="kImport" title="Encode d'un coup les enfants de l'horaire 2025-2026">
+          📋 Charger la liste de l'école (2025-2026)</button>
+        <span class="muted small"> — ajoute ou met à jour les fiches ; aucune présence déjà encodée n'est effacée.</span>
+      </div>` : ''}
       <div class="card hidden" id="editKidCard" style="background:#fbf6ec; margin-top:12px">
         <h3 style="margin-top:0">✏️ Modifier la fiche de l'enfant</h3>
         <input type="hidden" id="eId"/>
@@ -813,6 +831,7 @@ async function viewChildren() {
           <div><label for="eFirst">Prénom</label><input id="eFirst"/></div>
           <div><label for="eLast">Nom</label><input id="eLast"/></div>
           <div><label for="eSchool">École</label><select id="eSchool">${schoolOptions('')}</select></div>
+          <div style="flex:0 0 110px"><label for="eGrade">Année</label><select id="eGrade">${gradeOptions('')}</select></div>
           <div><label for="eBirth">Naissance</label><input id="eBirth" type="date"/></div>
         </div>
         <div style="margin-top:6px"><label>Jours habituels de présence</label>
@@ -843,9 +862,30 @@ async function viewChildren() {
     const msg = document.getElementById('kMsg');
     try {
       await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value,
-        document.getElementById('kSchool').value, document.getElementById('kBirth').value, readDays());
+        document.getElementById('kSchool').value, document.getElementById('kBirth').value, readDays(),
+        document.getElementById('kGrade').value);
       PREFILLED_KIDS.clear(); toast('Enfant ajouté'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
+  };
+  // Chargement en un clic de la liste de l'école (fichier livré avec l'application).
+  // Évite à l'administratrice de ressaisir 12 fiches à la main en début d'année.
+  const impBtn = document.getElementById('kImport');
+  if (impBtn) impBtn.onclick = async () => {
+    const msg = document.getElementById('kMsg');
+    impBtn.disabled = true;
+    try {
+      const rep = await fetch('import-enfants-2025-2026.json', { cache: 'no-store' });
+      if (!rep.ok) throw new Error('liste introuvable (' + rep.status + ')');
+      const liste = (await rep.json()).kids || [];
+      if (!liste.length) throw new Error('la liste est vide');
+      const { ajoutes, misAJour } = await STORE.importKids(liste);
+      PREFILLED_KIDS.clear();   // les nouveaux enfants doivent être pré-encodés
+      toast(`${ajoutes} enfant(s) ajouté(s), ${misAJour} mis à jour`);
+      render();
+    } catch (e) {
+      impBtn.disabled = false;
+      msg.innerHTML = `<div class="msg error">Chargement impossible : ${e.message}</div>`;
+    }
   };
   // Modifier un enfant : ouvre le formulaire pré-rempli (nom, école, naissance, jours).
   const editCard = document.getElementById('editKidCard');
@@ -855,6 +895,7 @@ async function viewChildren() {
     document.getElementById('eFirst').value = k.first_name || '';
     document.getElementById('eLast').value = k.last_name || '';
     document.getElementById('eSchool').innerHTML = schoolOptions(k.school || '');
+    document.getElementById('eGrade').innerHTML = gradeOptions(k.grade || '');
     document.getElementById('eBirth').value = k.birthdate || '';
     const set = new Set(k.days || []);
     app.querySelectorAll('input.ek').forEach((c) => (c.checked = set.has(Number(c.dataset.w))));
@@ -869,6 +910,7 @@ async function viewChildren() {
       first_name: document.getElementById('eFirst').value,
       last_name: document.getElementById('eLast').value,
       school: document.getElementById('eSchool').value,
+      grade: document.getElementById('eGrade').value,
       birthdate: document.getElementById('eBirth').value,
       days: [...app.querySelectorAll('input.ek:checked')].map((c) => Number(c.dataset.w)),
     };
