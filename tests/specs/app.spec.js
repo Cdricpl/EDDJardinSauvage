@@ -84,6 +84,7 @@ test('enfants : ajouter un enfant puis cocher une présence incrémente son tota
   await loginAdmin(page);
   await page.locator('.navbtn[data-v="children"]').click();
 
+  await page.locator('#kToggle').click();   // le formulaire d'ajout est replié par défaut
   await page.locator('#kFirst').fill('Testprenom');
   await page.locator('#kLast').fill('Zztest');
   await page.locator('#kAdd').click();
@@ -257,14 +258,19 @@ test('liste de l’école : le fichier livré se restaure avec année, école et
   await expect(page.locator('table.attend tbody tr')).toHaveCount(12);
   // L'année scolaire et l'implantation sont rappelées à côté du nom.
   const row = page.locator('table.attend tbody tr', { hasText: 'BENALI' });
-  await expect(row.locator('.kidname')).toContainText('5e · ARAHF');
-  await expect(row.locator('.kidname')).toContainText('Lun Mar Jeu Ven');
+  // Année, école et jours habituels sont empilés sous le nom, chacun sur sa ligne.
+  await expect(row.locator('.kidmeta').nth(0)).toHaveText('5e');
+  await expect(row.locator('.kidmeta').nth(1)).toHaveText('ARAHF');
+  await expect(row.locator('.kidmeta').nth(2)).toHaveText('Habituels : Lun Mar Jeu Ven');
+  // La pastille d'initiales reprend l'initiale du nom puis du prénom.
+  await expect(row.locator('.avatar')).toHaveText('BY');
 });
 
 test('enfants : l’année scolaire est enregistrée à la création et modifiable', async ({ page }) => {
   await loginAdmin(page);
   await page.locator('.navbtn[data-v="children"]').click();
 
+  await page.locator('#kToggle').click();   // le formulaire d'ajout est replié par défaut
   await page.locator('#kFirst').fill('Annee');
   await page.locator('#kLast').fill('Zztest');
   await page.locator('#kGrade').selectOption('4e');
@@ -272,7 +278,8 @@ test('enfants : l’année scolaire est enregistrée à la création et modifiab
   await page.locator('#kAdd').click();
 
   const row = page.locator('table.attend tbody tr', { hasText: 'Annee' });
-  await expect(row.locator('.kidname')).toContainText('4e · ARAHF');
+  await expect(row.locator('.kidmeta').nth(0)).toHaveText('4e');
+  await expect(row.locator('.kidmeta').nth(1)).toHaveText('ARAHF');
 
   // Modification via la fiche.
   await row.locator('[data-editkid]').click();

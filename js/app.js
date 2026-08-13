@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.13-4';
+const APP_VERSION = 'v2026.08.13-5';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -37,6 +37,21 @@ const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 /* Implantations scolaires (critère d'agrément : au moins deux, dont les principales). */
 const SCHOOLS = ['Saint-Remacle', 'ARAHF'];
 const REQUIRED_SCHOOLS = ['Saint-Remacle', 'ARAHF'];
+
+/* Pastille d'initiales devant chaque enfant : repère visuel qui aide à
+ * retrouver sa ligne dans une grille de 31 colonnes. La couleur est tirée du
+ * nom, donc stable d'un mois à l'autre et d'un appareil à l'autre. */
+const AVATAR_COLORS = ['#34568b', '#7d5ba6', '#2f7d4f', '#c07a1e', '#b23a3a', '#2a7d8c', '#8a1f1f', '#4a6fa5'];
+function avatarColor(nom) {
+  let h = 0;
+  for (let i = 0; i < nom.length; i++) h = (h * 31 + nom.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+function initials(k) {
+  const a = (k.last_name || k.first_name || '?').trim()[0] || '?';
+  const b = (k.first_name || '').trim()[0] || '';
+  return (a + b).toUpperCase();
+}
 
 /* Année scolaire suivie par l'enfant (colonne « Année » de l'horaire papier). */
 const GRADES = ['M1', 'M2', 'M3', '1re', '2e', '3e', '4e', '5e', '6e'];
@@ -306,7 +321,7 @@ function buildNav() {
 }
 
 /* ---------------- Barre de sélection mois / employée ---------------- */
-async function toolbar(showEmployee) {
+async function toolbar(showEmployee, actionHTML) {
   let empSel = '';
   if (showEmployee && ME.role === 'admin') {
     const profs = (await STORE.listProfiles()).filter((p) => p.role === 'employee');
@@ -322,6 +337,7 @@ async function toolbar(showEmployee) {
     <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours">📅 Aujourd'hui</button>
     ${empSel}
     <span style="flex:1"></span>
+    ${actionHTML || ''}
   </div>`;
 }
 function wireToolbar() {
@@ -776,49 +792,74 @@ async function viewChildren() {
   const dayPresentCount = (day) => kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0);
   const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
 
+  // En-tête : numéro du jour au-dessus de son initiale. Le dimanche est mis en
+  // évidence, c'est le repère qui permet de compter les semaines d'un coup d'œil.
   const headDays = days.map((day) =>
-    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}"><div>${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
+    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}"><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
 
   const kidLabel = (k) => `${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name}`.trim();
   const cellHtml = (k, day) => {
     const st = getSt(k.id, day.date);
     const expected = isExpected(k, day.dow);
-    const cls = st === 'present' ? 'pres-p' : st === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : '');
-    const sym = st === 'present' ? '✓' : st === 'absent' ? '✗' : (expected ? '·' : '');
-    const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${st === 'present' ? 'présent' : st === 'absent' ? 'absent' : 'non marqué'}`;
-    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absent → vide" aria-label="${lbl.replace(/"/g, '&quot;')}">${sym}</button></td>`;
+    // Trois états lisibles au premier regard : ✓ vert, ✗ rouge, — gris.
+    const cls = st === 'present' ? 'pres-p' : st === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : 'pres-v');
+    const sym = st === 'present' ? '✓' : st === 'absent' ? '✗' : '—';
+    const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${st === 'present' ? 'présent' : st === 'absent' ? 'absent' : 'non défini'}`;
+    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absent → non défini" aria-label="${lbl.replace(/"/g, '&quot;')}">${sym}</button></td>`;
   };
   const kidRows = kids.length ? kids.map((k) => {
     const cells = days.map((day) => cellHtml(k, day)).join('');
-    const jours = (k.days || []).length ? `<span class="muted small nowrap"> · ${(k.days || []).slice().sort().map((w) => DOW[w]).join(' ')}</span>` : '';
-    // Année scolaire + implantation, reprises de l'horaire papier.
-    const infos = [k.grade, k.school].filter(Boolean).join(' · ');
-    const annee = infos ? `<span class="muted small nowrap"> — ${infos}</span>` : '';
+    const nom = kidLabel(k);
+    const esc = nom.replace(/"/g, '&quot;');
+    const habituels = (k.days || []).length
+      ? `<div class="kidmeta">Habituels : ${(k.days || []).slice().sort().map((w) => DOW[w]).join(' ')}</div>` : '';
+    const lignes = [k.grade, k.school].filter(Boolean)
+      .map((t) => `<div class="kidmeta">${t}</div>`).join('');
     return `<tr>
-      <th scope="row" class="kidname nowrap">${kidLabel(k)}${annee}${jours}
-        ${ME.role === 'admin' ? `<button class="linkx" data-editkid="${k.id}" aria-label="Modifier ${kidLabel(k).replace(/"/g, '&quot;')}" title="Modifier (nom, école, naissance, jours)">✏️</button>
-        <button class="linkx" data-arch="${k.id}" aria-label="Retirer ${kidLabel(k).replace(/"/g, '&quot;')} de la liste" title="Retirer de la liste">✕</button>` : ''}</th>
+      <th scope="row" class="kidname">
+        <div class="kidcell">
+          <span class="avatar" style="background:${avatarColor(nom)}" aria-hidden="true">${initials(k)}</span>
+          <div class="kidinfo">
+            <div class="kidnom">${nom}</div>
+            ${lignes}${habituels}
+          </div>
+          ${ME.role === 'admin' ? `<div class="kidacts">
+            <button class="iconbtn edit" data-editkid="${k.id}" aria-label="Modifier ${esc}" title="Modifier (nom, école, année, naissance, jours)">✏️</button>
+            <button class="iconbtn del" data-arch="${k.id}" aria-label="Retirer ${esc} de la liste" title="Retirer de la liste">🗑️</button>
+          </div>` : ''}
+        </div>
+      </th>
       ${cells}
       <td class="kidtot"><strong id="kidtot_${k.id}">${kidPresentCount(k)}</strong></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="${dim + 2}" class="muted" style="padding:16px">Aucun enfant. Ajoutez-en ci-dessus.</td></tr>`;
+  }).join('') : `<tr><td colspan="${dim + 2}" class="muted" style="padding:16px">Aucun enfant. Cliquez sur « + Ajouter un enfant ».</td></tr>`;
 
   const footCells = days.map((day) => `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong id="daytot_${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
   const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="kd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
 
-  app.innerHTML = `${await toolbar(false)}
+  const legende = `<span class="pres-leg"><span class="presbtn pres-p" aria-hidden="true">✓</span> Présent</span>
+    <span class="pres-leg"><span class="presbtn pres-a" aria-hidden="true">✗</span> Absent</span>
+    <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true">—</span> Non défini</span>`;
+
+  app.innerHTML = `${await toolbar(false, ME.role === 'admin'
+      ? '<button id="kToggle" class="addkid">+ Ajouter un enfant</button>' : '')}
     <div class="card">
       <h2 style="margin:0 0 4px">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
-      <div class="row" style="align-items:end; max-width:900px">
-        <div><label for="kFirst">Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
-        <div><label for="kLast">Nom</label><input id="kLast" placeholder="Nom"/></div>
-        <div><label for="kSchool">École</label><select id="kSchool">${schoolOptions('')}</select></div>
-        <div style="flex:0 0 110px"><label for="kGrade">Année</label><select id="kGrade">${gradeOptions('')}</select></div>
-        <div><label for="kBirth">Naissance</label><input id="kBirth" type="date"/></div>
-        <div style="flex:0"><label aria-hidden="true">&nbsp;</label><button id="kAdd">+ Ajouter</button></div>
+      <div class="card sub hidden" id="addKidCard">
+        <div class="row" style="align-items:end">
+          <div><label for="kFirst">Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
+          <div><label for="kLast">Nom</label><input id="kLast" placeholder="Nom"/></div>
+          <div><label for="kSchool">École</label><select id="kSchool">${schoolOptions('')}</select></div>
+          <div style="flex:0 0 130px"><label for="kGrade">Année</label><select id="kGrade">${gradeOptions('')}</select></div>
+          <div><label for="kBirth">Naissance</label><input id="kBirth" type="date"/></div>
+        </div>
+        <div style="margin-top:8px"><label>Jours habituels de présence</label><div class="daychks">${dayCheckboxes}</div></div>
+        <div id="kMsg"></div>
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap">
+          <button id="kAdd">+ Ajouter</button>
+          <button class="gray" id="kCancel">Annuler</button>
+        </div>
       </div>
-      <div style="margin-top:6px"><label>Jours habituels de présence</label><div class="daychks">${dayCheckboxes}</div></div>
-      <div id="kMsg"></div>
       <div class="card hidden" id="editKidCard" style="background:#fbf6ec; margin-top:12px">
         <h3 style="margin-top:0">✏️ Modifier la fiche de l'enfant</h3>
         <input type="hidden" id="eId"/>
@@ -837,20 +878,39 @@ async function viewChildren() {
           <button class="gray" id="eCancel">Annuler</button>
         </div>
       </div>
-      <p class="muted small">Les jours habituels de chaque enfant sont <strong>pré-encodés « présent » automatiquement</strong>.
-        Cliquez une case pour basculer <span class="pos">✓ présent</span> → <span class="neg">✗ absent</span> → vide.</p>
+      <div class="legbar">
+        <div><span class="legtitle">Légende :</span> ${legende}</div>
+        <p class="muted small" style="margin:0">Les jours habituels de chaque enfant sont
+          <strong>pré-encodés « présent » automatiquement</strong>.</p>
+      </div>
       <div class="table-wrap" style="margin-top:8px"><table class="attend">
         <caption class="sr-only">Présences et absences des enfants pour ${monthName(CUR.y, CUR.m)}.</caption>
         <thead><tr><th scope="col" class="kidname">Enfant</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr></thead>
         <tbody>${kidRows}</tbody>
         <tfoot><tr><th scope="row" class="kidname">Total présents / jour</th>${footCells}<td class="kidtot"><strong id="grandtot">${totalPresent}</strong></td></tr></tfoot>
       </table></div>
+      <div class="legbar foot">
+        <div class="kidcount">👥 <strong>${kids.length}</strong> enfant${kids.length > 1 ? 's' : ''}</div>
+        <div>${legende}</div>
+      </div>
       <p class="muted small">« Prés. » = jours de présence de l'enfant ce mois-ci. La moyenne annuelle est dans l'onglet 📈 Statistiques.</p>
     </div>`;
   wireToolbar();
 
+  // Le formulaire d'ajout reste replié : la grille est ainsi lisible d'emblée.
+  const addCard = document.getElementById('addKidCard');
+  const kToggle = document.getElementById('kToggle');
+  if (kToggle) kToggle.onclick = () => {
+    addCard.classList.toggle('hidden');
+    if (!addCard.classList.contains('hidden')) {
+      document.getElementById('kFirst').focus();
+      addCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  };
+  const kCancel = document.getElementById('kCancel');
+  if (kCancel) kCancel.onclick = () => addCard.classList.add('hidden');
+
   const readDays = () => [...app.querySelectorAll('input.kd:checked')].map((c) => Number(c.dataset.w));
-  const daysLabel = (arr) => (arr || []).slice().sort().map((w) => DOW[w]).join(' ') || '(aucun)';
 
   // Ajout d'un enfant.
   document.getElementById('kAdd').onclick = async () => {
