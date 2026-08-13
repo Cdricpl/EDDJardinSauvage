@@ -115,6 +115,14 @@ test('entête : le numéro de version est affiché et correspond au cache du ser
   // afficherait un numero a jour tout en servant d'anciens fichiers.
   const sw = await (await page.request.get('/sw.js')).text();
   expect(sw).toContain(`edd-jardin-sauvage-${version}`);
+
+  // Les scripts doivent porter la version dans leur URL. Sans cela le
+  // navigateur peut resservir un ancien js/app.js pendant des heures et
+  // l'utilisatrice croit que la mise à jour n'est pas passée.
+  const html = await (await page.request.get('/index.html')).text();
+  for (const f of ['css/styles.css', 'js/config.js', 'js/store.js', 'js/app.js']) {
+    expect(html, `${f} doit être versionné dans index.html`).toContain(`${f}?v=${version}`);
+  }
 });
 
 test('entête : le bouton 💾 déclenche une sauvegarde (admin)', async ({ page }) => {
@@ -228,4 +236,44 @@ test('restauration : la fiche complète de l’enfant est conservée (école, na
   await expect(page.locator('#eSchool')).toHaveValue('ARAHF');
   await expect(page.locator('#eBirth')).toHaveValue('2015-09-15');
   await expect(page.locator('input.ek:checked')).toHaveCount(4);
+});
+
+test('enfants : le bouton charge la liste de l’école avec année, école et jours', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+
+  await page.locator('#kImport').click();
+  const row = page.locator('table.attend tbody tr', { hasText: 'BENALI' });
+  await expect(row).toHaveCount(1);
+  // L'année scolaire et l'implantation sont rappelées à côté du nom.
+  await expect(row.locator('.kidname')).toContainText('5e · ARAHF');
+  await expect(row.locator('.kidname')).toContainText('Lun Mar Jeu Ven');
+
+  // Les 12 enfants de l'horaire 2025-2026 sont présents.
+  await expect(page.locator('table.attend tbody tr')).toHaveCount(12 + 3); // + les 3 enfants de démo
+
+  // Rejouable : un second clic ne crée pas de doublon.
+  await page.locator('#kImport').click();
+  await expect(page.locator('table.attend tbody tr', { hasText: 'BENALI' })).toHaveCount(1);
+});
+
+test('enfants : l’année scolaire est enregistrée à la création et modifiable', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+
+  await page.locator('#kFirst').fill('Annee');
+  await page.locator('#kLast').fill('Zztest');
+  await page.locator('#kGrade').selectOption('4e');
+  await page.locator('#kSchool').selectOption('ARAHF');
+  await page.locator('#kAdd').click();
+
+  const row = page.locator('table.attend tbody tr', { hasText: 'Annee' });
+  await expect(row.locator('.kidname')).toContainText('4e · ARAHF');
+
+  // Modification via la fiche.
+  await row.locator('[data-editkid]').click();
+  await expect(page.locator('#eGrade')).toHaveValue('4e');
+  await page.locator('#eGrade').selectOption('6e');
+  await page.locator('#eSave').click();
+  await expect(page.locator('table.attend tbody tr', { hasText: 'Annee' }).locator('.kidname')).toContainText('6e');
 });

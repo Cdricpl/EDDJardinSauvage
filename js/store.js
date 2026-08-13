@@ -239,10 +239,11 @@ class DemoStore {
       .filter(k => includeArchived || k.active)
       .sort((a, b) => (a.last_name + a.first_name).localeCompare(b.last_name + b.first_name));
   }
-  async addKid(first_name, last_name, school, birthdate, days) {
+  async addKid(first_name, last_name, school, birthdate, days, grade) {
     const db = this._db();
     const k = { id: Util.uuid(), first_name: (first_name || '').trim(), last_name: (last_name || '').trim(),
-      school: school || '', birthdate: birthdate || '', days: Array.isArray(days) ? days : [], active: true };
+      school: school || '', birthdate: birthdate || '', grade: grade || '',
+      days: Array.isArray(days) ? days : [], active: true };
     if (!k.first_name) throw new Error('Le prénom est requis.');
     db.kids.push(k); this._save(db); return k;
   }
@@ -253,8 +254,28 @@ class DemoStore {
     const k = db.kids.find(x => x.id === id);
     if (k) { k.first_name = first; k.last_name = (info.last_name || '').trim();
       k.school = info.school || ''; k.birthdate = info.birthdate || '';
+      k.grade = info.grade || '';
       if (Array.isArray(info.days)) k.days = info.days;
       this._save(db); }
+  }
+  // Charge une liste d'enfants SANS rien supprimer : les fiches déjà présentes
+  // (même identifiant) sont mises à jour, les autres ajoutées. Rejouable sans
+  // créer de doublon.
+  async importKids(list) {
+    const db = this._db();
+    let ajoutes = 0, misAJour = 0;
+    (list || []).forEach((k) => {
+      const fiche = {
+        id: String(k.id), first_name: (k.first_name || '').trim(), last_name: (k.last_name || '').trim(),
+        school: k.school || '', birthdate: k.birthdate || '', grade: k.grade || '',
+        days: Array.isArray(k.days) ? k.days : [], active: k.active !== false,
+      };
+      const i = db.kids.findIndex((x) => x.id === fiche.id);
+      if (i >= 0) { db.kids[i] = { ...db.kids[i], ...fiche }; misAJour++; }
+      else { db.kids.push(fiche); ajoutes++; }
+    });
+    this._save(db);
+    return { ajoutes, misAJour };
   }
   async setKidActive(id, active) {
     const db = this._db();
@@ -537,13 +558,29 @@ class FirebaseStore {
       .filter((k) => includeArchived || k.active !== false)
       .sort((a, b) => ((a.last_name || '') + a.first_name).localeCompare((b.last_name || '') + b.first_name));
   }
-  async addKid(first_name, last_name, school, birthdate, days) {
+  async addKid(first_name, last_name, school, birthdate, days, grade) {
     first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
     if (!first_name) throw new Error('Le prénom est requis.');
     const data = { first_name, last_name, school: school || '', birthdate: birthdate || '',
-      days: Array.isArray(days) ? days : [], active: true, created_at: new Date().toISOString() };
+      grade: grade || '', days: Array.isArray(days) ? days : [], active: true,
+      created_at: new Date().toISOString() };
     const ref = await this.db.collection('kids').add(data);
     return { id: ref.id, ...data };
+  }
+  // Charge une liste d'enfants SANS rien supprimer (voir DemoStore.importKids).
+  async importKids(list) {
+    if (!list || !list.length) return { ajoutes: 0, misAJour: 0 };
+    const connus = new Set((await this.listKids(true)).map((k) => k.id));
+    await this._commit(list.map((k) => ({
+      ref: this.db.collection('kids').doc(String(k.id)),
+      data: {
+        first_name: (k.first_name || '').trim(), last_name: (k.last_name || '').trim(),
+        school: k.school || '', birthdate: k.birthdate || '', grade: k.grade || '',
+        days: Array.isArray(k.days) ? k.days : [], active: k.active !== false,
+      },
+    })));
+    const misAJour = list.filter((k) => connus.has(String(k.id))).length;
+    return { ajoutes: list.length - misAJour, misAJour };
   }
   async setKidActive(id, active) {
     await this.db.collection('kids').doc(id).set({ active }, { merge: true });
@@ -552,7 +589,7 @@ class FirebaseStore {
     const first_name = (info.first_name || '').trim();
     if (!first_name) throw new Error('Le prénom est requis.');
     const patch = { first_name, last_name: (info.last_name || '').trim(),
-      school: info.school || '', birthdate: info.birthdate || '' };
+      school: info.school || '', birthdate: info.birthdate || '', grade: info.grade || '' };
     if (Array.isArray(info.days)) patch.days = info.days;
     await this.db.collection('kids').doc(id).set(patch, { merge: true });
   }
@@ -632,7 +669,7 @@ class FirebaseStore {
       ref: this.db.collection('kids').doc(String(k.id)),
       data: {
         first_name: k.first_name || '', last_name: k.last_name || '',
-        school: k.school || '', birthdate: k.birthdate || '',
+        school: k.school || '', birthdate: k.birthdate || '', grade: k.grade || '',
         days: Array.isArray(k.days) ? k.days : [],
         active: k.active !== false,
       },

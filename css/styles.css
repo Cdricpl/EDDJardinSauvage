@@ -165,6 +165,9 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
 .attend { border-collapse:separate; border-spacing:0; font-size:13px; }
 .attend th, .attend td { border:1px solid var(--border); padding:4px; text-align:center; }
 .attend .kidname { text-align:left; position:sticky; left:0; z-index:2; background:var(--card); min-width:150px; white-space:nowrap; }
+/* Le nom reste en majuscules (en-tête de ligne), mais pas les informations qui
+   le suivent : « 5e · Saint-Remacle · Lun Mar Jeu » se lit mal en capitales. */
+.attend tbody .kidname .muted { text-transform:none; letter-spacing:0; font-weight:500; }
 .attend thead .kidname, .attend tfoot .kidname { background:#f2ead9; }
 .attend .daycol { width:30px; padding:3px 2px; font-size:11px; line-height:1.1; }
 .attend .daycol .dini { color:var(--muted); font-weight:400; }

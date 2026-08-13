@@ -14,7 +14,8 @@
         4,
         5
       ],
-      "active": true
+      "active": true,
+      "grade": "5e"
     },
     {
       "id": "k-chalon-girondeau-emy-joyce",
@@ -27,7 +28,8 @@
         2,
         4
       ],
-      "active": true
+      "active": true,
+      "grade": "5e"
     },
     {
       "id": "k-christ-tesalia",
@@ -40,7 +42,8 @@
         2,
         4
       ],
-      "active": true
+      "active": true,
+      "grade": "5e"
     },
     {
       "id": "k-hanique-léa",
@@ -54,7 +57,8 @@
         4,
         5
       ],
-      "active": true
+      "active": true,
+      "grade": "4e"
     },
     {
       "id": "k-iliza-inès",
@@ -67,7 +71,8 @@
         4,
         5
       ],
-      "active": true
+      "active": true,
+      "grade": "3e"
     },
     {
       "id": "k-koustodintcheva-mia",
@@ -80,7 +85,8 @@
         2,
         5
       ],
-      "active": true
+      "active": true,
+      "grade": "5e"
     },
     {
       "id": "k-lemmens-eliana",
@@ -94,7 +100,8 @@
         4,
         5
       ],
-      "active": true
+      "active": true,
+      "grade": "6e"
     },
     {
       "id": "k-neves-de-lima-maria-héléna",
@@ -107,7 +114,8 @@
         2,
         4
       ],
-      "active": true
+      "active": true,
+      "grade": "2e"
     },
     {
       "id": "k-sanabayera-alima",
@@ -121,7 +129,8 @@
         4,
         5
       ],
-      "active": true
+      "active": true,
+      "grade": "4e"
     },
     {
       "id": "k-sanabayera-muhammad",
@@ -135,7 +144,8 @@
         4,
         5
       ],
-      "active": true
+      "active": true,
+      "grade": "2e"
     },
     {
       "id": "k-sarlette-maxence",
@@ -148,7 +158,8 @@
         4,
         5
       ],
-      "active": true
+      "active": true,
+      "grade": "5e"
     },
     {
       "id": "k-wilczewski-romain",
@@ -161,7 +172,8 @@
         2,
         4
       ],
-      "active": true
+      "active": true,
+      "grade": "5e"
     }
   ],
   "note": "Liste des enfants (horaire 2025-2026). L'import AJOUTE ou MET A JOUR ces fiches ; il ne supprime aucune presence deja encodee."
