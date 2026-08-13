@@ -198,3 +198,34 @@ test('restauration : importer une sauvegarde JSON remplace les données', async 
   await page.locator('.navbtn[data-v="children"]').click();
   await expect(page.locator('table.attend tbody tr', { hasText: 'Importe' })).toHaveCount(1);
 });
+
+test('restauration : la fiche complète de l’enfant est conservée (école, naissance, jours)', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+
+  // Ces trois champs alimentent les critères d'agrément et le pré-encodage :
+  // une restauration qui les perdrait viderait silencieusement les statistiques.
+  const backup = JSON.stringify({
+    kids: [{
+      id: 'imp2', first_name: 'Fiche', last_name: 'Complete',
+      school: 'ARAHF', birthdate: '2015-09-15', days: [1, 2, 4, 5], active: true,
+    }],
+  });
+  await page.locator('#impFile').setInputFiles({
+    name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(backup),
+  });
+  page.on('dialog', (d) => d.accept());
+  await page.locator('#impBtn').click();
+
+  await page.locator('.navbtn[data-v="children"]').click();
+  const row = page.locator('table.attend tbody tr', { hasText: 'Fiche' });
+  await expect(row).toHaveCount(1);
+  // Les jours habituels sont rappelés à côté du nom.
+  await expect(row.locator('.kidname')).toContainText('Lun Mar Jeu Ven');
+
+  await row.locator('[data-editkid]').click();
+  await expect(page.locator('#editKidCard')).toBeVisible();
+  await expect(page.locator('#eSchool')).toHaveValue('ARAHF');
+  await expect(page.locator('#eBirth')).toHaveValue('2015-09-15');
+  await expect(page.locator('input.ek:checked')).toHaveCount(4);
+});

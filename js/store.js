@@ -625,13 +625,24 @@ class FirebaseStore {
     (data.day_entries || []).forEach((e) => { if (!map[e.employee_id]) missing.add(e.employee_id); });
 
     const ops = [];
+    // On conserve TOUTE la fiche de l'enfant. Sans école / date de naissance /
+    // jours habituels, une restauration ferait perdre les données qui servent
+    // aux critères d'agrément et au pré-encodage des présences.
     (data.kids || []).forEach((k) => ops.push({
       ref: this.db.collection('kids').doc(String(k.id)),
-      data: { first_name: k.first_name || '', last_name: k.last_name || '', active: k.active !== false },
+      data: {
+        first_name: k.first_name || '', last_name: k.last_name || '',
+        school: k.school || '', birthdate: k.birthdate || '',
+        days: Array.isArray(k.days) ? k.days : [],
+        active: k.active !== false,
+      },
     }));
+    // `status` est indispensable : sans lui, toutes les absences enregistrées
+    // seraient relues comme des présences après une restauration.
     (data.kid_attendance || []).forEach((a) => ops.push({
       ref: this.db.collection('kid_attendance').doc(`${a.kid_id}_${a.entry_date}`),
-      data: { kid_id: String(a.kid_id), entry_date: a.entry_date },
+      data: { kid_id: String(a.kid_id), entry_date: a.entry_date,
+        status: a.status === 'absent' ? 'absent' : 'present' },
     }));
     (data.schedule_templates || []).forEach((t) => ops.push({
       ref: this.db.collection('schedule_templates').doc(emp(t.employee_id)),

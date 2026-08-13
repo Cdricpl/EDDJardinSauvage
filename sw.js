@@ -7,7 +7,7 @@
  * ancienne version depuis le cache.
  * ⚠️ Doit rester IDENTIQUE à APP_VERSION dans js/app.js (numéro affiché dans
  *    l'entête) : c'est ce qui permet de vérifier qu'un appareil est à jour. */
-const CACHE = 'edd-jardin-sauvage-v2026.08.13-1';
+const CACHE = 'edd-jardin-sauvage-v2026.08.13-2';
 const APP_SHELL = [
   './', 'index.html', 'offline.html', 'css/styles.css',
   'js/config.js', 'js/store.js', 'js/app.js',

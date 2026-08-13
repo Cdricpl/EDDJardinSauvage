@@ -1,0 +1,168 @@
+{
+  "exported_at": "2026-08-13",
+  "mode": "import-liste-2025-2026",
+  "kids": [
+    {
+      "id": "k-benali-youssef",
+      "last_name": "BENALI",
+      "first_name": "Youssef",
+      "school": "ARAHF",
+      "birthdate": "2015-09-15",
+      "days": [
+        1,
+        2,
+        4,
+        5
+      ],
+      "active": true
+    },
+    {
+      "id": "k-chalon-girondeau-emy-joyce",
+      "last_name": "CHALON-GIRONDEAU",
+      "first_name": "Emy-Joyce",
+      "school": "ARAHF",
+      "birthdate": "2015-04-25",
+      "days": [
+        1,
+        2,
+        4
+      ],
+      "active": true
+    },
+    {
+      "id": "k-christ-tesalia",
+      "last_name": "CHRIST",
+      "first_name": "Tesalia",
+      "school": "Saint-Remacle",
+      "birthdate": "2014-12-17",
+      "days": [
+        1,
+        2,
+        4
+      ],
+      "active": true
+    },
+    {
+      "id": "k-hanique-léa",
+      "last_name": "HANIQUE",
+      "first_name": "Léa",
+      "school": "Saint-Remacle",
+      "birthdate": "2015-09-11",
+      "days": [
+        1,
+        2,
+        4,
+        5
+      ],
+      "active": true
+    },
+    {
+      "id": "k-iliza-inès",
+      "last_name": "ILIZA",
+      "first_name": "Inès",
+      "school": "ARAHF",
+      "birthdate": "2011-05-17",
+      "days": [
+        2,
+        4,
+        5
+      ],
+      "active": true
+    },
+    {
+      "id": "k-koustodintcheva-mia",
+      "last_name": "KOUSTODINTCHEVA",
+      "first_name": "Mia",
+      "school": "Saint-Remacle",
+      "birthdate": "2014-05-30",
+      "days": [
+        1,
+        2,
+        5
+      ],
+      "active": true
+    },
+    {
+      "id": "k-lemmens-eliana",
+      "last_name": "LEMMENS",
+      "first_name": "Eliana",
+      "school": "Saint-Remacle",
+      "birthdate": "2014-05-16",
+      "days": [
+        1,
+        2,
+        4,
+        5
+      ],
+      "active": true
+    },
+    {
+      "id": "k-neves-de-lima-maria-héléna",
+      "last_name": "NEVES DE LIMA",
+      "first_name": "Maria-Héléna",
+      "school": "Saint-Remacle",
+      "birthdate": "2018-01-04",
+      "days": [
+        1,
+        2,
+        4
+      ],
+      "active": true
+    },
+    {
+      "id": "k-sanabayera-alima",
+      "last_name": "SANABAYERA",
+      "first_name": "Alima",
+      "school": "Saint-Remacle",
+      "birthdate": "2016-10-08",
+      "days": [
+        1,
+        2,
+        4,
+        5
+      ],
+      "active": true
+    },
+    {
+      "id": "k-sanabayera-muhammad",
+      "last_name": "SANABAYERA",
+      "first_name": "Muhammad",
+      "school": "Saint-Remacle",
+      "birthdate": "2017-10-27",
+      "days": [
+        1,
+        2,
+        4,
+        5
+      ],
+      "active": true
+    },
+    {
+      "id": "k-sarlette-maxence",
+      "last_name": "SARLETTE",
+      "first_name": "Maxence",
+      "school": "Saint-Remacle",
+      "birthdate": "",
+      "days": [
+        2,
+        4,
+        5
+      ],
+      "active": true
+    },
+    {
+      "id": "k-wilczewski-romain",
+      "last_name": "WILCZEWSKI",
+      "first_name": "Romain",
+      "school": "ARAHF",
+      "birthdate": "2015-03-06",
+      "days": [
+        1,
+        2,
+        4
+      ],
+      "active": true
+    }
+  ],
+  "note": "Liste des enfants (horaire 2025-2026). L'import AJOUTE ou MET A JOUR ces fiches ; il ne supprime aucune presence deja encodee."
+}
