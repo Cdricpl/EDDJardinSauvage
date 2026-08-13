@@ -288,3 +288,53 @@ test('enfants : l’année scolaire est enregistrée à la création et modifiab
   await page.locator('#eSave').click();
   await expect(page.locator('table.attend tbody tr', { hasText: 'Annee' }).locator('.kidname')).toContainText('6e');
 });
+
+test('enfants : les 31 jours tiennent à l’écran et les repères restent visibles', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+
+  // Tout le mois doit être lisible d'un coup, sans défilement latéral.
+  const jours = await page.locator('.attend thead tr:first-child .daycol').count();
+  expect(jours).toBeGreaterThanOrEqual(28);
+  const deborde = await page.locator('.attend-wrap')
+    .evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+  expect(deborde, 'la grille ne doit pas défiler horizontalement').toBe(false);
+
+  // Les totaux figurent en haut ET en bas.
+  await expect(page.locator('.attend thead .totrow')).toHaveCount(1);
+  await expect(page.locator('.attend tfoot .totrow')).toHaveCount(1);
+
+  // En descendant dans la liste, on doit toujours voir à quel jour on est :
+  // l'en-tête et les totaux restent collés au cadre.
+  await page.locator('.attend-wrap').evaluate((el) => { el.scrollTop = 350; });
+  const visible = await page.locator('.attend-wrap').evaluate((el) => {
+    const w = el.getBoundingClientRect();
+    const dedans = (sel) => {
+      const r = el.querySelector(sel).getBoundingClientRect();
+      return r.top >= w.top - 2 && r.bottom <= w.bottom + 2;
+    };
+    return {
+      jours: dedans('thead tr:first-child .daycol'),
+      haut: dedans('thead .totrow .kidtot'),
+      bas: dedans('tfoot .totrow .kidtot'),
+    };
+  });
+  expect(visible).toEqual({ jours: true, haut: true, bas: true });
+});
+
+test('enfants : un clic met à jour les deux lignes de totaux', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+
+  const totaux = page.locator('[data-grandtot]');
+  await expect(totaux).toHaveCount(2);          // une en haut, une en bas
+  const avant = Number(await totaux.first().textContent());
+
+  await page.locator('button.presbtn.pres-p').first().click();
+  // Les DEUX doivent suivre : elles portent le même repère, pas un id unique.
+  await expect(totaux.first()).toHaveText(String(avant - 1));
+  await expect(totaux.last()).toHaveText(String(avant - 1));
+});

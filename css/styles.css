@@ -84,6 +84,9 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
 
 /* ---------- Conteneur & cartes ---------- */
 .container { max-width:1060px; margin:24px auto; padding:0 16px; }
+/* L'onglet Enfants a besoin de plus de large : 31 colonnes de jours + la
+   colonne des noms ne tiennent pas dans la largeur de lecture habituelle. */
+.container.wide { max-width:1440px; }
 .card {
   background:var(--card); border:1px solid var(--border); border-radius:16px;
   padding:22px; margin-bottom:20px; box-shadow:var(--shadow);
@@ -162,7 +165,23 @@ tr.weekend td { background:#f7f2e8; color:#b3a893; }
 
 /* ---------- Grille de présence des enfants ---------- */
 input[type=checkbox] { width:auto; min-height:0; padding:0; }
+/* La grille de présences est son propre cadre défilant : c'est ce qui permet
+   de garder l'en-tête des jours et la ligne des totaux visibles en permanence
+   pendant qu'on descend la liste des enfants. */
+.attend-wrap {
+  max-height:calc(100vh - 240px); min-height:320px; overflow:auto;
+  border:1px solid var(--border); border-radius:12px;
+}
 .attend { border-collapse:separate; border-spacing:0; font-size:13px; }
+/* --- En-tête collant : ligne des jours, puis ligne des totaux juste dessous. --- */
+.attend thead tr:first-child > * { position:sticky; top:0; z-index:3; height:38px; }
+.attend thead tr.totrow > *      { position:sticky; top:38px; z-index:3; }
+/* Le total du bas reste accroché au bas du cadre : les totaux sont donc lisibles
+   au-dessus ET en dessous de la grille, sans avoir à faire défiler. */
+.attend tfoot tr.totrow > * { position:sticky; bottom:0; z-index:3; }
+/* Coins : à la fois collés en haut/bas ET à gauche → doivent passer au-dessus. */
+.attend thead .kidname, .attend tfoot .kidname { left:0; z-index:5; }
+.attend .totrow > * { background:#f2ead9; font-weight:700; }
 /* Pas de quadrillage vertical : sur 31 colonnes il fatigue l'oeil. Seules des
    lignes horizontales séparent les enfants, comme sur une liste de classe. */
 .attend th, .attend td {
@@ -171,7 +190,7 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
 .attend tbody tr:last-child th, .attend tbody tr:last-child td { border-bottom:0; }
 .attend .kidname {
   text-align:left; position:sticky; left:0; z-index:2; background:var(--card);
-  min-width:245px; padding:10px 12px; border-right:1px solid var(--border);
+  width:205px; min-width:205px; padding:9px 10px; border-right:1px solid var(--border);
 }
 .attend thead th { background:#f7f2e8; }
 .attend thead .kidname, .attend tfoot .kidname { background:#f2ead9; }
@@ -184,7 +203,7 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
    garde le regard sur la bonne rangée. */
 .kidcell { display:flex; align-items:flex-start; gap:10px; }
 .kidcell .avatar {
-  flex:0 0 34px; width:34px; height:34px; border-radius:50%;
+  flex:0 0 30px; width:30px; height:30px; border-radius:50%;
   display:flex; align-items:center; justify-content:center;
   color:#fff; font-size:12px; font-weight:700; letter-spacing:.5px;
   text-transform:none; font-family:system-ui,sans-serif;
@@ -205,17 +224,17 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
 .iconbtn:hover { background:var(--paper-2); }
 .iconbtn:focus-visible { outline:2px solid var(--primary); }
 
-.attend .daycol { width:34px; padding:4px 2px; font-size:11px; line-height:1.15; }
+.attend .daycol { width:30px; padding:4px 1px; font-size:11px; line-height:1.15; }
 .attend .daycol .dnum { font-weight:700; }
 .attend .daycol .dini { color:var(--muted); font-weight:400; }
 .attend .daycol.dim .dnum, .attend .daycol.dim .dini { color:var(--red); }  /* dimanche = repère de semaine */
-.attend .daycell { width:34px; }
-.attend .kidtot { background:#faf5ec; min-width:46px; border-left:1px solid var(--border); }
+.attend .daycell { width:30px; padding:4px 1px; }
+.attend .kidtot { background:#faf5ec; width:42px; min-width:42px; border-left:1px solid var(--border); }
 .attend tfoot td { background:#f2ead9; font-weight:700; }
 
 /* --- Cellule de présence à 3 états : ✓ présent / ✗ absent / — non défini --- */
 .presbtn {
-  width:28px; height:28px; padding:0; border:1px solid transparent; border-radius:8px;
+  width:26px; height:26px; padding:0; border:1px solid transparent; border-radius:7px;
   background:#f1ece2; color:var(--muted); font-size:14px; font-weight:700; line-height:1;
   cursor:pointer; box-shadow:none; min-height:0;
   display:inline-flex; align-items:center; justify-content:center;

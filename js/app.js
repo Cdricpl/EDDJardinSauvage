@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.13-6';
+const APP_VERSION = 'v2026.08.13-7';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -360,7 +360,11 @@ async function render() {
   // Remet à zéro les gestionnaires délégués : chaque vue pose les siens, sinon
   // celui de la feuille resterait actif sous l'onglet Enfants.
   const appEl = document.getElementById('app');
-  if (appEl) { appEl.onchange = null; appEl.onclick = null; }
+  if (appEl) {
+    appEl.onchange = null; appEl.onclick = null;
+    // Seul l'onglet Enfants s'élargit : il doit afficher les 31 jours du mois.
+    appEl.classList.toggle('wide', VIEW === 'children');
+  }
   wireLazyTimes();
   const bar = document.getElementById('loadbar');
   if (bar) bar.classList.add('on');
@@ -835,7 +839,13 @@ async function viewChildren() {
     </tr>`;
   }).join('') : `<tr><td colspan="${dim + 2}" class="muted" style="padding:16px">Aucun enfant. Cliquez sur « + Ajouter un enfant ».</td></tr>`;
 
-  const footCells = days.map((day) => `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong id="daytot_${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+  // Ligne des totaux, répétée en haut ET en bas de la grille : avec 12 enfants
+  // et 31 colonnes, il faut pouvoir lire le total sans remonter jusqu'au pied.
+  // Repérage par attribut (et non par id) puisque chaque total existe en double.
+  const totalCells = () => days.map((day) =>
+    `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong data-daytot="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+  const totalRow = `<tr class="totrow"><th scope="row" class="kidname">Total présents / jour</th>
+    ${totalCells()}<td class="kidtot"><strong data-grandtot>${totalPresent}</strong></td></tr>`;
   const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="kd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
 
   const legende = `<span class="pres-leg"><span class="presbtn pres-p" aria-hidden="true">✓</span> Présent</span>
@@ -884,11 +894,14 @@ async function viewChildren() {
         <p class="muted small" style="margin:0">Les jours habituels de chaque enfant sont
           <strong>pré-encodés « présent » automatiquement</strong>.</p>
       </div>
-      <div class="table-wrap" style="margin-top:8px"><table class="attend">
+      <div class="table-wrap attend-wrap" style="margin-top:8px"><table class="attend">
         <caption class="sr-only">Présences et absences des enfants pour ${monthName(CUR.y, CUR.m)}.</caption>
-        <thead><tr><th scope="col" class="kidname">Enfant</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr></thead>
+        <thead>
+          <tr><th scope="col" class="kidname">Enfant</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr>
+          ${totalRow}
+        </thead>
         <tbody>${kidRows}</tbody>
-        <tfoot><tr><th scope="row" class="kidname">Total présents / jour</th>${footCells}<td class="kidtot"><strong id="grandtot">${totalPresent}</strong></td></tr></tfoot>
+        <tfoot>${totalRow}</tfoot>
       </table></div>
       <div class="legbar foot">
         <div class="kidcount">👥 <strong>${kids.length}</strong> enfant${kids.length > 1 ? 's' : ''}</div>
@@ -960,10 +973,11 @@ async function viewChildren() {
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
 
-  const setGrandTotal = () => {
-    const el = document.getElementById('grandtot');
-    if (el) el.textContent = days.reduce((s, day) => s + kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0), 0);
-  };
+  // Les totaux figurent en double (au-dessus et sous la grille) : on met donc à
+  // jour TOUTES les cellules portant le repère, pas seulement la première.
+  const setTotal = (sel, valeur) => app.querySelectorAll(sel).forEach((el) => (el.textContent = valeur));
+  const setGrandTotal = () => setTotal('[data-grandtot]',
+    days.reduce((s, day) => s + kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0), 0));
   // Cellule à 3 états : présent (✓) → absent (✗) → vide. Mise à jour ciblée.
   // Écouteur unique délégué : le tableau compte jusqu'à ~1 100 cases, leur
   // attacher un gestionnaire chacune ralentissait l'ouverture de l'onglet.
