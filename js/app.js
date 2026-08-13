@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.09-5';
+const APP_VERSION = 'v2026.08.13-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -70,7 +70,7 @@ function timeToMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Num
 function minToTime(min) { return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`; }
 // Liste des heures autorisées : uniquement les quarts d'heure (minutes 00/15/30/45).
 const TIME_LIST = (() => { const o = []; for (let m = 6 * 60; m <= 21 * 60; m += 15) o.push(minToTime(m)); return o; })();
-// Chaîne d'options construite UNE seule fois (la feuille du mois affiche ~120
+// Chaîne d'options construite UNE seule fois (la feuille du mois affiche ~140
 // menus de 61 options : la reconstruire à chaque fois coûtait cher au rendu).
 const TIME_OPTIONS_BASE = '<option value="">--:--</option>' +
   TIME_LIST.map((t) => `<option value="${t}">${t}</option>`).join('');
@@ -78,8 +78,44 @@ function timeOptionsHTML(value) {
   if (!value) return TIME_OPTIONS_BASE;
   return TIME_OPTIONS_BASE.replace(`<option value="${value}">`, `<option value="${value}" selected>`);
 }
+
+/* Menus d'heures REMPLIS À LA DEMANDE.
+ * Au départ un menu ne contient QUE sa valeur affichée ; ses 61 options ne sont
+ * créées qu'au premier clic (ou à la tabulation) dessus. Sans cela la feuille du
+ * mois fabriquait ~8 500 balises <option> à CHAQUE affichage — d'où les saccades
+ * au changement de mois ou d'employée. Avec ce remplissage différé il en reste
+ * moins de 150 : le rendu est plusieurs fois plus rapide, et l'utilisation reste
+ * strictement identique (menu déroulant natif, mêmes heures). */
+function timeStubHTML(value) {
+  return value ? `<option value="${value}" selected>${value}</option>` : '<option value="">--:--</option>';
+}
+function hydrateTimeSelect(sel) {
+  if (!sel || sel.dataset.full) return;
+  const v = sel.value;
+  sel.dataset.full = '1';
+  sel.innerHTML = timeOptionsHTML(v);
+  sel.value = v;
+}
+// Affecte une valeur par programme, même si le menu n'est pas encore rempli.
+function setTimeValue(sel, v) {
+  if (!sel) return;
+  v = v || '';
+  if (v && ![...sel.options].some((o) => o.value === v)) sel.add(new Option(v, v));
+  sel.value = v;
+}
+// Délégation posée UNE seule fois sur #app (survit aux re-rendus innerHTML).
+function wireLazyTimes() {
+  const app = document.getElementById('app');
+  if (!app || app.dataset.lazyWired) return;
+  app.dataset.lazyWired = '1';
+  const hyd = (ev) => {
+    const t = ev.target;
+    if (t && t.closest) hydrateTimeSelect(t.closest('select.time'));
+  };
+  ['pointerdown', 'focusin', 'keydown'].forEach((e) => app.addEventListener(e, hyd, true));
+}
 function timeSelect(k, date, value, disabled) {
-  return `<select class="cell time" data-k="${k}" data-date="${date}" ${disabled ? 'disabled' : ''}>${timeOptionsHTML(value || '')}</select>`;
+  return `<select class="cell time" data-k="${k}" data-date="${date}" ${disabled ? 'disabled' : ''}>${timeStubHTML(value || '')}</select>`;
 }
 // Heures PRÉVUES : durée définie par l'admin via heure de début/fin prévue.
 function plannedMinutes(e) {
@@ -296,6 +332,11 @@ async function render() {
   // Libère le graphique avant tout nouveau rendu (il sera recréé par viewStats si besoin) :
   // évite d'accumuler des instances Chart.js orphelines en mémoire.
   if (CHART) { try { CHART.destroy(); } catch {} CHART = null; }
+  // Remet à zéro les gestionnaires délégués : chaque vue pose les siens, sinon
+  // celui de la feuille resterait actif sous l'onglet Enfants.
+  const appEl = document.getElementById('app');
+  if (appEl) { appEl.onchange = null; appEl.onclick = null; }
+  wireLazyTimes();
   const bar = document.getElementById('loadbar');
   if (bar) bar.classList.add('on');
   try {
@@ -471,8 +512,12 @@ async function viewSheet() {
   const flashSaved = (el) => { el.classList.add('saved'); setTimeout(() => el.classList.remove('saved'), 700); };
 
   // Sauvegarde automatique des cellules (avec pré-remplissage et calcul début/fin).
-  app.querySelectorAll('input.cell, select.cell').forEach((el) => {
-    el.addEventListener('change', async () => {
+  // Un SEUL écouteur délégué sur #app : attacher ~140 écouteurs à chaque rendu
+  // coûtait cher pour rien (l'événement « change » remonte naturellement).
+  app.onchange = async (ev) => {
+    const el = ev.target;
+    if (!el || !el.matches || !el.matches('input.cell, select.cell')) return;
+    {
       const date = el.dataset.date, k = el.dataset.k;
       const prev = byDate[date] || {};
       const patch = { employee_id: empId, entry_date: date };
@@ -520,8 +565,8 @@ async function viewSheet() {
         const tr = el.closest('tr');
         // Si l'admin change le prévu d'un jour non modifié, refléter dans le réel affiché.
         if ((k === 'planned_start' || k === 'planned_end') && !saved.worked_touched) {
-          const rs = tr.querySelector('[data-k="start_time"]'); if (rs) rs.value = saved.start_time || '';
-          const re = tr.querySelector('[data-k="end_time"]'); if (re) re.value = saved.end_time || '';
+          setTimeValue(tr.querySelector('[data-k="start_time"]'), saved.start_time);
+          setTimeValue(tr.querySelector('[data-k="end_time"]'), saved.end_time);
         }
         refreshRow(tr, date);
         refreshTotals();
@@ -530,8 +575,8 @@ async function viewSheet() {
         console.error('[sheet:save]', e);
         toast('Enregistrement impossible : ' + e.message, 'error');
       }
-    });
-  });
+    }
+  };
 
   if (ME.role === 'admin') {
     // Bascule validation : un mois validé n'est plus modifiable par l'employée
@@ -561,7 +606,7 @@ function templateHasSlots(tpl) {
   return tpl && Object.values(tpl).some((s) => s && s.start && s.end);
 }
 function templateCardHTML(tpl, month) {
-  const tin = (id, v) => `<select id="${id}" style="width:110px">${timeOptionsHTML(v || '')}</select>`;
+  const tin = (id, v) => `<select class="time" id="${id}" style="width:110px">${timeStubHTML(v || '')}</select>`;
   const rows = WEEK_ORDER.map((w) => {
     const s = (tpl && tpl[w]) || {};
     return `<tr>
@@ -844,7 +889,11 @@ async function viewChildren() {
     if (el) el.textContent = days.reduce((s, day) => s + kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0), 0);
   };
   // Cellule à 3 états : présent (✓) → absent (✗) → vide. Mise à jour ciblée.
-  app.querySelectorAll('button.presbtn').forEach((el) => el.onclick = async () => {
+  // Écouteur unique délégué : le tableau compte jusqu'à ~1 100 cases, leur
+  // attacher un gestionnaire chacune ralentissait l'ouverture de l'onglet.
+  app.onclick = async (ev) => {
+    const el = ev.target && ev.target.closest ? ev.target.closest('button.presbtn') : null;
+    if (!el) return;
     const kid = el.dataset.kid, date = el.dataset.date, key = kid + '|' + date;
     const cur = stat.get(key);                              // 'present' | 'absent' | undefined
     const next = cur === 'present' ? 'absent' : cur === 'absent' ? null : 'present';
@@ -865,8 +914,7 @@ async function viewChildren() {
     setGrandTotal();
     try { await STORE.setKidAttendance(kid, date, next); }
     catch (e) { if (cur) stat.set(key, cur); else stat.delete(key); toast('Erreur : ' + e.message, 'error'); render(); }
-  });
-
+  };
 }
 
 /* ---------------- Vue : Statistiques (graphiques) ---------------- */
