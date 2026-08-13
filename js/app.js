@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.13-1';
+const APP_VERSION = 'v2026.08.13-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -35,8 +35,8 @@ const monthName = (y, m) => new Date(y, m - 1, 1).toLocaleDateString('fr-FR', { 
 const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
 /* Implantations scolaires (critère d'agrément : au moins deux, dont les principales). */
-const SCHOOLS = ['Saint-Remacle', 'Athénée'];
-const REQUIRED_SCHOOLS = ['Saint-Remacle', 'Athénée'];
+const SCHOOLS = ['Saint-Remacle', 'ARAHF'];
+const REQUIRED_SCHOOLS = ['Saint-Remacle', 'ARAHF'];
 function schoolOptions(value) {
   const opts = ['<option value="">— non précisé —</option>']
     .concat(SCHOOLS.map((s) => `<option value="${s}"${s === value ? ' selected' : ''}>${s}</option>`));
@@ -977,7 +977,7 @@ async function viewStats() {
       val: `${avgEligible.toFixed(1)} enfant(s)/jour`,
       note: kidsNoBirth ? `${kidsNoBirth} enfant(s) sans date de naissance (comptés par défaut)` : '' },
     { ok: missingSchools.length === 0,
-      label: 'Enfants d’au moins deux implantations (Saint-Remacle et Athénée)',
+      label: 'Enfants d’au moins deux implantations (Saint-Remacle et ARAHF)',
       val: schoolsPresent.size ? [...schoolsPresent].join(', ') : 'aucune renseignée',
       note: missingSchools.length ? `manque : ${missingSchools.join(', ')}` : (kidsNoSchool ? `${kidsNoSchool} enfant(s) sans école` : '') },
     { ok: openWeeks >= 20,
