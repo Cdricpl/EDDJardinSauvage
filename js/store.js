@@ -658,10 +658,22 @@ class FirebaseStore {
     return { total: ops.length };
   }
 
-  /* ---- Temps réel ---- */
+  /* ---- Temps réel ----
+   * IMPORTANT : les deux collections qui grossissent sans fin (prestations et
+   * présences des enfants) sont écoutées UNIQUEMENT sur l'année en cours.
+   * Sans cette borne, chaque ouverture de l'application téléchargeait tout
+   * l'historique (plusieurs milliers de fiches après quelques années) et le
+   * gardait en mémoire en permanence : démarrage lent et appareil qui rame.
+   * Les années passées restent consultables normalement (lecture à la demande),
+   * elles ne sont simplement pas rafraîchies en direct — sans conséquence,
+   * puisqu'on ne modifie pas une année clôturée à plusieurs en même temps. */
   onChange(cb) {
+    const y = new Date().getFullYear();
+    const thisYear = (col) => col.where('entry_date', '>=', `${y}-01-01`).where('entry_date', '<=', `${y}-12-31`);
+    const BOUNDED = { day_entries: thisYear, kid_attendance: thisYear };
     ['day_entries', 'months', 'kids', 'kid_attendance', 'profiles', 'schedule_templates'].forEach((c) => {
-      this.db.collection(c).onSnapshot(
+      const base = this.db.collection(c);
+      (BOUNDED[c] ? BOUNDED[c](base) : base).onSnapshot(
         { includeMetadataChanges: false },
         (snap) => {
           if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures

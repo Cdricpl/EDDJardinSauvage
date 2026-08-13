@@ -56,6 +56,17 @@ async function firstWorkedRow(page) {
   return page.locator('#sheetTable tbody tr').nth(idx);
 }
 
+/**
+ * Choisit une heure dans un menu de la feuille EN PASSANT PAR LE CLIC, comme le
+ * ferait une utilisatrice. Nécessaire : pour rester rapide, un menu d'heures ne
+ * contient au repos que sa valeur affichée ; ses créneaux ne sont créés qu'au
+ * premier clic (ou au focus clavier). Un `selectOption` seul ne les verrait pas.
+ */
+async function pickTime(select, value) {
+  await select.click();
+  await select.selectOption(value);
+}
+
 test('feuille du mois : modifier l’horaire réel met à jour le total presté', async ({ page }) => {
   await loginAdmin(page);
   await page.locator('.navbtn[data-v="sheet"]').click();
@@ -64,7 +75,7 @@ test('feuille du mois : modifier l’horaire réel met à jour le total presté'
   const before = await page.locator('#tWorked').textContent();
   // On allonge l'horaire réel d'un jour travaillé jusqu'à 21:00.
   const row = await firstWorkedRow(page);
-  await row.locator('[data-k="end_time"]').selectOption('21:00');
+  await pickTime(row.locator('[data-k="end_time"]'), '21:00');
 
   await expect(page.locator('#tWorked')).not.toHaveText(before || '');
 });
@@ -144,8 +155,30 @@ test('feuille : un écart non justifié affiche la bannière d’avertissement',
   await expect(page.locator('#warnBanner')).toBeHidden();
   // On allonge l'horaire réel d'un jour travaillé → écart sans justification.
   const row = await firstWorkedRow(page);
-  await row.locator('[data-k="end_time"]').selectOption('21:00');
+  await pickTime(row.locator('[data-k="end_time"]'), '21:00');
   await expect(page.locator('#warnBanner')).toBeVisible();
+});
+
+test('performance : les menus d’heures se remplissent au clic (feuille allégée)', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#sheetTable')).toBeVisible();
+
+  // Au repos la feuille reste légère : sans ce remplissage différé elle
+  // contiendrait plusieurs milliers de balises <option> et deviendrait saccadée.
+  const auRepos = await page.locator('#app option').count();
+  expect(auRepos).toBeLessThan(300);
+
+  // Mais un clic doit bien proposer TOUS les créneaux (6:00 → 21:00 au quart d'heure).
+  const sel = (await firstWorkedRow(page)).locator('[data-k="end_time"]');
+  await expect(sel.locator('option')).toHaveCount(1);
+  await sel.click();
+  await expect(sel.locator('option')).toHaveCount(61 + 1); // créneaux + « --:-- »
+
+  // Et la tabulation au clavier doit les remplir aussi (accessibilité).
+  const autre = (await firstWorkedRow(page)).locator('[data-k="start_time"]');
+  await autre.focus();
+  await expect(autre.locator('option')).toHaveCount(61 + 1);
 });
 
 test('restauration : importer une sauvegarde JSON remplace les données', async ({ page }) => {
