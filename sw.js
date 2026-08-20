@@ -17,7 +17,13 @@ const APP_SHELL = [
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(APP_SHELL).catch(() => {})));
+  /* Fichier par fichier, et non `addAll` : `addAll` est tout-ou-rien, un seul
+   * fichier indisponible laissait le cache COMPLÈTEMENT vide — et comme
+   * `activate` supprime l'ancien cache, l'appareil se retrouvait sans style ni
+   * logique au premier passage hors réseau. */
+  e.waitUntil(caches.open(CACHE).then((c) =>
+    Promise.all(APP_SHELL.map((u) => c.add(u).catch(() => {})))
+  ));
 });
 
 self.addEventListener('activate', (e) => {
@@ -49,9 +55,16 @@ self.addEventListener('fetch', (e) => {
         caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
         return res;
       })
-      .catch(() => caches.match(req).then((r) =>
+      /* `ignoreSearch` est indispensable : l'application demande ses fichiers
+       * AVEC un numéro de version (« css/styles.css?v=… ») alors que le
+       * pré-cache les enregistre sans. Sans cette option, aucune entrée
+       * pré-cachée n'était jamais retrouvée — le repli hors ligne ne servait à
+       * rien — et un fichier mis en cache sous l'ancien numéro devenait
+       * inutilisable dès le déploiement suivant. */
+      .catch(() => caches.match(req, { ignoreSearch: true }).then((r) =>
         r || (req.mode === 'navigate'
-          ? caches.match('index.html').then((shell) => shell || caches.match('offline.html'))
+          ? caches.match('index.html', { ignoreSearch: true })
+              .then((shell) => shell || caches.match('offline.html', { ignoreSearch: true }))
           : undefined)))
   );
 });

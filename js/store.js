@@ -793,50 +793,81 @@ class FirebaseStore {
   }
 
   /* ---- Temps réel ----
-   * IMPORTANT : les deux collections qui grossissent sans fin (prestations et
-   * présences des enfants) sont écoutées UNIQUEMENT sur l'année en cours.
-   * Sans cette borne, chaque ouverture de l'application téléchargeait tout
-   * l'historique (plusieurs milliers de fiches après quelques années) et le
-   * gardait en mémoire en permanence : démarrage lent et appareil qui rame.
+   * Deux contraintes imposent la forme de ce bloc :
+   *
+   * 1. LES ÉCOUTEURS SE POSENT APRÈS LA CONNEXION. Les règles Firestore
+   *    refusent toute lecture à un visiteur non identifié ; posés au démarrage
+   *    comme avant, alors que la session n'était pas encore restaurée, les
+   *    écouteurs étaient refusés et JAMAIS reposés après la connexion — plus
+   *    aucune mise à jour en direct de la session. On les (re)pose donc à
+   *    chaque changement d'utilisatrice, en retirant d'abord les précédents
+   *    pour ne jamais en accumuler deux jeux.
+   *
+   * 2. UNE EMPLOYÉE NE LIT QUE SES PROPRES PRESTATIONS (voir firestore.rules).
+   *    Un écouteur non filtré sur `day_entries` porte sur des documents
+   *    qu'elle n'a pas le droit de lire : Firestore refuse l'abonnement EN
+   *    BLOC. D'où le filtre sur `employee_id` pour les non-admins.
+   *
+   * Les deux collections qui grossissent sans fin (prestations et présences)
+   * sont écoutées uniquement sur l'année en cours. Sans cette borne, chaque
+   * ouverture téléchargeait tout l'historique et le gardait en mémoire.
+   * Exception : pour une employée, `day_entries` est borné par `employee_id`
+   * au lieu de l'année — croiser les deux exigerait un index composite à créer
+   * à la main dans la console Firebase, et le volume d'UNE employée reste
+   * modeste (~250 fiches par an).
    * Les années passées restent consultables normalement (lecture à la demande),
    * elles ne sont simplement pas rafraîchies en direct — sans conséquence,
    * puisqu'on ne modifie pas une année clôturée à plusieurs en même temps. */
   onChange(cb) {
-    const y = new Date().getFullYear();
-    const thisYear = (col) => col.where('entry_date', '>=', `${y}-01-01`).where('entry_date', '<=', `${y}-12-31`);
-    const BOUNDED = { day_entries: thisYear, kid_attendance: thisYear };
-    ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates'].forEach((c) => {
-      const base = this.db.collection(c);
-      (BOUNDED[c] ? BOUNDED[c](base) : base).onSnapshot(
-        { includeMetadataChanges: false },
-        (snap) => {
-          if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
-          if (c === 'day_entries') {
-            /* Ne vider QUE les employées réellement concernées.
-             * Vider tout le cache faisait relire l'historique COMPLET de chaque
-             * employée dès qu'une collègue enregistrait une heure — et cet
-             * historique n'est pas bornable : le solde reporté cumule les
-             * prestations depuis la mise en service, années précédentes
-             * comprises (voir monthSummary). Borner la lecture à l'année en
-             * cours ferait disparaître le report du 1er janvier. */
-            const touchees = new Set();
-            snap.docChanges().forEach((ch) => {
-              const e = (ch.doc.data() || {}).employee_id; if (e) touchees.add(e);
-            });
-            if (touchees.size) touchees.forEach((e) => delete this._entriesCache[e]);
-            else this._entriesCache = {};
-            this._oublier('prestationsAn:');
-          }
-          if (c === 'profiles') this._profilesCache = null;
-          if (c === 'months') this._oublier('mois:');
-          if (c === 'kids') this._oublier('enfants:');
-          if (c === 'kid_attendance') this._oublier('presences:', 'presencesAn:');
-          if (c === 'kid_prefill') this._oublier('preremplissage:');
-          if (c === 'schedule_templates') this._oublier('horaire:');
-          cb();
-        },
-        (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));
-    });
+    let detacher = [];
+    const poser = async (user) => {
+      detacher.forEach((f) => { try { f(); } catch {} });
+      detacher = [];
+      if (!user) return;                                  // déconnectée : rien à écouter
+      const prof = await this.getCurrentUser().catch(() => null);
+      const estAdmin = !!(prof && prof.role === 'admin');
+      const y = new Date().getFullYear();
+      const anneeEnCours = (col) => col.where('entry_date', '>=', `${y}-01-01`).where('entry_date', '<=', `${y}-12-31`);
+      const BORNE = {
+        day_entries: (col) => (estAdmin ? anneeEnCours(col) : col.where('employee_id', '==', user.uid)),
+        kid_attendance: anneeEnCours,
+      };
+      ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates'].forEach((c) => {
+        const base = this.db.collection(c);
+        const un = (BORNE[c] ? BORNE[c](base) : base).onSnapshot(
+          { includeMetadataChanges: false },
+          (snap) => {
+            if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
+            if (c === 'day_entries') {
+              /* Ne vider QUE les employées réellement concernées.
+               * Vider tout le cache faisait relire l'historique COMPLET de chaque
+               * employée dès qu'une collègue enregistrait une heure — et cet
+               * historique n'est pas bornable : le solde reporté cumule les
+               * prestations depuis la mise en service, années précédentes
+               * comprises (voir monthSummary). Borner la lecture à l'année en
+               * cours ferait disparaître le report du 1er janvier. */
+              const touchees = new Set();
+              snap.docChanges().forEach((ch) => {
+                const e = (ch.doc.data() || {}).employee_id; if (e) touchees.add(e);
+              });
+              if (touchees.size) touchees.forEach((e) => delete this._entriesCache[e]);
+              else this._entriesCache = {};
+              this._oublier('prestationsAn:');
+            }
+            if (c === 'profiles') this._profilesCache = null;
+            if (c === 'months') this._oublier('mois:');
+            if (c === 'kids') this._oublier('enfants:');
+            if (c === 'kid_attendance') this._oublier('presences:', 'presencesAn:');
+            if (c === 'kid_prefill') this._oublier('preremplissage:');
+            if (c === 'schedule_templates') this._oublier('horaire:');
+            cb();
+          },
+          (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));
+        detacher.push(un);
+      });
+    };
+    // Se déclenche aussi au démarrage, une fois la session restaurée.
+    this.auth.onAuthStateChanged((user) => { poser(user); });
   }
 }
 

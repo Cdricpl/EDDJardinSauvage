@@ -137,7 +137,11 @@ function hydrateTimeSelect(sel) {
   const v = sel.value;
   sel.dataset.full = '1';
   sel.innerHTML = timeOptionsHTML(v);
-  sel.value = v;
+  /* `sel.value = v` échouerait pour une heure absente de TIME_LIST — 14:07 venu
+   * d'un import, d'une ancienne saisie ou d'une restauration : le menu se
+   * vidait, et la donnée réelle disparaissait au simple fait de l'ouvrir.
+   * setTimeValue ajoute l'option manquante, comme il le fait déjà ailleurs. */
+  setTimeValue(sel, v);
 }
 // Affecte une valeur par programme, même si le menu n'est pas encore rempli.
 function setTimeValue(sel, v) {
@@ -675,7 +679,14 @@ async function viewSheet() {
       const pe = k === 'planned_end' ? el.value : (prev.planned_end || '');
       patch.planned_start = ps; patch.planned_end = pe;
       const s = timeToMin(ps), f = timeToMin(pe);
-      if (s != null && f != null && f <= s) { toast("L'heure de fin doit être après le début.", 'error'); return; }
+      if (s != null && f != null && f <= s) {
+        toast("L'heure de fin doit être après le début.", 'error');
+        // Rien n'est enregistré : l'écran doit revenir à ce que contient la base,
+        // sinon il affiche une heure que personne n'a jamais sauvegardée et
+        // l'utilisatrice croit sa correction prise en compte.
+        setTimeValue(el, prev[k] || '');
+        return;
+      }
       patch.planned_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
       // Pré-remplissage : tant que l'employée n'a pas modifié, le réel suit le prévu.
       if (!prev.worked_touched) {
@@ -689,7 +700,11 @@ async function viewSheet() {
       const start = tr.querySelector('[data-k="start_time"]').value;
       const end = tr.querySelector('[data-k="end_time"]').value;
       const s = timeToMin(start), f = timeToMin(end);
-      if (s != null && f != null && f <= s) { toast("L'heure de fin doit être après le début.", 'error'); return; }
+      if (s != null && f != null && f <= s) {
+        toast("L'heure de fin doit être après le début.", 'error');
+        setTimeValue(el, prev[k] || '');   // idem : l'écran suit la base
+        return;
+      }
       const bothEmpty = !start && !end;
       const differsFromPlanned = start !== (prev.planned_start || '') || end !== (prev.planned_end || '');
       if (bothEmpty || !differsFromPlanned) {
@@ -876,10 +891,14 @@ async function viewRecap() {
 async function viewChildren() {
   const app = document.getElementById('app');
   // Lectures independantes : groupees pour n'attendre qu'un aller-retour.
-  const [kids, att] = await Promise.all([
-    STORE.listKids(),
+  // L'administration lit AUSSI les fiches archivees, pour pouvoir en réactiver
+  // une retirée par erreur ; la grille, elle, ne montre que les enfants actifs.
+  const [tousKids, att] = await Promise.all([
+    STORE.listKids(ME.role === 'admin'),
     STORE.kidAttendanceForMonth(CUR.y, CUR.m),
   ]);
+  const kids = tousKids.filter((k) => k.active !== false);
+  const archives = tousKids.filter((k) => k.active === false);
   // Statut par (kid,date) : 'present' | 'absent'. Ancien enregistrement sans statut = présent.
   const stat = new Map();
   att.forEach((a) => stat.set(a.kid_id + '|' + a.entry_date, a.status === 'absent' ? 'absent' : 'present'));
@@ -1066,6 +1085,19 @@ async function viewChildren() {
         <div class="kidcount">👥 <strong>${kids.length}</strong> enfant${kids.length > 1 ? 's' : ''}</div>
         <div>${legende}</div>
       </div>
+      ${ME.role === 'admin' && archives.length ? `
+      <label class="daychk" style="margin-top:10px">
+        <input type="checkbox" id="showArch"/> Afficher ${archives.length === 1 ? "l'enfant retiré" : `les ${archives.length} enfants retirés`} de la liste
+      </label>
+      <div id="archList" class="card sub hidden" style="margin-top:8px">
+        <p class="muted small" style="margin-top:0">Ces fiches sont conservées ; leurs présences déjà encodées ne sont
+          pas perdues. Réactiver une fiche la remet dans la grille ci-dessus.</p>
+        ${archives.map((k) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
+          <span class="avatar" style="background:${avatarColor(kidLabel(k))}" aria-hidden="true">${initials(k)}</span>
+          <span style="flex:1">${kidLabel(k)}${k.school ? ` <span class="muted small">— ${k.school}</span>` : ''}</span>
+          <button class="small green" data-reactkid="${k.id}">Réactiver</button>
+        </div>`).join('')}
+      </div>` : ''}
       <p class="muted small">« Prés. » = jours de présence de l'enfant ce mois-ci.${
         ME.role === 'admin' ? ' La moyenne annuelle est dans l\'onglet 📈 Statistiques.' : ''}</p>
     </div>`;
@@ -1140,6 +1172,15 @@ async function viewChildren() {
     app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
       if (!confirm('Retirer cet enfant de la liste ? (ses présences passées restent comptées)')) return;
       try { await STORE.setKidActive(b.dataset.arch, false); toast('Enfant retiré'); render(); }
+      catch (e) { toast('Erreur : ' + e.message, 'error'); }
+    });
+    // Remettre dans la liste un enfant retiré par erreur. Sans ce bouton, le
+    // seul recours était de restaurer une sauvegarde ou d'éditer la base.
+    const showArch = document.getElementById('showArch');
+    if (showArch) showArch.onchange = () =>
+      document.getElementById('archList').classList.toggle('hidden', !showArch.checked);
+    app.querySelectorAll('[data-reactkid]').forEach((b) => b.onclick = async () => {
+      try { await STORE.setKidActive(b.dataset.reactkid, true); toast('Enfant remis dans la liste'); render(); }
       catch (e) { toast('Erreur : ' + e.message, 'error'); }
     });
   }
@@ -1444,8 +1485,11 @@ async function viewEmployees() {
         <button class="small" id="expCsvKids">⬇️ CSV présences enfants</button>
       </div>
       <h3 style="margin:16px 0 6px">Restauration</h3>
-      <p class="muted small" style="margin-top:0">Réimporte une sauvegarde <strong>JSON</strong>. Les données existantes
-        sont <strong>remplacées</strong>${isCloud() ? ' (les comptes de connexion ne sont pas modifiés)' : ''}. Faites d'abord un export.</p>
+      <p class="muted small" style="margin-top:0">Réimporte une sauvegarde <strong>JSON</strong>. ${isCloud()
+        ? `Le contenu de la sauvegarde est <strong>réinjecté par-dessus</strong> les données actuelles : ce qui existait
+           déjà est écrasé, mais <strong>ce qui a été ajouté depuis la sauvegarde n'est pas supprimé</strong>.
+           Les comptes de connexion ne sont pas modifiés.`
+        : `Les données existantes sont <strong>remplacées</strong>.`} Faites d'abord un export.</p>
       <div class="row" style="flex-wrap:wrap; gap:10px">
         <input id="impFile" type="file" accept="application/json,.json" aria-label="Fichier de sauvegarde JSON à restaurer" style="max-width:100%"/>
         <button class="small red" id="impBtn">⬆️ Restaurer</button>
@@ -1534,7 +1578,11 @@ async function viewEmployees() {
   document.getElementById('impBtn').onclick = async () => {
     const f = document.getElementById('impFile').files[0];
     if (!f) { toast('Choisissez d\'abord un fichier de sauvegarde.', 'error'); return; }
-    if (!confirm('Restaurer cette sauvegarde ? Les données actuelles seront REMPLACÉES.')) return;
+    // Le message doit décrire le comportement RÉEL, qui diffère selon le mode :
+    // remplacement en mode démo, réinjection par-dessus (fusion) en mode cloud.
+    if (!confirm(isCloud()
+      ? "Restaurer cette sauvegarde ?\n\nSon contenu sera réinjecté par-dessus les données actuelles.\nCe qui a été ajouté depuis la sauvegarde NE SERA PAS supprimé."
+      : 'Restaurer cette sauvegarde ? Les données actuelles seront REMPLACÉES.')) return;
     try {
       const parsed = JSON.parse(await f.text());
       const counts = await STORE.importAll(parsed);
