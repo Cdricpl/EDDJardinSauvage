@@ -51,7 +51,10 @@ const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
 /* Implantations scolaires (critère d'agrément : au moins deux, dont les principales). */
 const SCHOOLS = ['Saint-Remacle', 'ARAHF'];
-const REQUIRED_SCHOOLS = ['Saint-Remacle', 'ARAHF'];
+// Même liste, sous le nom qu'elle porte dans les critères d'agrément. Écrite une
+// seule fois : dupliquée, ajouter une implantation dans l'une laissait l'autre
+// en arrière, et le critère d'agrément devenait faux sans prévenir.
+const REQUIRED_SCHOOLS = SCHOOLS;
 
 /* Responsables à contacter pour toute correction d'une fiche enfant.
  * Les employées ne modifient pas ces fiches : elles signalent le changement. */
@@ -385,7 +388,7 @@ function renderLogin() {
       ${MODE === 'demo' ? `<p class="muted small" style="margin-top:6px">
         Mode démo — comptes de test :<br>
         admin@ecole.be / admin123 · flora@ecole.be / flora123 · sarah@ecole.be / sarah123</p>` : ''}
-      <p class="muted small" id="loginVersion" style="margin-top:14px">${APP_VERSION}</p>
+      <p class="muted small" style="margin-top:14px">${APP_VERSION}</p>
     </div>`;
   const loginMsg = (html, kind = 'error') => {
     document.getElementById('loginMsg').innerHTML = `<div class="msg ${kind}">${html}</div>`;
@@ -504,13 +507,12 @@ async function viewSheet() {
   /* Ces quatre lectures ne dependent pas les unes des autres : les enchainer
    * faisait payer quatre allers-retours reseau (100-300 ms chacun) la ou un
    * seul suffit. Groupees, l'onglet s'ouvre en une attente au lieu de quatre. */
-  const [month, entriesInit, tpl, editableProf] = await Promise.all([
+  const [month, entries, tpl, editableProf] = await Promise.all([
     STORE.getMonth(empId, CUR.y, CUR.m),
     STORE.entriesForMonth(empId, CUR.y, CUR.m),
     ME.role === 'admin' ? STORE.getTemplate(empId) : Promise.resolve({}),
     currentEmpProfile(empId),
   ]);
-  let entries = entriesInit;
 
   // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
   // (Les mois validés ne sont jamais touchés.) Garde anti-réentrance.
@@ -1264,8 +1266,12 @@ async function viewStats() {
   }
   const stats = { dailyYear, annualTotal, annualDays: inYear.length, year: CUR.y };
 
-  // ---- Critères d'agrément (public accueilli + ouverture) — admin uniquement,
-  // car le calcul lit les prestations de toutes les employées (cloisonnées côté serveur).
+  /* ---- Critères d'agrément (public accueilli + ouverture) ----
+   * Le calcul lit les prestations de TOUTES les employées : il est réservé à
+   * l'administration. La vue est déjà refusée aux employées plus haut, donc
+   * cette garde n'est jamais fausse aujourd'hui — elle est CONSERVÉE À DESSEIN :
+   * c'est le dernier verrou avant une lecture de données cloisonnées, et il
+   * doit survivre à une modification de la navigation. */
   let crit = null;
   if (ME.role === 'admin') {
   const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
@@ -1353,7 +1359,7 @@ async function viewStats() {
   if (!(await assurerChart())) {
     const c = document.getElementById('chartMonthly');
     if (c) c.replaceWith(Object.assign(document.createElement('p'), { className: 'muted small', textContent: 'Graphique indisponible hors ligne — voir le tableau ci-dessous.' }));
-    document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, null, null)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+    document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, null)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
     return;
   }
   if (CHART) { try { CHART.destroy(); } catch {} }   // libère le graphique précédent (évite une fuite mémoire)
@@ -1363,13 +1369,13 @@ async function viewStats() {
     options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
   const chartMonthly = CHART;
-  document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, null, chartMonthly)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+  document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, chartMonthly)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
 }
 
 /* ---------------- Export PDF des statistiques ANNUELLES ---------------- */
 // N'inclut que les statistiques de l'année : moyenne annuelle, total, et le
 // graphique de moyenne mensuelle sur l'année.
-async function exportStatsPDF(stats, chartDaily, chartMonthly) {
+async function exportStatsPDF(stats, chartMonthly) {
   // Repli impression si jsPDF reste indisponible (hors ligne).
   if (!(await assurerPdf())) {
     const w = window.open('', '_blank');

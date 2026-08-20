@@ -270,8 +270,6 @@ button.addkid { padding:9px 16px; font-weight:700; }
 .daychks { display:flex; flex-wrap:wrap; gap:10px; margin-top:4px; }
 .daychk { display:inline-flex; align-items:center; gap:5px; font-weight:600; font-size:13px; color:var(--text); }
 .daychk input { width:auto; }
-.linkx { background:transparent; color:var(--muted); box-shadow:none; padding:0 4px; font-size:13px; margin-left:4px; }
-.linkx:hover { background:transparent; color:var(--red); }
 
 /* ---------- Tuiles de stats ---------- */
 .stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
@@ -291,8 +289,6 @@ button.addkid { padding:9px 16px; font-weight:700; }
 .badge.validated { background:#e7f4ec; color:var(--green-dark); }
 .badge.pending { background:#fbefd0; color:#a5760f; }
 .badge.refused { background:#f7e0df; color:var(--red-dark); }
-.badge.overtime { background:#fbeede; color:var(--orange); }
-.badge.recovery { background:#e2f6ee; color:#12876a; }
 .msg { padding:11px 14px; border-radius:10px; margin:10px 0; font-size:14px; background:#eef2fb; color:#2f48af; }
 .msg.error { background:#f8e2e1; color:var(--red-dark); }
 .msg.ok { background:#e7f4ec; color:var(--green-dark); }

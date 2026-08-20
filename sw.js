@@ -38,7 +38,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return; // Supabase / CDN : réseau direct
+  if (url.origin !== self.location.origin) return; // Firebase / CDN : réseau direct
 
   /* « Réseau d'abord » doit VRAIMENT aller au réseau : un simple fetch(req)
    * peut être servi par le cache HTTP du navigateur, qui renvoie alors

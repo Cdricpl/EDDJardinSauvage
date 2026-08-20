@@ -19,15 +19,10 @@ const HAS_FIREBASE =
  * Utilitaires partagés
  * ================================================================ */
 const Util = {
-  ym(date) { const [y, m] = date.split('-').map(Number); return { y, m }; },
   pad(n) { return String(n).padStart(2, '0'); },
   monthKey(y, m) { return `${y}-${Util.pad(m)}`; },
   minToTimeSafe(min) { return `${Util.pad(Math.floor(min / 60))}:${Util.pad(min % 60)}`; },
   daysInMonth(y, m) { return new Date(y, m, 0).getDate(); },
-  today() {
-    const d = new Date();
-    return `${d.getFullYear()}-${Util.pad(d.getMonth() + 1)}-${Util.pad(d.getDate())}`;
-  },
   uuid() {
     return (crypto && crypto.randomUUID) ? crypto.randomUUID()
       : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2);
@@ -281,13 +276,9 @@ class DemoStore {
     return this._db().entries.filter(e => (e.entry_date || '').startsWith(`${year}-`));
   }
   // status : 'present' | 'absent' | null (efface l'enregistrement).
+  // Même logique que l'écriture groupée : on y délègue plutôt que de la répéter.
   async setKidAttendance(kid_id, entry_date, status) {
-    const db = this._db();
-    const i = db.kidatt.findIndex(a => a.kid_id === kid_id && a.entry_date === entry_date);
-    if (!status) { if (i >= 0) db.kidatt.splice(i, 1); }
-    else if (i >= 0) db.kidatt[i].status = status;
-    else db.kidatt.push({ kid_id, entry_date, status });
-    this._save(db);
+    return this.setKidAttendances([{ kid_id, entry_date, status }]);
   }
   // Écriture groupée (pré-remplissage des présences habituelles).
   async setKidAttendances(list) {
@@ -332,7 +323,7 @@ class DemoStore {
     const byDate = {};
     this._db().kidatt.forEach(a => {
       if (a.status === 'absent') return; // absence = pas comptée
-      if (year != null && !String(a.entry_date || '').startsWith(prefixe)) return;
+      if (!String(a.entry_date || '').startsWith(prefixe)) return;
       byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
     });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));

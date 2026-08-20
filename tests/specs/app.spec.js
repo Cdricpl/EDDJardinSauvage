@@ -5,7 +5,7 @@ const { test, expect } = require('@playwright/test');
  * Tests end-to-end en MODE DÉMO.
  *
  * On force le mode démo en remplaçant js/config.js par une config vide (aucune
- * clé Supabase), et on coupe les CDN externes pour rester déterministe et
+ * clé Firebase), et on coupe les CDN externes pour rester déterministe et
  * hors-ligne. L'application gère l'absence de Chart.js / jsPDF (dégradé).
  */
 async function setupDemo(page) {
