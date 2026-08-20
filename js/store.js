@@ -61,6 +61,7 @@ class DemoStore {
         { id: 'k3', first_name: 'Noah', last_name: 'Dubois', active: true },
       ],
       kidatt: [],       // présences : { kid_id, entry_date }
+      kidprefill: [],   // mois déjà pré-encodés : { kid_id, month }
       // Horaire type hebdomadaire par employée : slots[weekday] = {start,end} (0=Dim..6=Sam)
       templates: [
         { employee_id: e1, slots: { 1: { start: '14:00', end: '18:00' }, 2: { start: '14:00', end: '18:00' }, 3: { start: '14:00', end: '18:00' }, 4: { start: '14:00', end: '18:00' }, 5: { start: '14:00', end: '18:00' } } },
@@ -299,6 +300,32 @@ class DemoStore {
     });
     this._save(db);
   }
+  /* ---- Mémoire du pré-encodage ----
+   * Sans elle, une case effacée volontairement (3e état du cycle) est
+   * indiscernable d'une case jamais encodée : le pré-encodage la remettrait à
+   * « présent » au chargement suivant. On retient donc, enfant par enfant et
+   * mois par mois, que le pré-encodage a déjà eu lieu. */
+  async kidPrefilledFor(year, month) {
+    const mois = Util.monthKey(year, month);
+    return (this._db().kidprefill || []).filter(x => x.month === mois).map(x => x.kid_id);
+  }
+  async markKidPrefilled(year, month, kidIds) {
+    if (!kidIds || !kidIds.length) return;
+    const mois = Util.monthKey(year, month);
+    const db = this._db();
+    db.kidprefill = db.kidprefill || [];
+    kidIds.forEach((kid_id) => {
+      if (!db.kidprefill.some(x => x.kid_id === kid_id && x.month === mois)) db.kidprefill.push({ kid_id, month: mois });
+    });
+    this._save(db);
+  }
+  // Les jours habituels de cet enfant ont changé : son pré-encodage est à refaire.
+  async clearKidPrefill(kid_id) {
+    const db = this._db();
+    db.kidprefill = (db.kidprefill || []).filter(x => x.kid_id !== kid_id);
+    this._save(db);
+  }
+
   // Comptes agrégés par jour (enfants PRÉSENTS) — pour les statistiques.
   async allChildren(year) {
     const prefixe = `${year}-`;
@@ -320,6 +347,7 @@ class DemoStore {
       months: db.months || [], day_entries: db.entries || [],
       schedule_templates: db.templates || [],
       kids: db.kids || [], kid_attendance: db.kidatt || [],
+      kid_prefill: db.kidprefill || [],
     };
   }
   // Restaure une sauvegarde. Remplace les tables de données ; pour les profils on
@@ -333,6 +361,7 @@ class DemoStore {
     if (Array.isArray(data.schedule_templates)) { db.templates = data.schedule_templates;   counts.schedule_templates = db.templates.length; }
     if (Array.isArray(data.kids))               { db.kids = data.kids;                      counts.kids = db.kids.length; }
     if (Array.isArray(data.kid_attendance))     { db.kidatt = data.kid_attendance;          counts.kid_attendance = db.kidatt.length; }
+    if (Array.isArray(data.kid_prefill))        { db.kidprefill = data.kid_prefill;          counts.kid_prefill = db.kidprefill.length; }
     if (Array.isArray(data.profiles)) {
       data.profiles.forEach((p) => {
         const ex = db.profiles.find((x) => x.id === p.id);
@@ -644,6 +673,33 @@ class FirebaseStore {
     await this._commit(ops);
     this._oublier('presences:', 'presencesAn:');
   }
+  /* ---- Memoire du pre-encodage ----
+   * Voir DemoStore : sans ce marqueur, une case effacee volontairement serait
+   * remise a « present » au chargement suivant. Identifiant deterministe
+   * kid_prefill/{enfant}_{AAAA-MM}. */
+  async kidPrefilledFor(year, month) {
+    return this._cache(`preremplissage:${Util.monthKey(year, month)}`, async () => {
+      const snap = await this.db.collection('kid_prefill')
+        .where('month', '==', Util.monthKey(year, month)).get();
+      return this._docs(snap).map((d) => d.kid_id);
+    });
+  }
+  async markKidPrefilled(year, month, kidIds) {
+    if (!kidIds || !kidIds.length) return;
+    const mois = Util.monthKey(year, month);
+    await this._commit(kidIds.map((kid_id) => ({
+      ref: this.db.collection('kid_prefill').doc(`${kid_id}_${mois}`),
+      data: { kid_id, month: mois },
+    })));
+    this._oublier('preremplissage:');
+  }
+  // Les jours habituels de cet enfant ont change : son pre-encodage est a refaire.
+  async clearKidPrefill(kid_id) {
+    const snap = await this.db.collection('kid_prefill').where('kid_id', '==', kid_id).get();
+    await this._commit(snap.docs.map((d) => ({ ref: d.ref, delete: true })));
+    this._oublier('preremplissage:');
+  }
+
   // Nombre d'enfants presents par jour, pour UNE annee. Le balayage complet de
   // la collection etait inutile (les statistiques sont annuelles) et devenait
   // de plus en plus lourd au fil des annees.
@@ -660,10 +716,10 @@ class FirebaseStore {
   /* ---- Export / restauration ---- */
   async exportAll() {
     const get = async (c) => this._docs(await this.db.collection(c).get());
-    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance] = await Promise.all(
-      ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance'].map(get));
+    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill] = await Promise.all(
+      ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance', 'kid_prefill'].map(get));
     return { exported_at: new Date().toISOString(), mode: 'firebase',
-      profiles, months, day_entries, schedule_templates, kids, kid_attendance };
+      profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill };
   }
   // Restaure une sauvegarde JSON (y compris une ancienne sauvegarde exportee).
   // Les identifiants d'employées diffèrent d'un hébergeur à l'autre : on les
@@ -705,6 +761,12 @@ class FirebaseStore {
       data: { kid_id: String(a.kid_id), entry_date: a.entry_date,
         status: a.status === 'absent' ? 'absent' : 'present' },
     }));
+    // Sans les marqueurs de pre-encodage, une restauration remettrait a
+    // « present » toutes les cases effacees volontairement.
+    (data.kid_prefill || []).forEach((x) => ops.push({
+      ref: this.db.collection('kid_prefill').doc(`${x.kid_id}_${x.month}`),
+      data: { kid_id: String(x.kid_id), month: x.month },
+    }));
     (data.schedule_templates || []).forEach((t) => ops.push({
       ref: this.db.collection('schedule_templates').doc(emp(t.employee_id)),
       data: { employee_id: emp(t.employee_id), slots: t.slots || {} },
@@ -743,7 +805,7 @@ class FirebaseStore {
     const y = new Date().getFullYear();
     const thisYear = (col) => col.where('entry_date', '>=', `${y}-01-01`).where('entry_date', '<=', `${y}-12-31`);
     const BOUNDED = { day_entries: thisYear, kid_attendance: thisYear };
-    ['day_entries', 'months', 'kids', 'kid_attendance', 'profiles', 'schedule_templates'].forEach((c) => {
+    ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates'].forEach((c) => {
       const base = this.db.collection(c);
       (BOUNDED[c] ? BOUNDED[c](base) : base).onSnapshot(
         { includeMetadataChanges: false },
@@ -754,6 +816,7 @@ class FirebaseStore {
           if (c === 'months') this._oublier('mois:');
           if (c === 'kids') this._oublier('enfants:');
           if (c === 'kid_attendance') this._oublier('presences:', 'presencesAn:');
+          if (c === 'kid_prefill') this._oublier('preremplissage:');
           if (c === 'schedule_templates') this._oublier('horaire:');
           cb();
         },

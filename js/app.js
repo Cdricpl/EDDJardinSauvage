@@ -820,27 +820,43 @@ async function viewChildren() {
   // jours habituels de chaque enfant sont marqués « présent » s'ils ne sont pas déjà
   // notés (on n'écrase jamais une présence/absence saisie). L'éducatrice n'a plus
   // qu'à basculer les absences. Les mois passés ne sont pas remplis rétroactivement.
+  //
+  // Le pré-encodage n'a lieu qu'UNE SEULE FOIS par enfant et par mois, et cela est
+  // MÉMORISÉ EN BASE (`kidPrefilledFor`). Sans cette mémoire, effacer une case
+  // (3e état du cycle) supprime l'enregistrement, et une case effacée redevient
+  // indiscernable d'une case jamais encodée : au chargement suivant le
+  // pré-encodage la remettait à « présent », annulant la correction.
   const _now = new Date();
   const monthIsCurrentOrFuture = ymNum(CUR.y, CUR.m) >= ymNum(_now.getFullYear(), _now.getMonth() + 1);
   const prefillKey = `${CUR.y}-${pad(CUR.m)}`;
-  // Verrou : on ne tente le pré-encodage qu'UNE fois par mois et par session.
-  // Indispensable : sinon un échec d'écriture (ou un retour temps réel) relancerait
-  // render() → pré-encodage → render()… en boucle, saturant l'appareil.
+  // Verrou de session, en plus de la mémoire en base : sinon un échec d'écriture
+  // (ou un retour temps réel) relancerait render() → pré-encodage → render()…
+  // en boucle, saturant l'appareil.
   if (monthIsCurrentOrFuture && !APPLYING_KIDS && !PREFILLED_KIDS.has(prefillKey)) {
-    const toWrite = [];
-    kids.forEach((k) => days.forEach((day) => {
-      if (day.date < KIDS_MIN_ISO) return;          // avant l'ouverture : aucun accueil
-      if (!isExpected(k, day.dow)) return;
-      if (stat.get(k.id + '|' + day.date)) return;   // déjà présent/absent → on ne touche pas
-      toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
-    }));
     PREFILLED_KIDS.add(prefillKey);   // marqué comme tenté AVANT l'écriture (anti-boucle)
-    if (toWrite.length) {
+    const dejaFait = new Set(await STORE.kidPrefilledFor(CUR.y, CUR.m));
+    const aMarquer = kids.filter((k) => !dejaFait.has(k.id)).map((k) => k.id);
+    const toWrite = [];
+    kids.forEach((k) => {
+      if (dejaFait.has(k.id)) return;               // mois déjà pré-encodé pour cet enfant
+      days.forEach((day) => {
+        if (day.date < KIDS_MIN_ISO) return;        // avant l'ouverture : aucun accueil
+        if (!isExpected(k, day.dow)) return;
+        if (stat.get(k.id + '|' + day.date)) return; // déjà présent/absent → on ne touche pas
+        toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
+      });
+    });
+    if (aMarquer.length) {
       APPLYING_KIDS = true;
-      try { await STORE.setKidAttendances(toWrite); }
+      // Les présences d'abord, le marqueur ensuite : si l'écriture échoue, le mois
+      // n'est pas marqué et sera retenté à la prochaine session, jamais à demi-fait.
+      try {
+        if (toWrite.length) await STORE.setKidAttendances(toWrite);
+        await STORE.markKidPrefilled(CUR.y, CUR.m, aMarquer);
+      }
       catch (e) { console.error('[kids:auto-prefill]', e); }
       finally { APPLYING_KIDS = false; }
-      return render();   // redessine une seule fois avec les présences pré-encodées
+      if (toWrite.length) return render();   // redessine une seule fois avec les présences pré-encodées
     }
   }
 
@@ -1034,7 +1050,14 @@ async function viewChildren() {
         birthdate: document.getElementById('eBirth').value,
         days: [...app.querySelectorAll('input.ek:checked')].map((c) => Number(c.dataset.w)),
       };
-      try { await STORE.setKidInfo(id, info); PREFILLED_KIDS.clear(); toast('Fiche enfant modifiée'); render(); }
+      // Si les jours habituels changent, le pré-encodage de cet enfant est à refaire ;
+      // sinon (simple correction de nom) on garde sa mémoire, donc ses cases effacées.
+      const avant = ((kids.find((x) => x.id === id) || {}).days || []).slice().sort().join(',');
+      try {
+        await STORE.setKidInfo(id, info);
+        if (avant !== info.days.slice().sort().join(',')) await STORE.clearKidPrefill(id);
+        PREFILLED_KIDS.clear(); toast('Fiche enfant modifiée'); render();
+      }
       catch (e) { document.getElementById('eMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
     };
     // Retirer un enfant (archivage : données conservées).
@@ -1089,7 +1112,13 @@ async function viewStats() {
   const all = await STORE.allChildren(CUR.y);
   // Rien avant le premier jour d'accueil : sinon des jours d'ouverture fictifs
   // (issus d'un pré-encodage antérieur) tireraient la moyenne vers le bas.
-  const inYear = all.filter((c) => c.entry_date >= KIDS_MIN_ISO);
+  // Rien après aujourd'hui non plus : le pré-encodage des présences et le
+  // pré-remplissage des prestations portent sur le MOIS ENTIER, jours à venir
+  // compris. Sans cette borne, les statistiques et les critères d'agrément
+  // comptaient des journées qui n'ont pas encore eu lieu — une prévision
+  // présentée comme un constat.
+  const auj = todayISO();
+  const inYear = all.filter((c) => c.entry_date >= KIDS_MIN_ISO && c.entry_date <= auj);
   const annualTotal = inYear.reduce((s, c) => s + (Number(c.children) || 0), 0);
   const dailyYear = inYear.length ? annualTotal / inYear.length : 0;
 
@@ -1115,7 +1144,7 @@ async function viewStats() {
   const kidsAll = await STORE.listKids(true);
   const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
   const att = (await STORE.kidAttendanceForYear(CUR.y))
-    .filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO);
+    .filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO && (a.entry_date || '') <= auj);
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
   const byDay = {};
   att.forEach((a) => {
@@ -1135,7 +1164,7 @@ async function viewStats() {
   const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
   // Semaines d'ouverture : semaines ISO avec ≥ 2h de prestation (heures d'ouverture).
   const entriesYear = (await STORE.allEntriesForYear(CUR.y))
-    .filter((e) => (e.entry_date || '') >= MIN_ISO);
+    .filter((e) => (e.entry_date || '') >= MIN_ISO && (e.entry_date || '') <= auj);
   const weekMinutes = {};
   entriesYear.forEach((e) => {
     const w = effectiveWorked(e); if (!w) return;
