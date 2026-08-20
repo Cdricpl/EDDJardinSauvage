@@ -338,3 +338,5 @@ button.addkid { padding:9px 16px; font-weight:700; }
   .toolbar select { flex:1; min-width:0; }
   .row > div { min-width:calc(50% - 6px); }
 }
+/* Jour antérieur à l'ouverture de l'accueil : case neutre, non cliquable. */
+.presbtn.pres-off { background:transparent; border:1px dashed var(--border); cursor:default; }

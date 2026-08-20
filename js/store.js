@@ -146,6 +146,12 @@ class DemoStore {
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.role = role; this._save(db); }
   }
+  // Solde d'heures repris de l'ancien suivi, en minutes (négatif = à récupérer).
+  async setOpeningMinutes(id, minutes) {
+    const db = this._db();
+    const p = db.profiles.find(x => x.id === id);
+    if (p) { p.opening_minutes = Math.round(Number(minutes) || 0); this._save(db); }
+  }
 
   /* ---- Horaire type ---- */
   async getTemplate(employee_id) {
@@ -294,10 +300,12 @@ class DemoStore {
     this._save(db);
   }
   // Comptes agrégés par jour (enfants PRÉSENTS) — pour les statistiques.
-  async allChildren() {
+  async allChildren(year) {
+    const prefixe = `${year}-`;
     const byDate = {};
     this._db().kidatt.forEach(a => {
       if (a.status === 'absent') return; // absence = pas comptée
+      if (year != null && !String(a.entry_date || '').startsWith(prefixe)) return;
       byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
     });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
@@ -363,6 +371,7 @@ class FirebaseStore {
     this.auth = app.auth();
     this.db = app.firestore();
     this._profile = null; this._entriesCache = {}; this._profilesCache = null;
+    this._memo = new Map();
   }
   async init() {
     // Session conservee sur l'appareil.
@@ -370,6 +379,25 @@ class FirebaseStore {
   }
 
   /* ---- Helpers ---- */
+  /* Memorisation des lectures.
+   * Chaque `.get()` Firestore est un aller-retour reseau (100-300 ms). Sans
+   * cela, un simple changement d'onglet en declenchait jusqu'a quatre, d'ou une
+   * impression de lenteur a chaque clic. On peut memoriser sans risque : des
+   * ecouteurs temps reel couvrent les six collections (voir onChange), et ils
+   * vident l'entree concernee des qu'une donnee change cote serveur.
+   * On memorise la PROMESSE : deux appels simultanes partagent la meme requete. */
+  _cache(cle, produire) {
+    if (this._memo.has(cle)) return this._memo.get(cle);
+    const promesse = produire().catch((e) => { this._memo.delete(cle); throw e; });
+    this._memo.set(cle, promesse);
+    return promesse;
+  }
+  // Oublie toutes les entrees d'une famille (prefixe), ex. « mois: » ou « enfants ».
+  _oublier(...prefixes) {
+    for (const cle of [...this._memo.keys()]) {
+      if (prefixes.some((p) => cle.startsWith(p))) this._memo.delete(cle);
+    }
+  }
   _entryId(emp, date) { return `${emp}_${date}`; }
   _monthId(emp, y, m) { return `${emp}_${Util.monthKey(y, m)}`; }
   _docs(snap) { return snap.docs.map((d) => ({ id: d.id, ...d.data() })); }
@@ -468,6 +496,12 @@ class FirebaseStore {
     await this.db.collection('profiles').doc(id).set({ full_name }, { merge: true });
     this._profilesCache = null;
   }
+  // Solde d'heures repris de l'ancien suivi, en minutes (négatif = à récupérer).
+  async setOpeningMinutes(id, minutes) {
+    await this.db.collection('profiles').doc(id)
+      .set({ opening_minutes: Math.round(Number(minutes) || 0) }, { merge: true });
+    this._profilesCache = null;
+  }
   async sendPasswordReset(email) {
     try { await this.auth.sendPasswordResetEmail((email || '').trim()); }
     catch (e) { throw new Error(this._authMsg(e)); }
@@ -475,22 +509,28 @@ class FirebaseStore {
 
   /* ---- Horaire type ---- */
   async getTemplate(employee_id) {
-    const s = await this.db.collection('schedule_templates').doc(employee_id).get();
-    return s.exists ? (s.data().slots || {}) : {};
+    return this._cache(`horaire:${employee_id}`, async () => {
+      const s = await this.db.collection('schedule_templates').doc(employee_id).get();
+      return s.exists ? (s.data().slots || {}) : {};
+    });
   }
   async setTemplate(employee_id, slots) {
     await this.db.collection('schedule_templates').doc(employee_id)
       .set({ employee_id, slots, updated_at: new Date().toISOString() }, { merge: true });
+    this._oublier('horaire:');
   }
 
   /* ---- Mois ---- */
   async getMonth(employee_id, year, month) {
-    const s = await this.db.collection('months').doc(this._monthId(employee_id, year, month)).get();
-    return s.exists ? { id: s.id, ...s.data() } : { employee_id, year, month, status: 'open' };
+    return this._cache(`mois:${this._monthId(employee_id, year, month)}`, async () => {
+      const s = await this.db.collection('months').doc(this._monthId(employee_id, year, month)).get();
+      return s.exists ? { id: s.id, ...s.data() } : { employee_id, year, month, status: 'open' };
+    });
   }
   async setMonthStatus(employee_id, year, month, status) {
     const data = { employee_id, year, month, status };
     await this.db.collection('months').doc(this._monthId(employee_id, year, month)).set(data, { merge: true });
+    this._oublier('mois:');
     return data;
   }
 
@@ -519,6 +559,7 @@ class FirebaseStore {
     const s = await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date)).get();
     const saved = { id: s.id, ...s.data() };
     this._mergeCache(saved);
+    this._oublier('prestationsAn:');
     return saved;
   }
   async upsertEntries(entries) {
@@ -529,15 +570,18 @@ class FirebaseStore {
       data: { ...e, updated_at: now },
     })));
     delete this._entriesCache[entries[0].employee_id];
+    this._oublier('prestationsAn:');
     return entries;
   }
 
   /* ---- Enfants ---- */
   async listKids(includeArchived = false) {
-    const snap = await this.db.collection('kids').get();
-    return this._docs(snap)
-      .filter((k) => includeArchived || k.active !== false)
-      .sort((a, b) => ((a.last_name || '') + a.first_name).localeCompare((b.last_name || '') + b.first_name));
+    return this._cache(`enfants:${includeArchived}`, async () => {
+      const snap = await this.db.collection('kids').get();
+      return this._docs(snap)
+        .filter((k) => includeArchived || k.active !== false)
+        .sort((a, b) => ((a.last_name || '') + a.first_name).localeCompare((b.last_name || '') + b.first_name));
+    });
   }
   async addKid(first_name, last_name, school, birthdate, days, grade) {
     first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
@@ -546,10 +590,12 @@ class FirebaseStore {
       grade: grade || '', days: Array.isArray(days) ? days : [], active: true,
       created_at: new Date().toISOString() };
     const ref = await this.db.collection('kids').add(data);
+    this._oublier('enfants:');
     return { id: ref.id, ...data };
   }
   async setKidActive(id, active) {
     await this.db.collection('kids').doc(id).set({ active }, { merge: true });
+    this._oublier('enfants:');
   }
   async setKidInfo(id, info) {
     const first_name = (info.first_name || '').trim();
@@ -558,28 +604,36 @@ class FirebaseStore {
       school: info.school || '', birthdate: info.birthdate || '', grade: info.grade || '' };
     if (Array.isArray(info.days)) patch.days = info.days;
     await this.db.collection('kids').doc(id).set(patch, { merge: true });
+    this._oublier('enfants:');
   }
   async kidAttendanceForMonth(year, month) {
-    const p = Util.monthKey(year, month);
-    const snap = await this.db.collection('kid_attendance')
-      .where('entry_date', '>=', `${p}-01`).where('entry_date', '<=', `${p}-31`).get();
-    return this._docs(snap);
+    return this._cache(`presences:${Util.monthKey(year, month)}`, async () => {
+      const p = Util.monthKey(year, month);
+      const snap = await this.db.collection('kid_attendance')
+        .where('entry_date', '>=', `${p}-01`).where('entry_date', '<=', `${p}-31`).get();
+      return this._docs(snap);
+    });
   }
   async kidAttendanceForYear(year) {
-    const snap = await this.db.collection('kid_attendance')
-      .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
-    return this._docs(snap);
+    return this._cache(`presencesAn:${year}`, async () => {
+      const snap = await this.db.collection('kid_attendance')
+        .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
+      return this._docs(snap);
+    });
   }
   async allEntriesForYear(year) {
-    const snap = await this.db.collection('day_entries')
-      .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
-    return this._docs(snap);
+    return this._cache(`prestationsAn:${year}`, async () => {
+      const snap = await this.db.collection('day_entries')
+        .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
+      return this._docs(snap);
+    });
   }
   // status : 'present' | 'absent' | null (efface l'enregistrement).
   async setKidAttendance(kid_id, entry_date, status) {
     const ref = this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`);
     if (!status) await ref.delete();
     else await ref.set({ kid_id, entry_date, status });
+    this._oublier('presences:', 'presencesAn:');
   }
   async setKidAttendances(list) {
     if (!list || !list.length) return;
@@ -588,12 +642,16 @@ class FirebaseStore {
       data: status ? { kid_id, entry_date, status } : null, delete: !status,
     }));
     await this._commit(ops);
+    this._oublier('presences:', 'presencesAn:');
   }
-  async allChildren() {
-    const snap = await this.db.collection('kid_attendance').get();
+  // Nombre d'enfants presents par jour, pour UNE annee. Le balayage complet de
+  // la collection etait inutile (les statistiques sont annuelles) et devenait
+  // de plus en plus lourd au fil des annees.
+  async allChildren(year) {
+    const att = await this.kidAttendanceForYear(year);
     const byDate = {};
-    snap.docs.forEach((d) => {
-      const a = d.data(); if (a.status === 'absent') return;
+    att.forEach((a) => {
+      if (a.status === 'absent') return;
       byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
     });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
@@ -664,7 +722,7 @@ class FirebaseStore {
       });
     });
     await this._commit(ops);
-    this._entriesCache = {}; this._profilesCache = null;
+    this._entriesCache = {}; this._profilesCache = null; this._memo.clear();
     if (missing.size) {
       throw new Error(`Import effectué, mais ${missing.size} employée(s) de la sauvegarde n'ont pas de compte ici. `
         + 'Créez leurs comptes avec le MÊME email, puis relancez la restauration.');
@@ -691,8 +749,12 @@ class FirebaseStore {
         { includeMetadataChanges: false },
         (snap) => {
           if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
-          if (c === 'day_entries') this._entriesCache = {};
+          if (c === 'day_entries') { this._entriesCache = {}; this._oublier('prestationsAn:'); }
           if (c === 'profiles') this._profilesCache = null;
+          if (c === 'months') this._oublier('mois:');
+          if (c === 'kids') this._oublier('enfants:');
+          if (c === 'kid_attendance') this._oublier('presences:', 'presencesAn:');
+          if (c === 'schedule_templates') this._oublier('horaire:');
           cb();
         },
         (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));

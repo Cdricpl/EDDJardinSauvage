@@ -118,7 +118,9 @@ automatiquement sur l'accueil, dans l'entête et dans les PDF.
 
 ## 🧱 Règles métier (mois)
 
-- Le système **démarre en janvier 2026** : impossible d'accéder à un mois antérieur.
+- Le système **démarre en août 2026** : impossible d'accéder à un mois antérieur.
+- Les heures accumulées avant cette date se reprennent **une seule fois** via le
+  **solde de départ** de chaque employée (onglet Utilisateurs).
 - Un mois **validé** n'est plus modifiable par l'employée (seul l'admin peut intervenir) ;
   « Repasser en cours » le rouvre.
 
@@ -152,7 +154,7 @@ l'interface — elles ne peuvent donc pas être contournées.
 Des tests **end-to-end (Playwright)** couvrent les parcours clés en **mode démo**
 (déterministe, hors-ligne) : connexion + navigation entre les onglets, mise à jour du
 presté sur la feuille, ajout d'un enfant et comptage des présences, export de sauvegarde,
-et blocage du premier mois (janvier 2026).
+et blocage du premier mois (août 2026).
 
 ```bash
 cd tests

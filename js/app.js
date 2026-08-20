@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.13-7';
+const APP_VERSION = 'v2026.08.13-9';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -17,8 +17,18 @@ let CHART = null;                   // instance Chart.js courante (détruite ava
 const PREFILLED_KIDS = new Set();   // mois déjà pré-encodés cette session (anti-boucle)
 let CUR = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 
-/* Le système démarre en janvier 2026 : aucun mois antérieur n'est accessible. */
-const MIN_YM = { y: 2026, m: 1 };
+/* Le système démarre en AOÛT 2026 : aucun mois antérieur n'est accessible, et
+ * rien de ce qui précède n'entre dans les calculs. Ce qui a été presté avant
+ * est repris une seule fois via le « solde de départ » de chaque employée
+ * (onglet Utilisateurs), et non mois par mois. */
+const MIN_YM = { y: 2026, m: 8 };
+// (`pad` est défini plus bas : on formate ici sans l'utiliser.)
+const MIN_ISO = `${MIN_YM.y}-${String(MIN_YM.m).padStart(2, '0')}-01`;
+/* Premier jour d'accueil des enfants. Aucun enfant n'est présent le 23 août 2026
+ * ni avant : ces jours ne sont ni pré-encodés, ni encodables, et ils n'entrent
+ * pas dans les statistiques (sinon la moyenne serait faussée par des jours
+ * d'ouverture fictifs). */
+const KIDS_MIN_ISO = '2026-08-24';
 const ymNum = (y, m) => y * 12 + (m - 1);
 const atOrBeforeMin = () => ymNum(CUR.y, CUR.m) <= ymNum(MIN_YM.y, MIN_YM.m);
 function clampMonth() {
@@ -162,6 +172,21 @@ function fmtHM(min) {
 }
 // Écart signé : « + » explicite pour le positif (indice non basé uniquement sur la couleur).
 function fmtDelta(min) { return !min ? '—' : (min > 0 ? '+' : '') + fmtHM(min); }
+/* Lit une durée saisie à la main : « 12h30 », « 12:30 », « 12h », « 12 »,
+ * précédée au besoin de « - » pour des heures à récupérer. Renvoie des minutes,
+ * ou null si la saisie n'est pas exploitable (on préfère refuser que deviner).
+ * Les décimales sont volontairement rejetées : « 12.30 » voudrait dire 12h18
+ * pour l'ordinateur et 12h30 pour l'utilisatrice. */
+function parseHM(txt) {
+  const s = String(txt == null ? '' : txt).trim().replace(/\s+/g, '');
+  if (!s || s === '-' || s === '+') return 0;
+  const m = s.match(/^([+-]?)(\d{1,3})(?:[h:](\d{1,2})?)?$/i);
+  if (!m) return null;
+  const min = Number(m[3] || 0);
+  if (min > 59) return null;
+  const total = Number(m[2]) * 60 + min;
+  return m[1] === '-' ? -total : total;
+}
 function toast(msg, kind = 'ok') {
   const t = document.getElementById('toast');
   t.textContent = msg; t.className = 'toast ' + kind; t.style.display = 'block';
@@ -195,12 +220,24 @@ async function backupJSON() {
 }
 
 /* ---------------- Calculs mensuels + solde reporté ---------------- */
+// Solde de départ d'une employée : les heures supplémentaires (ou à récupérer)
+// accumulées AVANT la mise en service du programme. Saisi une seule fois par
+// l'administratrice, il sert de point de départ au tout premier mois.
+async function openingMinutes(empId) {
+  const p = (await STORE.listProfiles()).find((x) => x.id === empId);
+  return (p && Number(p.opening_minutes)) || 0;
+}
 async function monthSummary(empId, y, m) {
   const all = await STORE.entriesForEmployee(empId);
   const firstOfMonth = `${y}-${pad(m)}-01`;
-  let planned = 0, worked = 0, carryIn = 0;
+  // Le report part du solde de départ, puis cumule les mois écoulés DEPUIS la
+  // mise en service. Les prestations antérieures à MIN_ISO sont ignorées :
+  // elles sont déjà comprises dans le solde de départ, les compter à nouveau
+  // ferait double emploi.
+  let planned = 0, worked = 0, carryIn = await openingMinutes(empId);
   all.forEach((e) => {
     const w = effectiveWorked(e), p = plannedMinutes(e);
+    if (e.entry_date < MIN_ISO) return;
     if (e.entry_date < firstOfMonth) carryIn += (w - p);
     else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) { planned += p; worked += w; }
   });
@@ -331,7 +368,7 @@ async function toolbar(showEmployee, actionHTML) {
   const now = new Date();
   const onCurrentMonth = CUR.y === now.getFullYear() && CUR.m === now.getMonth() + 1;
   return `<div class="toolbar">
-    <button class="small" id="prevM" ${atOrBeforeMin() ? 'disabled title="Janvier 2026 = premier mois"' : ''}>◀</button>
+    <button class="small" id="prevM" ${atOrBeforeMin() ? `disabled title="${monthName(MIN_YM.y, MIN_YM.m)} = premier mois"` : ''}>◀</button>
     <strong style="min-width:170px;text-align:center;text-transform:capitalize">${monthName(CUR.y, CUR.m)}</strong>
     <button class="small" id="nextM">▶</button>
     <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours">📅 Aujourd'hui</button>
@@ -778,6 +815,7 @@ async function viewChildren() {
   if (monthIsCurrentOrFuture && !APPLYING_KIDS && !PREFILLED_KIDS.has(prefillKey)) {
     const toWrite = [];
     kids.forEach((k) => days.forEach((day) => {
+      if (day.date < KIDS_MIN_ISO) return;          // avant l'ouverture : aucun accueil
       if (!isExpected(k, day.dow)) return;
       if (stat.get(k.id + '|' + day.date)) return;   // déjà présent/absent → on ne touche pas
       toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
@@ -792,8 +830,10 @@ async function viewChildren() {
     }
   }
 
-  const kidPresentCount = (kid) => days.reduce((n, day) => n + (getSt(kid.id, day.date) === 'present' ? 1 : 0), 0);
-  const dayPresentCount = (day) => kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0);
+  // Un enregistrement antérieur à l'ouverture ne compte nulle part.
+  const compte = (kidId, date) => (date >= KIDS_MIN_ISO && getSt(kidId, date) === 'present') ? 1 : 0;
+  const kidPresentCount = (kid) => days.reduce((n, day) => n + compte(kid.id, day.date), 0);
+  const dayPresentCount = (day) => kids.reduce((n, k) => n + compte(k.id, day.date), 0);
   const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
 
   // En-tête : numéro du jour au-dessus de son initiale. Le dimanche est mis en
@@ -803,6 +843,12 @@ async function viewChildren() {
 
   const kidLabel = (k) => `${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name}`.trim();
   const cellHtml = (k, day) => {
+    // Avant le premier jour d'accueil, la case est neutralisée : on ne peut rien
+    // y cocher, et un éventuel enregistrement résiduel n'est pas affiché.
+    if (day.date < KIDS_MIN_ISO) {
+      return `<td class="daycell${day.weekend ? ' weekend' : ''}"><span class="presbtn pres-off"
+        title="Aucun accueil avant le ${new Date(KIDS_MIN_ISO).toLocaleDateString('fr-FR')}"></span></td>`;
+    }
     const st = getSt(k.id, day.date);
     const expected = isExpected(k, day.dow);
     // Seuls les états SAISIS portent un symbole : ✓ vert, ✗ rouge. Une case non
@@ -977,7 +1023,7 @@ async function viewChildren() {
   // jour TOUTES les cellules portant le repère, pas seulement la première.
   const setTotal = (sel, valeur) => app.querySelectorAll(sel).forEach((el) => (el.textContent = valeur));
   const setGrandTotal = () => setTotal('[data-grandtot]',
-    days.reduce((s, day) => s + kids.reduce((n, k) => n + (getSt(k.id, day.date) === 'present' ? 1 : 0), 0), 0));
+    days.reduce((s, day) => s + kids.reduce((n, k) => n + compte(k.id, day.date), 0), 0));
   // Cellule à 3 états : présent (✓) → absent (✗) → vide. Mise à jour ciblée.
   // Écouteur unique délégué : le tableau compte jusqu'à ~1 100 cases, leur
   // attacher un gestionnaire chacune ralentissait l'ouverture de l'onglet.
@@ -998,9 +1044,10 @@ async function viewChildren() {
     if (cls) el.classList.add(cls);
     // Totaux en place.
     const kt = document.getElementById('kidtot_' + kid);
-    if (kt) kt.textContent = days.reduce((n, d) => n + (getSt(kid, d.date) === 'present' ? 1 : 0), 0);
-    const dt = document.getElementById('daytot_' + Number(date.slice(8)));
-    if (dt) dt.textContent = kids.reduce((n, k) => n + (getSt(k.id, date) === 'present' ? 1 : 0), 0);
+    if (kt) kt.textContent = days.reduce((n, d) => n + compte(kid, d.date), 0);
+    // Le total du jour existe en double (en-tête et pied) : on met à jour les deux.
+    setTotal(`[data-daytot="${Number(date.slice(8))}"]`,
+      kids.reduce((n, k) => n + compte(k.id, date), 0));
     setGrandTotal();
     try { await STORE.setKidAttendance(kid, date, next); }
     catch (e) { if (cur) stat.set(key, cur); else stat.delete(key); toast('Erreur : ' + e.message, 'error'); render(); }
@@ -1010,14 +1057,18 @@ async function viewChildren() {
 /* ---------------- Vue : Statistiques (graphiques) ---------------- */
 async function viewStats() {
   const app = document.getElementById('app');
-  const all = await STORE.allChildren();
-  const inYear = all.filter((c) => (c.entry_date || '').startsWith(`${CUR.y}-`));
+  const all = await STORE.allChildren(CUR.y);
+  // Rien avant le premier jour d'accueil : sinon des jours d'ouverture fictifs
+  // (issus d'un pré-encodage antérieur) tireraient la moyenne vers le bas.
+  const inYear = all.filter((c) => c.entry_date >= KIDS_MIN_ISO);
   const annualTotal = inYear.reduce((s, c) => s + (Number(c.children) || 0), 0);
   const dailyYear = inYear.length ? annualTotal / inYear.length : 0;
 
   // Détail mois par mois (moyenne / total / jours encodés).
+  // Le suivi commence avec la mise en service : pas de mois vides avant.
   const months = [];
-  for (let mm = 1; mm <= 12; mm++) {
+  const premierMois = CUR.y === MIN_YM.y ? MIN_YM.m : 1;
+  for (let mm = premierMois; mm <= 12; mm++) {
     const arr = inYear.filter((c) => c.entry_date.startsWith(`${CUR.y}-${pad(mm)}`));
     const tot = arr.reduce((s, c) => s + (Number(c.children) || 0), 0);
     months.push({
@@ -1034,7 +1085,8 @@ async function viewStats() {
   if (ME.role === 'admin') {
   const kidsAll = await STORE.listKids(true);
   const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
-  const att = await STORE.kidAttendanceForYear(CUR.y);
+  const att = (await STORE.kidAttendanceForYear(CUR.y))
+    .filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO);
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
   const byDay = {};
   att.forEach((a) => {
@@ -1053,7 +1105,8 @@ async function viewStats() {
   presentKidIds.forEach((id) => { const s = (kidById[id] || {}).school; if (s) schoolsPresent.add(s); });
   const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
   // Semaines d'ouverture : semaines ISO avec ≥ 2h de prestation (heures d'ouverture).
-  const entriesYear = await STORE.allEntriesForYear(CUR.y);
+  const entriesYear = (await STORE.allEntriesForYear(CUR.y))
+    .filter((e) => (e.entry_date || '') >= MIN_ISO);
   const weekMinutes = {};
   entriesYear.forEach((e) => {
     const w = effectiveWorked(e); if (!w) return;
@@ -1186,10 +1239,17 @@ async function viewEmployees() {
         <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employée</option>
         <option value="admin" ${p.role === 'admin' ? 'selected' : ''}>Administrateur</option>
       </select>`;
+    // Solde de départ : uniquement pour les employées (un admin ne preste pas d'heures suivies ici).
+    const soldeCell = p.role === 'employee'
+      ? `<td class="nowrap"><input class="opening" data-open="${p.id}" style="width:96px;text-align:center"
+           value="${p.opening_minutes ? fmtDelta(p.opening_minutes) : ''}" placeholder="0h00"
+           aria-label="Solde de départ de ${(p.full_name || '').replace(/"/g, '&quot;')}" /></td>`
+      : '<td class="muted">—</td>';
     return `<tr>
       <td class="nowrap">${p.full_name} <button class="small gray" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
       <td class="nowrap">${p.email || '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
       <td>${roleSel}</td>
+      ${soldeCell}
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
       <td class="nowrap">
         <button class="small" data-reset="${p.id}">✉️ Réinit. mot de passe</button>
@@ -1200,8 +1260,17 @@ async function viewEmployees() {
   app.innerHTML = `<div class="card">
       <div class="row-between"><h2>👥 Utilisateurs</h2><button class="small" id="addBtn">+ Ajouter un utilisateur</button></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Nom</th><th>Email</th><th>Rôle</th><th>Statut</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Nom</th><th>Email</th><th>Rôle</th>
+          <th title="Heures supplémentaires (ou à récupérer) au 1er août 2026">Solde de départ</th>
+          <th>Statut</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
+      <div class="msg">
+        <strong>Solde de départ</strong> — heures supplémentaires (ou à récupérer) de chaque employée
+        <strong>au 1<sup>er</sup> août 2026</strong>, reprises de votre ancien suivi.
+        À saisir <strong>une seule fois</strong> : ensuite le programme cumule tout seul.
+        Formats acceptés : <code>12h30</code>, <code>12:30</code>, <code>12</code>, et
+        <code>-3h15</code> pour des heures à récupérer.
+      </div>
       <p class="muted small">
         Le <strong>rôle</strong> se change directement dans la liste (le dernier administrateur ne peut pas être rétrogradé).
         « ✏️ » modifie le nom ou l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
@@ -1267,6 +1336,31 @@ async function viewEmployees() {
     if (!confirm(`Changer le rôle de ${p.full_name} en « ${label} » ?`)) { s.value = p.role; return; }
     try { await STORE.setRole(s.dataset.role, role); toast('Rôle mis à jour'); render(); }
     catch (e) { s.value = p.role; toast('Erreur : ' + e.message, 'error'); }
+  });
+  // Solde de départ : enregistré à la sortie du champ (ou sur Entrée).
+  app.querySelectorAll('input.opening').forEach((inp) => {
+    const p = profs.find((x) => x.id === inp.dataset.open) || {};
+    const initial = p.opening_minutes || 0;
+    const enregistrer = async () => {
+      const minutes = parseHM(inp.value);
+      if (minutes === null) {
+        toast('Solde non compris. Écrivez par exemple 12h30, ou -3h15.', 'error');
+        inp.value = initial ? fmtDelta(initial) : '';
+        inp.focus();
+        return;
+      }
+      if (minutes === initial) { inp.value = minutes ? fmtDelta(minutes) : ''; return; }
+      try {
+        await STORE.setOpeningMinutes(inp.dataset.open, minutes);
+        toast(`Solde de départ de ${p.full_name} : ${fmtDelta(minutes)}`);
+        render();
+      } catch (e) {
+        inp.value = initial ? fmtDelta(initial) : '';
+        toast('Erreur : ' + e.message, 'error');
+      }
+    };
+    inp.onchange = enregistrer;
+    inp.onkeydown = (ev) => { if (ev.key === 'Enter') inp.blur(); };
   });
   app.querySelectorAll('[data-email]').forEach((b) => b.onclick = async () => {
     const p = profs.find((x) => x.id === b.dataset.email) || {};
