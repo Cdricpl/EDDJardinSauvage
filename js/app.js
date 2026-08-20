@@ -30,6 +30,10 @@ const MIN_ISO = `${MIN_YM.y}-${String(MIN_YM.m).padStart(2, '0')}-01`;
  * pas dans les statistiques (sinon la moyenne serait faussée par des jours
  * d'ouverture fictifs). */
 const KIDS_MIN_ISO = '2026-08-24';
+// Formaté une seule fois : l'infobulle « aucun accueil avant… » est posée sur
+// chaque cellule de la grille (près de 700 par mois), ce qui rappelait ce
+// formatage autant de fois pour une valeur qui ne change jamais.
+const KIDS_MIN_LISIBLE = new Date(KIDS_MIN_ISO).toLocaleDateString('fr-FR');
 const ymNum = (y, m) => y * 12 + (m - 1);
 const atOrBeforeMin = () => ymNum(CUR.y, CUR.m) <= ymNum(MIN_YM.y, MIN_YM.m);
 function clampMonth() {
@@ -222,6 +226,64 @@ async function backupJSON() {
     downloadFile(`edd-sauvegarde_${todayISO()}.json`, JSON.stringify(data, null, 2), 'application/json');
     toast('Sauvegarde JSON téléchargée');
   } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
+}
+
+/* ================================================================
+ * Chargement À LA DEMANDE des bibliothèques d'affichage
+ * ----------------------------------------------------------------
+ * Chart.js (70 Ko) et jsPDF + autoTable (127 Ko) pèsent 194 Ko compressés à
+ * elles seules, et ne servent QU'À l'onglet Statistiques et aux boutons
+ * « Export PDF ». Chargées au démarrage comme avant, elles retardaient le
+ * premier affichage d'environ une seconde à chaque ouverture de l'application,
+ * y compris pour une éducatrice qui ne fait qu'encoder ses présences.
+ * On les télécharge donc au moment où elles servent réellement.
+ *
+ * Les replis existants (« Graphique indisponible », impression navigateur)
+ * restent en place et prennent le relais si le téléchargement échoue —
+ * typiquement hors ligne : le comportement est alors exactement celui d'avant.
+ * ================================================================ */
+const CDN = {
+  chart:     'https://cdn.jsdelivr.net/npm/chart.js@4',
+  jspdf:     'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
+  autotable: 'https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js',
+};
+// On mémorise la PROMESSE : deux clics rapprochés ne téléchargent qu'une fois.
+const SCRIPTS = new Map();
+function chargerScript(url) {
+  if (SCRIPTS.has(url)) return SCRIPTS.get(url);
+  const p = new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = url; el.async = true;
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error('Téléchargement impossible : ' + url));
+    document.head.appendChild(el);
+  }).catch((e) => { SCRIPTS.delete(url); throw e; });   // un échec doit pouvoir être retenté
+  SCRIPTS.set(url, p);
+  return p;
+}
+// Renvoient `false` si la bibliothèque reste indisponible : l'appelant bascule
+// alors sur son repli, comme il le faisait déjà quand le CDN était injoignable.
+async function assurerChart() {
+  if (window.Chart) return true;
+  try { await chargerScript(CDN.chart); }
+  catch (e) { console.warn('[chart]', e.message); }
+  return !!window.Chart;
+}
+async function assurerPdf() {
+  if (window.jspdf && window.jspdf.jsPDF) return true;
+  try {
+    await chargerScript(CDN.jspdf);
+    await chargerScript(CDN.autotable);   // le plugin s'accroche à jsPDF : il vient APRÈS
+  } catch (e) { console.warn('[jspdf]', e.message); }
+  return !!(window.jspdf && window.jspdf.jsPDF);
+}
+// Les exports PDF partent d'un clic, hors du cycle de rendu : on réutilise la
+// barre de chargement existante pour que l'attente du téléchargement se voie.
+async function avecBarre(travail) {
+  const bar = document.getElementById('loadbar');
+  if (bar) bar.classList.add('on');
+  try { return await travail(); }
+  finally { if (bar) bar.classList.remove('on'); }
 }
 
 /* ---------------- Calculs mensuels + solde reporté ---------------- */
@@ -435,9 +497,16 @@ function showFatal(msg) {
 async function viewSheet() {
   const app = document.getElementById('app');
   const empId = SEL_EMP;
-  const month = await STORE.getMonth(empId, CUR.y, CUR.m);
-  let entries = await STORE.entriesForMonth(empId, CUR.y, CUR.m);
-  const tpl = ME.role === 'admin' ? await STORE.getTemplate(empId) : {};
+  /* Ces quatre lectures ne dependent pas les unes des autres : les enchainer
+   * faisait payer quatre allers-retours reseau (100-300 ms chacun) la ou un
+   * seul suffit. Groupees, l'onglet s'ouvre en une attente au lieu de quatre. */
+  const [month, entriesInit, tpl, editableProf] = await Promise.all([
+    STORE.getMonth(empId, CUR.y, CUR.m),
+    STORE.entriesForMonth(empId, CUR.y, CUR.m),
+    ME.role === 'admin' ? STORE.getTemplate(empId) : Promise.resolve({}),
+    currentEmpProfile(empId),
+  ]);
+  let entries = entriesInit;
 
   // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
   // (Les mois validés ne sont jamais touchés.) Garde anti-réentrance.
@@ -461,7 +530,6 @@ async function viewSheet() {
   const dim = daysInMonth(CUR.y, CUR.m);
 
   const canEditPlanned = ME.role === 'admin';
-  const editableProf = await currentEmpProfile(empId);
   const monthEditable = month.status === 'open';
   const canEditWorked = ME.role === 'admin' || (empId === ME.id && monthEditable && editableProf.active);
 
@@ -669,7 +737,7 @@ async function viewSheet() {
       } catch (e) { toast('Erreur : ' + e.message, 'error'); }
     };
   }
-  document.getElementById('pdfBtn').onclick = () => exportSheetPDF(empId).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+  document.getElementById('pdfBtn').onclick = () => avecBarre(() => exportSheetPDF(empId)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
 }
 
 async function currentEmpProfile(id) {
@@ -772,9 +840,14 @@ async function viewRecap() {
   const app = document.getElementById('app');
   const profs = (await STORE.listProfiles()).filter((p) => ME.role === 'admin' ? p.role === 'employee' : p.id === ME.id);
   // Chargement des soldes EN PARALLÈLE (récap plus rapide que l'attente séquentielle).
-  const data = await Promise.all(profs.map(async (p) => ({
-    p, s: await monthSummary(p.id, CUR.y, CUR.m), mo: await STORE.getMonth(p.id, CUR.y, CUR.m),
-  })));
+  const data = await Promise.all(profs.map(async (p) => {
+    // Le solde et le statut du mois sont independants : groupes eux aussi.
+    const [s, mo] = await Promise.all([
+      monthSummary(p.id, CUR.y, CUR.m),
+      STORE.getMonth(p.id, CUR.y, CUR.m),
+    ]);
+    return { p, s, mo };
+  }));
   const rows = data.map(({ p, s, mo }) => `<tr>
       <td>${p.full_name}${p.active ? '' : ' <span class="badge open">archivée</span>'}</td>
       <td>${fmtHM(s.planned)}</td><td>${fmtHM(s.worked)}</td>
@@ -795,15 +868,18 @@ async function viewRecap() {
   wireToolbar();
   if (ME.role === 'admin') {
     const b = document.getElementById('recapPdfBtn');
-    if (b) b.onclick = () => exportRecapPDF(data).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+    if (b) b.onclick = () => avecBarre(() => exportRecapPDF(data)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
   }
 }
 
 /* ---------------- Vue : Enfants (liste nominative + présences) ---------------- */
 async function viewChildren() {
   const app = document.getElementById('app');
-  const kids = await STORE.listKids();
-  const att = await STORE.kidAttendanceForMonth(CUR.y, CUR.m);
+  // Lectures independantes : groupees pour n'attendre qu'un aller-retour.
+  const [kids, att] = await Promise.all([
+    STORE.listKids(),
+    STORE.kidAttendanceForMonth(CUR.y, CUR.m),
+  ]);
   // Statut par (kid,date) : 'present' | 'absent'. Ancien enregistrement sans statut = présent.
   const stat = new Map();
   att.forEach((a) => stat.set(a.kid_id + '|' + a.entry_date, a.status === 'absent' ? 'absent' : 'present'));
@@ -877,7 +953,7 @@ async function viewChildren() {
     // y cocher, et un éventuel enregistrement résiduel n'est pas affiché.
     if (day.date < KIDS_MIN_ISO) {
       return `<td class="daycell${day.weekend ? ' weekend' : ''}"><span class="presbtn pres-off"
-        title="Aucun accueil avant le ${new Date(KIDS_MIN_ISO).toLocaleDateString('fr-FR')}"></span></td>`;
+        title="Aucun accueil avant le ${KIDS_MIN_LISIBLE}"></span></td>`;
     }
     const st = getSt(k.id, day.date);
     const expected = isExpected(k, day.dow);
@@ -1109,7 +1185,17 @@ async function viewStats() {
   // (état résiduel, retour arrière du navigateur) plutôt que d'afficher la vue.
   if (ME.role !== 'admin') { VIEW = 'sheet'; buildNav(); return viewSheet(); }
   const app = document.getElementById('app');
-  const all = await STORE.allChildren(CUR.y);
+  /* Les quatre lectures de cette vue sont independantes : on les groupe.
+   * Les trois dernieres ne servent qu'aux criteres d'agrement (admin) ; pour
+   * une non-admin on ne les demande pas — la garde ci-dessus rend ce cas
+   * theorique, mais la vue ne doit jamais lire ce qu'elle n'affiche pas. */
+  const estAdmin = ME.role === 'admin';
+  const [all, kidsAll, attAnnee, prestationsAnnee] = await Promise.all([
+    STORE.allChildren(CUR.y),
+    estAdmin ? STORE.listKids(true) : Promise.resolve([]),
+    estAdmin ? STORE.kidAttendanceForYear(CUR.y) : Promise.resolve([]),
+    estAdmin ? STORE.allEntriesForYear(CUR.y) : Promise.resolve([]),
+  ]);
   // Rien avant le premier jour d'accueil : sinon des jours d'ouverture fictifs
   // (issus d'un pré-encodage antérieur) tireraient la moyenne vers le bas.
   // Rien après aujourd'hui non plus : le pré-encodage des présences et le
@@ -1141,9 +1227,8 @@ async function viewStats() {
   // car le calcul lit les prestations de toutes les employées (cloisonnées côté serveur).
   let crit = null;
   if (ME.role === 'admin') {
-  const kidsAll = await STORE.listKids(true);
   const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
-  const att = (await STORE.kidAttendanceForYear(CUR.y))
+  const att = attAnnee
     .filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO && (a.entry_date || '') <= auj);
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
   const byDay = {};
@@ -1163,7 +1248,7 @@ async function viewStats() {
   presentKidIds.forEach((id) => { const s = (kidById[id] || {}).school; if (s) schoolsPresent.add(s); });
   const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
   // Semaines d'ouverture : semaines ISO avec ≥ 2h de prestation (heures d'ouverture).
-  const entriesYear = (await STORE.allEntriesForYear(CUR.y))
+  const entriesYear = prestationsAnnee
     .filter((e) => (e.entry_date || '') >= MIN_ISO && (e.entry_date || '') <= auj);
   const weekMinutes = {};
   entriesYear.forEach((e) => {
@@ -1224,10 +1309,10 @@ async function viewStats() {
     </div>`;
   wireToolbar();
 
-  if (!window.Chart) {
+  if (!(await assurerChart())) {
     const c = document.getElementById('chartMonthly');
     if (c) c.replaceWith(Object.assign(document.createElement('p'), { className: 'muted small', textContent: 'Graphique indisponible hors ligne — voir le tableau ci-dessous.' }));
-    document.getElementById('statsPdfBtn').onclick = () => exportStatsPDF(stats, null, null);
+    document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, null, null)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
     return;
   }
   if (CHART) { try { CHART.destroy(); } catch {} }   // libère le graphique précédent (évite une fuite mémoire)
@@ -1237,15 +1322,15 @@ async function viewStats() {
     options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
   const chartMonthly = CHART;
-  document.getElementById('statsPdfBtn').onclick = () => exportStatsPDF(stats, null, chartMonthly);
+  document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, null, chartMonthly)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
 }
 
 /* ---------------- Export PDF des statistiques ANNUELLES ---------------- */
 // N'inclut que les statistiques de l'année : moyenne annuelle, total, et le
 // graphique de moyenne mensuelle sur l'année.
 async function exportStatsPDF(stats, chartDaily, chartMonthly) {
-  // Repli impression si jsPDF absent (hors ligne).
-  if (!window.jspdf) {
+  // Repli impression si jsPDF reste indisponible (hors ligne).
+  if (!(await assurerPdf())) {
     const w = window.open('', '_blank');
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Statistiques annuelles ${stats.year} — Fréquentation</h2>
       <ul>
@@ -1535,7 +1620,7 @@ async function exportRecapPDF(data) {
     fmtHM(s.planned), fmtHM(s.worked), fmtDelta(s.delta), fmtHM(s.carryIn), fmtDelta(s.closing), statusLbl(mo.status),
   ]);
 
-  if (!window.jspdf) { // repli impression
+  if (!(await assurerPdf())) { // repli impression
     const w = window.open('', '_blank');
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${title} — ${sub}</h2>
       <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Employée</th><th>Prévu</th><th>Presté</th><th>Écart</th><th>Reporté</th><th>Cumulé</th><th>Statut</th></tr>
@@ -1573,7 +1658,7 @@ async function exportSheetPDF(empId) {
       fmtHM(worked - planned), e.justification || '']);
   }
 
-  if (!window.jspdf) { // fallback impression
+  if (!(await assurerPdf())) { // repli impression
     const w = window.open('', '_blank');
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Prestations — ${prof.full_name} — ${monthName(CUR.y, CUR.m)}</h2>
       <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>Prévu début</th><th>Prévu fin</th><th>Réel début</th><th>Réel fin</th><th>Presté</th><th>Écart</th><th>Justif.</th></tr>

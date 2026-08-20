@@ -811,7 +811,22 @@ class FirebaseStore {
         { includeMetadataChanges: false },
         (snap) => {
           if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
-          if (c === 'day_entries') { this._entriesCache = {}; this._oublier('prestationsAn:'); }
+          if (c === 'day_entries') {
+            /* Ne vider QUE les employées réellement concernées.
+             * Vider tout le cache faisait relire l'historique COMPLET de chaque
+             * employée dès qu'une collègue enregistrait une heure — et cet
+             * historique n'est pas bornable : le solde reporté cumule les
+             * prestations depuis la mise en service, années précédentes
+             * comprises (voir monthSummary). Borner la lecture à l'année en
+             * cours ferait disparaître le report du 1er janvier. */
+            const touchees = new Set();
+            snap.docChanges().forEach((ch) => {
+              const e = (ch.doc.data() || {}).employee_id; if (e) touchees.add(e);
+            });
+            if (touchees.size) touchees.forEach((e) => delete this._entriesCache[e]);
+            else this._entriesCache = {};
+            this._oublier('prestationsAn:');
+          }
           if (c === 'profiles') this._profilesCache = null;
           if (c === 'months') this._oublier('mois:');
           if (c === 'kids') this._oublier('enfants:');
