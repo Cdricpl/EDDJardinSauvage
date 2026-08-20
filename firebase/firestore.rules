@@ -9,7 +9,7 @@ rules_version = '2';
 //   - les ENFANTS sont visibles et ajoutables par l'equipe ; renommage et
 //     retrait sont reserves a l'admin
 //   - personne ne peut s'auto-promouvoir administrateur
-//   - aucune prestation avant janvier 2026
+//   - aucune prestation avant aout 2026
 //
 // A coller dans : console Firebase > Firestore Database > Regles > Publier.
 // NB : commentaires volontairement sans accents (l'analyseur de regles
@@ -33,8 +33,8 @@ service cloud.firestore {
         || get(/databases/$(database)/documents/months/$(emp + '_' + ym(d))).data.status == 'open';
     }
 
-    // Regle metier : le systeme demarre en janvier 2026.
-    function validDate(d) { return d is string && d.size() == 10 && d >= '2026-01-01'; }
+    // Regle metier : le systeme demarre en aout 2026.
+    function validDate(d) { return d is string && d.size() == 10 && d >= '2026-08-01'; }
 
     // ---- PROFILS : lisibles par les comptes connectes ; ecriture admin ----
     match /profiles/{uid} {

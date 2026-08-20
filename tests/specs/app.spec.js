@@ -137,11 +137,11 @@ test('entête : le bouton 💾 déclenche une sauvegarde (admin)', async ({ page
   expect(download.suggestedFilename()).toContain('edd-sauvegarde');
 });
 
-test('règle métier : le mois précédent est bloqué en janvier 2026', async ({ page }) => {
+test('règle métier : le mois précédent est bloqué en août 2026', async ({ page }) => {
   await loginAdmin(page);
   await page.locator('.navbtn[data-v="sheet"]').click();
   const prev = page.locator('#prevM');
-  // On recule jusqu'à ce que le bouton se désactive (janvier 2026 = premier mois).
+  // On recule jusqu'à ce que le bouton se désactive (août 2026 = premier mois).
   for (let i = 0; i < 60; i++) {
     if (await prev.isDisabled()) break;
     await prev.click();
@@ -333,8 +333,75 @@ test('enfants : un clic met à jour les deux lignes de totaux', async ({ page })
   await expect(totaux).toHaveCount(2);          // une en haut, une en bas
   const avant = Number(await totaux.first().textContent());
 
-  await page.locator('button.presbtn.pres-p').first().click();
-  // Les DEUX doivent suivre : elles portent le même repère, pas un id unique.
-  await expect(totaux.first()).toHaveText(String(avant - 1));
-  await expect(totaux.last()).toHaveText(String(avant - 1));
+  // On coche une case encodable (à partir du premier jour d'accueil).
+  const cases = page.locator('table.attend tbody button.presbtn');
+  await cases.first().click();
+
+  // Les DEUX lignes doivent suivre : elles portent le même repère, pas un id unique.
+  await expect(totaux.first()).toHaveText(String(avant + 1));
+  await expect(totaux.last()).toHaveText(String(avant + 1));
+
+  // Le total du JOUR aussi, en haut comme en bas.
+  const jour = await cases.first().getAttribute('data-date');
+  const numJour = Number((jour || '').slice(8));
+  const totJour = page.locator(`[data-daytot="${numJour}"]`);
+  await expect(totJour).toHaveCount(2);
+  await expect(totJour.first()).toHaveText('1');
+  await expect(totJour.last()).toHaveText('1');
+});
+
+test('enfants : rien n’est encodable avant le premier jour d’accueil', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+
+  // Août 2026 : aucun accueil du 1er au 23 inclus. Ces cases sont neutralisées
+  // (ce ne sont pas des boutons), donc rien ne peut y être coché ni pré-encodé.
+  const ligne = page.locator('table.attend tbody tr').first();
+  for (const jour of [1, 10, 23]) {
+    const cell = ligne.locator('td.daycell').nth(jour - 1);
+    await expect(cell.locator('button')).toHaveCount(0);
+    await expect(cell.locator('.pres-off')).toHaveCount(1);
+  }
+  // Le 24 août, l'encodage redevient possible.
+  const cell24 = ligne.locator('td.daycell').nth(23);
+  await expect(cell24.locator('button.presbtn')).toHaveCount(1);
+  await expect(cell24.locator('button.presbtn')).toHaveAttribute('data-date', '2026-08-24');
+});
+
+test('règle métier : juillet 2026 et les mois antérieurs sont inaccessibles', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  const prev = page.locator('#prevM');
+  for (let i = 0; i < 60; i++) {
+    if (await prev.isDisabled()) break;
+    await prev.click();
+  }
+  // Le programme est proposé aux employées à partir d'août 2026 : rien avant.
+  await expect(page.locator('.toolbar strong')).toContainText('août 2026');
+  await expect(prev).toBeDisabled();
+});
+
+test('admin : le solde de départ se saisit une fois et alimente le report', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+
+  // Heures supplémentaires déjà accumulées avant la mise en service.
+  const champ = page.locator('input.opening').first();
+  await expect(champ).toBeVisible();
+  await champ.fill('12h30');
+  await champ.blur();
+  await expect(page.locator('input.opening').first()).toHaveValue('+12h30');
+
+  // Ce solde devient le report du premier mois, sans rien saisir d'autre.
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#tCarry')).toHaveText('12h30');
+
+  // Une saisie incompréhensible est refusée plutôt que devinée.
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const champ2 = page.locator('input.opening').first();
+  await champ2.fill('nimportequoi');
+  await champ2.blur();
+  await expect(page.locator('#toast')).toContainText('Solde non compris');
+  await expect(page.locator('input.opening').first()).toHaveValue('+12h30');
 });
