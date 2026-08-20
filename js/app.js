@@ -36,12 +36,35 @@ const KIDS_MIN_ISO = '2026-08-24';
 const KIDS_MIN_LISIBLE = new Date(KIDS_MIN_ISO).toLocaleDateString('fr-FR');
 const ymNum = (y, m) => y * 12 + (m - 1);
 const atOrBeforeMin = () => ymNum(CUR.y, CUR.m) <= ymNum(MIN_YM.y, MIN_YM.m);
+/* Borne HAUTE : juin, fin de l'année scolaire en cours. Sans elle, le bouton ▶
+ * n'avait aucune limite — quatorze clics menaient à octobre 2027, où le
+ * pré-encodage écrivait des présences plus d'un an à l'avance. De juillet à
+ * décembre, l'année scolaire en cours se termine en juin de l'année suivante. */
+const MAX_YM = () => {
+  const d = new Date();
+  return { y: d.getMonth() + 1 >= 7 ? d.getFullYear() + 1 : d.getFullYear(), m: 6 };
+};
+const atOrAfterMax = () => {
+  const M = MAX_YM();
+  // Si la fin d'année scolaire précède la mise en service, la borne haute n'a
+  // pas de sens : on ne bloque rien plutôt que de tout bloquer.
+  return ymNum(M.y, M.m) >= ymNum(MIN_YM.y, MIN_YM.m) && ymNum(CUR.y, CUR.m) >= ymNum(M.y, M.m);
+};
 function clampMonth() {
-  if (ymNum(CUR.y, CUR.m) < ymNum(MIN_YM.y, MIN_YM.m)) { CUR.y = MIN_YM.y; CUR.m = MIN_YM.m; }
+  if (ymNum(CUR.y, CUR.m) < ymNum(MIN_YM.y, MIN_YM.m)) { CUR.y = MIN_YM.y; CUR.m = MIN_YM.m; return; }
+  const M = MAX_YM();
+  if (ymNum(M.y, M.m) >= ymNum(MIN_YM.y, MIN_YM.m) && ymNum(CUR.y, CUR.m) > ymNum(M.y, M.m)) { CUR.y = M.y; CUR.m = M.m; }
 }
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 /* Mode « en ligne » (données partagées + envoi d'emails de réinitialisation). */
 const isCloud = () => MODE === 'firebase';
+/* Échappe un texte avant de l'insérer dans du HTML.
+ * Le risque n'est pas l'administratrice qui tape son propre texte, mais un
+ * fichier de sauvegarde corrompu ou d'origine incertaine : `importAll` écrit
+ * les noms tels quels, et ils repartent ensuite dans le DOM. Un nom contenant
+ * « < » cassait l'affichage ; il s'affiche maintenant littéralement. */
+const echapper = (v) => String(v == null ? '' : v)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /* ---------------- Helpers temps ---------------- */
 const pad = (n) => String(n).padStart(2, '0');
@@ -438,14 +461,14 @@ async function toolbar(showEmployee, actionHTML) {
   if (showEmployee && ME.role === 'admin') {
     const profs = (await STORE.listProfiles()).filter((p) => p.role === 'employee');
     empSel = `<select id="empSel">${profs.map((p) =>
-      `<option value="${p.id}" ${p.id === SEL_EMP ? 'selected' : ''}>${p.full_name}${p.active ? '' : ' (archivée)'}</option>`).join('')}</select>`;
+      `<option value="${p.id}" ${p.id === SEL_EMP ? 'selected' : ''}>${echapper(p.full_name)}${p.active ? '' : ' (archivée)'}</option>`).join('')}</select>`;
   }
   const now = new Date();
   const onCurrentMonth = CUR.y === now.getFullYear() && CUR.m === now.getMonth() + 1;
   return `<div class="toolbar">
     <button class="small" id="prevM" ${atOrBeforeMin() ? `disabled title="${monthName(MIN_YM.y, MIN_YM.m)} = premier mois"` : ''}>◀</button>
     <strong style="min-width:170px;text-align:center;text-transform:capitalize">${monthName(CUR.y, CUR.m)}</strong>
-    <button class="small" id="nextM">▶</button>
+    <button class="small" id="nextM" ${atOrAfterMax() ? `disabled title="${monthName(MAX_YM().y, MAX_YM().m)} = fin de l'année scolaire"` : ''}>▶</button>
     <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours">📅 Aujourd'hui</button>
     ${empSel}
     <span style="flex:1"></span>
@@ -456,7 +479,7 @@ function wireToolbar() {
   const p = document.getElementById('prevM'), n = document.getElementById('nextM'),
         t = document.getElementById('todayM'), s = document.getElementById('empSel');
   if (p) p.onclick = () => { if (atOrBeforeMin()) return; CUR.m--; if (CUR.m < 1) { CUR.m = 12; CUR.y--; } clampMonth(); render(); };
-  if (n) n.onclick = () => { CUR.m++; if (CUR.m > 12) { CUR.m = 1; CUR.y++; } render(); };
+  if (n) n.onclick = () => { if (atOrAfterMax()) return; CUR.m++; if (CUR.m > 12) { CUR.m = 1; CUR.y++; } clampMonth(); render(); };
   if (t) t.onclick = () => { const d = new Date(); CUR.y = d.getFullYear(); CUR.m = d.getMonth() + 1; clampMonth(); render(); };
   if (s) s.onchange = () => { SEL_EMP = s.value; render(); };
 }
@@ -567,7 +590,7 @@ async function viewSheet() {
       <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked)}</td>
       <td class="nowrap"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
       <td class="${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
-      <td><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${(e.justification || '').replace(/"/g, '&quot;')}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
+      <td><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${echapper(e.justification)}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
     </tr>`;
   }
 
@@ -758,7 +781,10 @@ async function viewSheet() {
 }
 
 async function currentEmpProfile(id) {
-  return (await STORE.listProfiles()).find((p) => p.id === id) || { active: true };
+  // Le nom de repli évite un plantage des exports PDF si la fiche a disparu
+  // (compte supprimé dans la console Firebase, sauvegarde partielle restaurée).
+  return (await STORE.listProfiles()).find((p) => p.id === id)
+    || { active: true, full_name: 'Employée inconnue' };
 }
 
 /* ---------------- Horaire type (template hebdomadaire) ---------------- */
@@ -823,7 +849,8 @@ function wireTemplateCard(empId, month) {
     const tpl = await STORE.getTemplate(empId);
     if (!templateHasSlots(tpl)) { toast("Définis d'abord un horaire type.", 'error'); return; }
     if (!confirm(`Appliquer l'horaire type à ${monthName(CUR.y, CUR.m)} ? Les jours déjà modifiés sont préservés.`)) return;
-    await applyTemplate(empId, CUR.y, CUR.m, tpl, false);
+    try { await applyTemplate(empId, CUR.y, CUR.m, tpl, false); }
+    catch (e) { toast("Application impossible : " + e.message, 'error'); }
   };
 }
 
@@ -866,7 +893,7 @@ async function viewRecap() {
     return { p, s, mo };
   }));
   const rows = data.map(({ p, s, mo }) => `<tr>
-      <td>${p.full_name}${p.active ? '' : ' <span class="badge open">archivée</span>'}</td>
+      <td>${echapper(p.full_name)}${p.active ? '' : ' <span class="badge open">archivée</span>'}</td>
       <td>${fmtHM(s.planned)}</td><td>${fmtHM(s.worked)}</td>
       <td class="${s.delta >= 0 ? 'pos' : 'neg'}">${fmtDelta(s.delta)}</td>
       <td>${fmtHM(s.carryIn)}</td>
@@ -983,22 +1010,22 @@ async function viewChildren() {
     const cls = st === 'present' ? 'pres-p' : st === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : 'pres-v');
     const sym = st === 'present' ? '✓' : st === 'absent' ? '✗' : '';
     const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${st === 'present' ? 'présent' : st === 'absent' ? 'absent' : 'non défini'}`;
-    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absent → non défini" aria-label="${lbl.replace(/"/g, '&quot;')}">${sym}</button></td>`;
+    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absent → non défini" aria-label="${echapper(lbl)}">${sym}</button></td>`;
   };
   const kidRows = kids.length ? kids.map((k) => {
     const cells = days.map((day) => cellHtml(k, day)).join('');
     const nom = kidLabel(k);
-    const esc = nom.replace(/"/g, '&quot;');
+    const esc = echapper(nom);
     const habituels = (k.days || []).length
       ? `<div class="kidmeta">Habituels : ${(k.days || []).slice().sort().map((w) => DOW[w]).join(' ')}</div>` : '';
     const lignes = [k.grade, k.school].filter(Boolean)
-      .map((t) => `<div class="kidmeta">${t}</div>`).join('');
+      .map((t) => `<div class="kidmeta">${echapper(t)}</div>`).join('');
     return `<tr>
       <th scope="row" class="kidname">
         <div class="kidcell">
-          <span class="avatar" style="background:${avatarColor(nom)}" aria-hidden="true">${initials(k)}</span>
+          <span class="avatar" style="background:${avatarColor(nom)}" aria-hidden="true">${echapper(initials(k))}</span>
           <div class="kidinfo">
-            <div class="kidnom">${nom}</div>
+            <div class="kidnom">${echapper(nom)}</div>
             ${lignes}${habituels}
           </div>
           ${ME.role === 'admin' ? `<div class="kidacts">
@@ -1095,8 +1122,8 @@ async function viewChildren() {
         <p class="muted small" style="margin-top:0">Ces fiches sont conservées ; leurs présences déjà encodées ne sont
           pas perdues. Réactiver une fiche la remet dans la grille ci-dessus.</p>
         ${archives.map((k) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
-          <span class="avatar" style="background:${avatarColor(kidLabel(k))}" aria-hidden="true">${initials(k)}</span>
-          <span style="flex:1">${kidLabel(k)}${k.school ? ` <span class="muted small">— ${k.school}</span>` : ''}</span>
+          <span class="avatar" style="background:${avatarColor(kidLabel(k))}" aria-hidden="true">${echapper(initials(k))}</span>
+          <span style="flex:1">${echapper(kidLabel(k))}${k.school ? ` <span class="muted small">— ${echapper(k.school)}</span>` : ''}</span>
           <button class="small green" data-reactkid="${k.id}">Réactiver</button>
         </div>`).join('')}
       </div>` : ''}
@@ -1203,13 +1230,18 @@ async function viewChildren() {
     const next = cur === 'present' ? 'absent' : cur === 'absent' ? null : 'present';
     if (next) stat.set(key, next); else stat.delete(key);
     // Rendu de la cellule.
-    el.classList.remove('pres-p', 'pres-a', 'pres-exp');
+    el.classList.remove('pres-p', 'pres-a', 'pres-exp', 'pres-v');   // 'pres-v' était oublié
     const day = days.find((d) => d.date === date);
     const kk = kids.find((k) => k.id === kid);
-    const expected = kk && isExpected(kk, day.dow);
-    el.textContent = next === 'present' ? '✓' : next === 'absent' ? '✗' : (expected ? '·' : '');
-    const cls = next === 'present' ? 'pres-p' : next === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : '');
-    if (cls) el.classList.add(cls);
+    // `day` peut manquer si un rendu concurrent (temps réel) a changé le mois
+    // affiché entre l'affichage de la case et le clic : sans cette garde, le
+    // clic levait une exception au lieu d'être simplement sans effet.
+    const expected = !!(kk && day && isExpected(kk, day.dow));
+    // Exactement la même règle qu'au rendu (voir `sym` / `cls` plus haut) : une
+    // case non définie reste VIDE. Elle affichait « · » juste après le clic, puis
+    // se vidait au rechargement — deux apparences pour le même état.
+    el.textContent = next === 'present' ? '✓' : next === 'absent' ? '✗' : '';
+    el.classList.add(next === 'present' ? 'pres-p' : next === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : 'pres-v'));
     // Totaux en place.
     const kt = document.getElementById('kidtot_' + kid);
     if (kt) kt.textContent = days.reduce((n, d) => n + compte(kid, d.date), 0);
@@ -1338,7 +1370,7 @@ async function viewStats() {
         <thead><tr><th>Critère</th><th>Situation</th><th>État</th></tr></thead>
         <tbody>${crit.map((c) => `<tr>
           <td>${c.label}</td>
-          <td>${c.val}${c.note ? `<br><span class="muted small">${c.note}</span>` : ''}</td>
+          <td>${echapper(c.val)}${c.note ? `<br><span class="muted small">${echapper(c.note)}</span>` : ''}</td>
           <td class="nowrap ${c.ok ? 'pos' : 'neg'}">${c.ok ? '✔ atteint' : '✘ non atteint'}</td>
         </tr>`).join('')}</tbody>
       </table></div>
@@ -1379,6 +1411,7 @@ async function exportStatsPDF(stats, chartMonthly) {
   // Repli impression si jsPDF reste indisponible (hors ligne).
   if (!(await assurerPdf())) {
     const w = window.open('', '_blank');
+    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Statistiques annuelles ${stats.year} — Fréquentation</h2>
       <ul>
         <li>Moyenne journalière (année) : <b>${stats.dailyYear.toFixed(1)}</b> enfants</li>
@@ -1433,11 +1466,11 @@ async function viewEmployees() {
     const soldeCell = p.role === 'employee'
       ? `<td class="nowrap"><input class="opening" data-open="${p.id}" style="width:96px;text-align:center"
            value="${p.opening_minutes ? fmtDelta(p.opening_minutes) : ''}" placeholder="0h00"
-           aria-label="Solde de départ de ${(p.full_name || '').replace(/"/g, '&quot;')}" /></td>`
+           aria-label="Solde de départ de ${echapper(p.full_name)}" /></td>`
       : '<td class="muted">—</td>';
     return `<tr>
-      <td class="nowrap">${p.full_name} <button class="small gray" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
-      <td class="nowrap">${p.email || '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${(p.full_name || '').replace(/"/g, '&quot;')}">✏️</button></td>
+      <td class="nowrap">${echapper(p.full_name)} <button class="small gray" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${echapper(p.full_name)}">✏️</button></td>
+      <td class="nowrap">${p.email ? echapper(p.email) : '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${echapper(p.full_name)}">✏️</button></td>
       <td>${roleSel}</td>
       ${soldeCell}
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
@@ -1676,6 +1709,7 @@ async function exportRecapPDF(data) {
 
   if (!(await assurerPdf())) { // repli impression
     const w = window.open('', '_blank');
+    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${title} — ${sub}</h2>
       <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Employée</th><th>Prévu</th><th>Presté</th><th>Écart</th><th>Reporté</th><th>Cumulé</th><th>Statut</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
@@ -1714,6 +1748,7 @@ async function exportSheetPDF(empId) {
 
   if (!(await assurerPdf())) { // repli impression
     const w = window.open('', '_blank');
+    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Prestations — ${prof.full_name} — ${monthName(CUR.y, CUR.m)}</h2>
       <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>Prévu début</th><th>Prévu fin</th><th>Réel début</th><th>Réel fin</th><th>Presté</th><th>Écart</th><th>Justif.</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
@@ -1759,12 +1794,18 @@ function resetIdleTimer() {
   clearTimeout(_idleTimer);
   _idleTimer = setTimeout(() => doLogout(true), IDLE_MINUTES * 60 * 1000);
 }
+const IDLE_EVENTS = ['click', 'keydown', 'mousemove', 'touchstart', 'scroll', 'change'];
 function startIdleTimer() {
-  ['click', 'keydown', 'mousemove', 'touchstart', 'scroll', 'change'].forEach((ev) =>
-    window.addEventListener(ev, resetIdleTimer, { passive: true }));
+  IDLE_EVENTS.forEach((ev) => window.addEventListener(ev, resetIdleTimer, { passive: true }));
   resetIdleTimer();
 }
-function stopIdleTimer() { clearTimeout(_idleTimer); }
+// Retire aussi les écouteurs : `stopIdleTimer` prétendait tout défaire alors
+// qu'il ne coupait que le minuteur. Sans conséquence tant que la déconnexion
+// recharge la page — mais c'est précisément ce sur quoi il ne faut pas compter.
+function stopIdleTimer() {
+  clearTimeout(_idleTimer);
+  IDLE_EVENTS.forEach((ev) => window.removeEventListener(ev, resetIdleTimer));
+}
 
 /* ---------------- Filet de sécurité global ---------------- */
 window.addEventListener('error', (ev) => {

@@ -93,14 +93,35 @@ class DemoStore {
         if ((d + ki) % 6 !== 0) db.kidatt.push({ kid_id: k.id, entry_date: date }); // ~1 absence / 6 jours
       });
     }
-    localStorage.setItem(this.KEY, JSON.stringify(db));
+    this._ecrire(db);
   }
 
-  _db() { return JSON.parse(localStorage.getItem(this.KEY)); }
+  /* Une seule porte d'écriture, pour que le quota saturé donne une phrase
+   * compréhensible au lieu d'un « QuotaExceededError » brut — et pour ne pas
+   * laisser croire qu'une saisie est enregistrée alors qu'elle ne l'est pas. */
+  _ecrire(db) {
+    try { localStorage.setItem(this.KEY, JSON.stringify(db)); }
+    catch (e) {
+      throw new Error("Mémoire du navigateur pleine : rien n'a été enregistré. "
+        + 'Exportez une sauvegarde, puis videz les données de ce site.');
+    }
+  }
+
+  _db() {
+    try {
+      const brut = localStorage.getItem(this.KEY);
+      if (brut) return JSON.parse(brut);
+    } catch {}
+    // Stockage vidé pendant la session (autre onglet, nettoyage du navigateur)
+    // ou contenu illisible : on reconstruit une base plutôt que de laisser
+    // TOUTES les lectures échouer sur `null.profiles`.
+    this._seed();
+    return JSON.parse(localStorage.getItem(this.KEY));
+  }
   _save(db) {
-    localStorage.setItem(this.KEY, JSON.stringify(db));
+    this._ecrire(db);
     // Notifie les autres onglets (simulation "temps réel").
-    localStorage.setItem('ecole_ping', String(Date.now()));
+    try { localStorage.setItem('ecole_ping', String(Date.now())); } catch {}
   }
   _session() { try { return JSON.parse(localStorage.getItem(this.SESSION) || 'null'); } catch { return null; } }
 
