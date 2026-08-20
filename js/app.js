@@ -15,6 +15,7 @@ let APPLYING = false;               // garde anti-réentrance du pré-remplissag
 let APPLYING_KIDS = false;          // garde anti-réentrance du pré-encodage des présences enfants
 let CHART = null;                   // instance Chart.js courante (détruite avant réutilisation)
 const PREFILLED_KIDS = new Set();   // mois déjà pré-encodés cette session (anti-boucle)
+const PREFILLED_SHEETS = new Set(); // feuilles déjà pré-remplies cette session (anti-boucle)
 let CUR = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 
 /* Le système démarre en AOÛT 2026 : aucun mois antérieur n'est accessible, et
@@ -440,7 +441,15 @@ async function viewSheet() {
 
   // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
   // (Les mois validés ne sont jamais touchés.) Garde anti-réentrance.
-  if (ME.role === 'admin' && month.status === 'open' && entries.length === 0 && templateHasSlots(tpl) && !APPLYING) {
+  // Verrou : on ne tente le pré-remplissage qu'UNE fois par mois, par employée et
+  // par session. Indispensable : sinon un échec d'écriture (règle serveur, quota,
+  // réseau coupé) laisserait le mois vide, et le `render()` de fin relancerait
+  // aussitôt viewSheet → pré-remplissage → render()… en boucle, jusqu'à figer
+  // l'appareil. Le pré-encodage des présences enfants a la même protection.
+  const sheetKey = `${empId}|${CUR.y}-${pad(CUR.m)}`;
+  if (ME.role === 'admin' && month.status === 'open' && entries.length === 0 && templateHasSlots(tpl)
+      && !APPLYING && !PREFILLED_SHEETS.has(sheetKey)) {
+    PREFILLED_SHEETS.add(sheetKey);   // marqué comme tenté AVANT l'écriture (anti-boucle)
     APPLYING = true;
     try { await applyTemplate(empId, CUR.y, CUR.m, tpl, true); }
     catch (e) { console.error('[auto-prefill]', e); toast('Pré-remplissage impossible : ' + e.message, 'error'); }
@@ -719,7 +728,7 @@ function wireTemplateCard(empId, month) {
         slots[w] = { start: s, end: e };
       }
     }
-    try { await STORE.setTemplate(empId, slots); toast('Horaire type enregistré'); render(); }
+    try { await STORE.setTemplate(empId, slots); PREFILLED_SHEETS.clear(); toast('Horaire type enregistré'); render(); }
     catch (e) { document.getElementById('tplMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
 
@@ -1601,6 +1610,9 @@ window.addEventListener('unhandledrejection', (ev) => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('logoutBtn').onclick = doLogout;
+  // `doLogout(auto)` : sans la fonction fléchée, le clic transmettrait l'objet
+  // MouseEvent comme `auto` — toujours vrai — et l'écran de connexion annoncerait
+  // à tort une déconnexion pour inactivité.
+  document.getElementById('logoutBtn').onclick = () => doLogout(false);
   boot().catch((e) => { console.error('[boot]', e); showFatal((e && e.message) || 'Démarrage impossible.'); });
 });
