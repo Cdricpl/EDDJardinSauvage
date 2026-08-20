@@ -169,7 +169,9 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
    de garder l'en-tête des jours et la ligne des totaux visibles en permanence
    pendant qu'on descend la liste des enfants. */
 .attend-wrap {
-  max-height:calc(100vh - 240px); min-height:320px; overflow:auto;
+  /* Pas de hauteur minimale : avec peu d'enfants, elle laissait une bande vide
+     entre la derniere ligne et le total colle en bas du cadre. */
+  max-height:calc(100vh - 240px); overflow:auto;
   border:1px solid var(--border); border-radius:12px;
 }
 .attend { border-collapse:separate; border-spacing:0; font-size:13px; }

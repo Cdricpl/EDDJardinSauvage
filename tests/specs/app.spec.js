@@ -405,3 +405,51 @@ test('admin : le solde de départ se saisit une fois et alimente le report', asy
   await expect(page.locator('#toast')).toContainText('Solde non compris');
   await expect(page.locator('input.opening').first()).toHaveValue('+12h30');
 });
+
+/** Connexion en tant qu'employée (mode démo). */
+async function loginEmployee(page) {
+  await page.goto('/index.html');
+  await expect(page.locator('#loginBtn')).toBeVisible();
+  await page.locator('#email').fill('flora@ecole.be');
+  await page.locator('#pwd').fill('flora123');
+  await page.locator('#loginBtn').click();
+  await expect(page.locator('#appShell')).toBeVisible();
+}
+
+test('employée : l’onglet Statistiques n’est pas accessible', async ({ page }) => {
+  await loginEmployee(page);
+  // L'onglet est retiré de la navigation tant qu'il n'est pas finalisé.
+  await expect(page.locator('.navbtn[data-v="stats"]')).toHaveCount(0);
+  await expect(page.locator('.navbtn')).toHaveCount(3);
+
+  // Et l'accès direct (état résiduel) retombe sur la feuille, sans écran blanc.
+  await page.evaluate(() => { window.VIEW = 'stats'; });
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('#app .msg.error strong')).toHaveCount(0);
+
+  // L'administrateur, lui, y a toujours accès.
+  await page.locator('#logoutBtn').click();
+  await loginAdmin(page);
+  await expect(page.locator('.navbtn[data-v="stats"]')).toHaveCount(1);
+});
+
+test('employée : fiches enfants en lecture seule, avec qui contacter', async ({ page }) => {
+  await loginEmployee(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+
+  // Aucun moyen de modifier une fiche : ni bouton, ni formulaire dans la page.
+  await expect(page.locator('#kToggle')).toHaveCount(0);
+  await expect(page.locator('#addKidCard')).toHaveCount(0);
+  await expect(page.locator('#editKidCard')).toHaveCount(0);
+  await expect(page.locator('[data-editkid], [data-arch]')).toHaveCount(0);
+
+  // Mais la marche à suivre est indiquée.
+  const msg = page.locator('#app .msg').first();
+  await expect(msg).toContainText('changement de situation');
+  await expect(msg).toContainText('Stéphanie Lejeune');
+  await expect(msg).toContainText('PIELTAIN Cédric');
+
+  // L'encodage des présences, lui, reste possible.
+  await expect(page.locator('table.attend tbody button.presbtn').first()).toBeEnabled();
+});

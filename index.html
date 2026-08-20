@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>EDD Jardin Sauvage — Gestion</title>
-  <link rel="stylesheet" href="css/styles.css?v=v2026.08.20-1" />
+  <link rel="stylesheet" href="css/styles.css?v=v2026.08.20-2" />
   <!-- PWA : installable sur smartphone -->
   <link rel="manifest" href="manifest.webmanifest" />
   <meta name="theme-color" content="#241d19" />
@@ -50,15 +50,15 @@
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 
   <!-- Application -->
-  <script src="js/config.js?v=v2026.08.20-1"></script>
-  <script src="js/store.js?v=v2026.08.20-1"></script>
-  <script src="js/app.js?v=v2026.08.20-1"></script>
+  <script src="js/config.js?v=v2026.08.20-2"></script>
+  <script src="js/store.js?v=v2026.08.20-2"></script>
+  <script src="js/app.js?v=v2026.08.20-2"></script>
 
   <!-- Enregistrement du service worker (installation sur smartphone + hors ligne) -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js?v=v2026.08.20-1').catch((e) => console.warn('SW non enregistré', e));
+        navigator.serviceWorker.register('sw.js?v=v2026.08.20-2').catch((e) => console.warn('SW non enregistré', e));
       });
     }
   </script>

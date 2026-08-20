@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.20-1';
+const APP_VERSION = 'v2026.08.20-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -47,6 +47,10 @@ const DOW = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 /* Implantations scolaires (critère d'agrément : au moins deux, dont les principales). */
 const SCHOOLS = ['Saint-Remacle', 'ARAHF'];
 const REQUIRED_SCHOOLS = ['Saint-Remacle', 'ARAHF'];
+
+/* Responsables à contacter pour toute correction d'une fiche enfant.
+ * Les employées ne modifient pas ces fiches : elles signalent le changement. */
+const ADMINS_CONTACT = 'Stéphanie Lejeune ou PIELTAIN Cédric';
 
 /* Pastille d'initiales devant chaque enfant : repère visuel qui aide à
  * retrouver sa ligne dans une grille de 31 colonnes. La couleur est tirée du
@@ -348,10 +352,11 @@ function renderLogin() {
 
 /* ---------------- Navigation ---------------- */
 function buildNav() {
+  // L'onglet Statistiques reste réservé à l'administration tant qu'il n'est pas finalisé.
   const items = ME.role === 'admin'
     ? [['sheet', '📅 Feuille du mois'], ['recap', '📊 Récapitulatif'], ['children', '🧒 Enfants'],
        ['stats', '📈 Statistiques'], ['employees', '👥 Utilisateurs']]
-    : [['sheet', '📅 Ma feuille'], ['recap', '📊 Mon récap'], ['children', '🧒 Enfants'], ['stats', '📈 Statistiques']];
+    : [['sheet', '📅 Ma feuille'], ['recap', '📊 Mon récap'], ['children', '🧒 Enfants']];
   document.getElementById('nav').innerHTML = items.map(
     ([v, l]) => `<button class="navbtn ${v === VIEW ? 'active' : ''}" data-v="${v}">${l}</button>`).join('');
   document.querySelectorAll('.navbtn').forEach((b) => b.onclick = () => { VIEW = b.dataset.v; buildNav(); render(); });
@@ -902,6 +907,7 @@ async function viewChildren() {
       ? '<button id="kToggle" class="addkid">+ Ajouter un enfant</button>' : '')}
     <div class="card">
       <h2 style="margin:0 0 4px">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
+      ${ME.role === 'admin' ? `
       <div class="card sub hidden" id="addKidCard">
         <div class="row" style="align-items:end">
           <div><label for="kFirst">Prénom</label><input id="kFirst" placeholder="Prénom"/></div>
@@ -934,7 +940,13 @@ async function viewChildren() {
           <button class="green" id="eSave">💾 Enregistrer</button>
           <button class="gray" id="eCancel">Annuler</button>
         </div>
-      </div>
+      </div>` : `
+      <div class="msg">
+        Vous encodez les <strong>présences</strong> ; les fiches des enfants (nom, école,
+        année, date de naissance, jours habituels) sont gérées par l'administration.<br>
+        <strong>En cas de changement de situation pour un enfant</strong>, soumettez la
+        correction à un administrateur : <strong>${ADMINS_CONTACT}</strong>.
+      </div>`}
       <div class="legbar">
         <div><span class="legtitle">Légende :</span> ${legende}</div>
         <p class="muted small" style="margin:0">Les jours habituels de chaque enfant sont
@@ -953,7 +965,8 @@ async function viewChildren() {
         <div class="kidcount">👥 <strong>${kids.length}</strong> enfant${kids.length > 1 ? 's' : ''}</div>
         <div>${legende}</div>
       </div>
-      <p class="muted small">« Prés. » = jours de présence de l'enfant ce mois-ci. La moyenne annuelle est dans l'onglet 📈 Statistiques.</p>
+      <p class="muted small">« Prés. » = jours de présence de l'enfant ce mois-ci.${
+        ME.role === 'admin' ? ' La moyenne annuelle est dans l\'onglet 📈 Statistiques.' : ''}</p>
     </div>`;
   wireToolbar();
 
@@ -972,52 +985,56 @@ async function viewChildren() {
 
   const readDays = () => [...app.querySelectorAll('input.kd:checked')].map((c) => Number(c.dataset.w));
 
-  // Ajout d'un enfant.
-  document.getElementById('kAdd').onclick = async () => {
-    const msg = document.getElementById('kMsg');
-    try {
-      await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value,
-        document.getElementById('kSchool').value, document.getElementById('kBirth').value, readDays(),
-        document.getElementById('kGrade').value);
-      PREFILLED_KIDS.clear(); toast('Enfant ajouté'); render();
-    } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
-  };
-  // Modifier un enfant : ouvre le formulaire pré-rempli (nom, école, naissance, jours).
-  const editCard = document.getElementById('editKidCard');
-  app.querySelectorAll('[data-editkid]').forEach((b) => b.onclick = () => {
-    const k = kids.find((x) => x.id === b.dataset.editkid) || {};
-    document.getElementById('eId').value = k.id || '';
-    document.getElementById('eFirst').value = k.first_name || '';
-    document.getElementById('eLast').value = k.last_name || '';
-    document.getElementById('eSchool').innerHTML = schoolOptions(k.school || '');
-    document.getElementById('eGrade').innerHTML = gradeOptions(k.grade || '');
-    document.getElementById('eBirth').value = k.birthdate || '';
-    const set = new Set(k.days || []);
-    app.querySelectorAll('input.ek').forEach((c) => (c.checked = set.has(Number(c.dataset.w))));
-    document.getElementById('eMsg').innerHTML = '';
-    editCard.classList.remove('hidden');
-    editCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  });
-  document.getElementById('eCancel').onclick = () => editCard.classList.add('hidden');
-  document.getElementById('eSave').onclick = async () => {
-    const id = document.getElementById('eId').value;
-    const info = {
-      first_name: document.getElementById('eFirst').value,
-      last_name: document.getElementById('eLast').value,
-      school: document.getElementById('eSchool').value,
-      grade: document.getElementById('eGrade').value,
-      birthdate: document.getElementById('eBirth').value,
-      days: [...app.querySelectorAll('input.ek:checked')].map((c) => Number(c.dataset.w)),
+  // Gestion des fiches : réservée à l'administration. Chez une employée, les
+  // deux formulaires ne sont pas rendus du tout — rien à brancher ici.
+  if (ME.role === 'admin') {
+    // Ajout d'un enfant.
+    document.getElementById('kAdd').onclick = async () => {
+      const msg = document.getElementById('kMsg');
+      try {
+        await STORE.addKid(document.getElementById('kFirst').value, document.getElementById('kLast').value,
+          document.getElementById('kSchool').value, document.getElementById('kBirth').value, readDays(),
+          document.getElementById('kGrade').value);
+        PREFILLED_KIDS.clear(); toast('Enfant ajouté'); render();
+      } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
     };
-    try { await STORE.setKidInfo(id, info); PREFILLED_KIDS.clear(); toast('Fiche enfant modifiée'); render(); }
-    catch (e) { document.getElementById('eMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
-  };
-  // Retirer un enfant (archivage : données conservées).
-  app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
-    if (!confirm('Retirer cet enfant de la liste ? (ses présences passées restent comptées)')) return;
-    try { await STORE.setKidActive(b.dataset.arch, false); toast('Enfant retiré'); render(); }
-    catch (e) { toast('Erreur : ' + e.message, 'error'); }
-  });
+    // Modifier un enfant : ouvre le formulaire pré-rempli (nom, école, naissance, jours).
+    const editCard = document.getElementById('editKidCard');
+    app.querySelectorAll('[data-editkid]').forEach((b) => b.onclick = () => {
+      const k = kids.find((x) => x.id === b.dataset.editkid) || {};
+      document.getElementById('eId').value = k.id || '';
+      document.getElementById('eFirst').value = k.first_name || '';
+      document.getElementById('eLast').value = k.last_name || '';
+      document.getElementById('eSchool').innerHTML = schoolOptions(k.school || '');
+      document.getElementById('eGrade').innerHTML = gradeOptions(k.grade || '');
+      document.getElementById('eBirth').value = k.birthdate || '';
+      const set = new Set(k.days || []);
+      app.querySelectorAll('input.ek').forEach((c) => (c.checked = set.has(Number(c.dataset.w))));
+      document.getElementById('eMsg').innerHTML = '';
+      editCard.classList.remove('hidden');
+      editCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    document.getElementById('eCancel').onclick = () => editCard.classList.add('hidden');
+    document.getElementById('eSave').onclick = async () => {
+      const id = document.getElementById('eId').value;
+      const info = {
+        first_name: document.getElementById('eFirst').value,
+        last_name: document.getElementById('eLast').value,
+        school: document.getElementById('eSchool').value,
+        grade: document.getElementById('eGrade').value,
+        birthdate: document.getElementById('eBirth').value,
+        days: [...app.querySelectorAll('input.ek:checked')].map((c) => Number(c.dataset.w)),
+      };
+      try { await STORE.setKidInfo(id, info); PREFILLED_KIDS.clear(); toast('Fiche enfant modifiée'); render(); }
+      catch (e) { document.getElementById('eMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
+    };
+    // Retirer un enfant (archivage : données conservées).
+    app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
+      if (!confirm('Retirer cet enfant de la liste ? (ses présences passées restent comptées)')) return;
+      try { await STORE.setKidActive(b.dataset.arch, false); toast('Enfant retiré'); render(); }
+      catch (e) { toast('Erreur : ' + e.message, 'error'); }
+    });
+  }
 
   // Les totaux figurent en double (au-dessus et sous la grille) : on met donc à
   // jour TOUTES les cellules portant le repère, pas seulement la première.
@@ -1056,6 +1073,9 @@ async function viewChildren() {
 
 /* ---------------- Vue : Statistiques (graphiques) ---------------- */
 async function viewStats() {
+  // Onglet retiré de la navigation des employées : on refuse aussi l'accès direct
+  // (état résiduel, retour arrière du navigateur) plutôt que d'afficher la vue.
+  if (ME.role !== 'admin') { VIEW = 'sheet'; buildNav(); return viewSheet(); }
   const app = document.getElementById('app');
   const all = await STORE.allChildren(CUR.y);
   // Rien avant le premier jour d'accueil : sinon des jours d'ouverture fictifs
