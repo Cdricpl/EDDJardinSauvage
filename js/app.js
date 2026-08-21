@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-3';
+const APP_VERSION = 'v2026.08.21-4';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -338,17 +338,20 @@ async function avecBarre(travail) {
 }
 
 /* Relit l'année scolaire ouverte (réglage partagé). Par défaut : la première. */
-async function chargerAnnee() {
+async function chargerAnnee({ replacer = true } = {}) {
   let a = MIN_YM.y;
   try { a = Number((await STORE.getReglages()).annee_scolaire) || MIN_YM.y; }
   catch (e) { console.warn('[annee]', e && e.message); }
   ANNEE = Math.max(MIN_YM.y, a);
-  /* On se place TOUJOURS sur l'année ouverte. Conserver l'année précédemment
-   * affichée paraissait plus courtois, mais au démarrage cette valeur vaut
-   * encore la première année : l'application s'ouvrait alors sur une année
-   * close, en lecture seule, sans que personne l'ait demandé. Consulter une
-   * année passée reste un geste volontaire, via le sélecteur d'année. */
-  ANNEE_VUE = ANNEE;
+  /* Au démarrage et à l'ouverture d'une année, on se place sur l'année ouverte :
+   * conserver l'année précédemment affichée paraissait plus courtois, mais au
+   * démarrage cette valeur vaut encore la première année, et l'application
+   * s'ouvrait alors sur une année close sans que personne l'ait demandé.
+   * En revanche, sur une simple mise à jour temps réel (`replacer: false`), on
+   * ne déplace personne : quelqu'un qui consulte une année passée doit y
+   * rester. On corrige seulement une année devenue impossible. */
+  if (replacer || ANNEE_VUE > ANNEE || ANNEE_VUE < MIN_YM.y) ANNEE_VUE = ANNEE;
+  clampMonth();
 }
 
 /* ---------------- Calculs mensuels + solde reporté ---------------- */
@@ -389,7 +392,6 @@ async function boot() {
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
   await chargerAnnee();
-  clampMonth();
   const vEl = document.getElementById('appVersion');
   if (vEl) vEl.textContent = APP_VERSION;
   document.getElementById('modeBadge').textContent = MODE === 'firebase' ? '🔥 Firebase' : '🧪 Démo (local)';
@@ -397,10 +399,16 @@ async function boot() {
 
   // Temps réel : re-rendu groupé (debounce) pour éviter les rendus en rafale,
   // et jamais pendant une saisie active (sinon on volerait le focus du champ).
-  STORE.onChange(debounce(() => {
+  STORE.onChange(debounce(async () => {
     if (!ME) return;
     const ae = document.activeElement;
     if (ae && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(ae.tagName) && ae.closest('#app')) return;
+    /* L'année scolaire ouverte peut avoir changé depuis le chargement : sans
+     * cette relecture, une éducatrice dont l'onglet restait ouvert ne voyait
+     * jamais l'année que l'administration venait d'ouvrir — il fallait
+     * recharger la page. La lecture est mémorisée, elle ne coûte un aller-retour
+     * que si le réglage a réellement changé. */
+    await chargerAnnee({ replacer: false });
     render();
   }, 800));
 
@@ -1774,9 +1782,8 @@ async function viewEmployees() {
     try {
       for (const { p, cloture } of soldesFin) await STORE.setSoldeAnnee(p.id, suivante, cloture);
       await STORE.setAnneeScolaire(suivante);
+      CUR.y = ANNEE + 1; CUR.m = 8;   // on se place en août de la nouvelle année
       await chargerAnnee();
-      ANNEE_VUE = ANNEE;
-      CUR.y = ANNEE; CUR.m = 8; clampMonth();
       PREFILLED_KIDS.clear(); PREFILLED_SHEETS.clear();
       toast(`Année ${libelleAnnee(ANNEE)} ouverte`);
       render();

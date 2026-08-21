@@ -333,7 +333,10 @@ button.addkid { padding:9px 16px; font-weight:700; }
   th, td { padding:9px 8px; }
   .stat-grid { grid-template-columns:repeat(2,1fr); }
   .hero-stat .big { font-size:66px; }
-  .toolbar select { flex:1; min-width:0; }
+  /* Une liste par ligne. `flex:1` suffisait tant qu'il n'y en avait qu'une ;
+     depuis l'ajout du sélecteur d'année elles se partageaient la ligne et
+     tombaient à 63 px de large — « 2027-2028 » se lisait « 202 ». */
+  .toolbar select { flex:1 1 100%; min-width:0; }
   .row > div { min-width:calc(50% - 6px); }
 }
 /* Jour antérieur à l'ouverture de l'accueil : case neutre, non cliquable. */
