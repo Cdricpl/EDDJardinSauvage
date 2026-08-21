@@ -890,7 +890,19 @@ class FirebaseStore {
 async function createStore() {
   // ...?store=demo force le mode local (utile pour tester sans toucher au cloud).
   const forced = new URLSearchParams(location.search).get('store');
-  if (forced !== 'demo' && HAS_FIREBASE && window.firebase) {
+  if (forced !== 'demo' && HAS_FIREBASE) {
+    /* Les bibliothèques Firebase viennent d'un serveur externe (gstatic.com) que
+     * le service worker ne met jamais en cache. Hors réseau, elles manquent.
+     * Basculer alors en mode démo est un piège : l'application s'ouvre sur une
+     * base LOCALE et FACTICE, où l'on peut encoder des présences en croyant
+     * travailler dans la vraie. On signale l'absence de réseau, et l'appelant
+     * affiche un écran explicite. Le mode démo reste accessible volontairement
+     * par ?store=demo. */
+    if (!window.firebase) {
+      const e = new Error('Connexion Internet requise.');
+      e.code = 'hors-ligne';
+      throw e;
+    }
     const app = firebase.apps && firebase.apps.length
       ? firebase.app() : firebase.initializeApp(window.APP_CONFIG.FIREBASE_CONFIG);
     const s = new FirebaseStore(app);

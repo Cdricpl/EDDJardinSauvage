@@ -514,13 +514,44 @@ async function render() {
 }
 
 function showFatal(msg) {
-  const app = document.getElementById('app');
-  if (!app) return;
-  app.innerHTML = `<div class="card">
-    <div class="msg error"><strong>Une erreur est survenue.</strong><br>${msg || ''}</div>
+  /* `#app` est à l'intérieur de `#appShell`, masqué tant qu'on n'est pas
+   * connecté : une erreur au démarrage s'écrivait donc dans un conteneur
+   * INVISIBLE, et l'utilisatrice ne voyait qu'une page blanche. On bascule sur
+   * l'écran de connexion, lui toujours affichable, dans ce cas. */
+  const shell = document.getElementById('appShell');
+  const visible = shell && shell.style.display !== 'none';
+  const contenu = `<div class="card">
+    <div class="msg error"><strong>Une erreur est survenue.</strong><br>${echapper(msg)}</div>
     <p class="muted small">Vos données sont en sécurité. Réessayez, ou rechargez l'application.</p>
     <button onclick="location.reload()">Recharger</button>
   </div>`;
+  if (visible) { document.getElementById('app').innerHTML = contenu; return; }
+  const login = document.getElementById('login');
+  if (login) { login.style.display = 'flex'; login.innerHTML = `<div class="login-card">${contenu}</div>`; }
+}
+
+/* Écran dédié quand l'application ne peut pas joindre le serveur au démarrage.
+ * Distinct d'une erreur : il n'y a rien à réparer, il faut du réseau. */
+function showHorsLigne() {
+  const shell = document.getElementById('appShell');
+  if (shell) shell.style.display = 'none';
+  const login = document.getElementById('login');
+  if (!login) return;
+  login.style.display = 'flex';
+  login.innerHTML = `
+    <div class="card login-card">
+      <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
+      <h1>Connexion Internet requise</h1>
+      <p class="muted">Les horaires et les présences sont enregistrés sur le serveur.
+        L'application a besoin d'une connexion pour les lire et les enregistrer.</p>
+      <div class="msg error" style="margin-top:14px">Aucune connexion détectée.</div>
+      <p class="muted small">Vérifiez le wifi ou les données mobiles, puis réessayez.
+        Rien n'est perdu : aucune saisie n'est conservée sur l'appareil.</p>
+      <button class="big" id="retryBtn">Réessayer</button>
+      <p class="muted small" style="margin-top:14px">${APP_VERSION}</p>
+    </div>`;
+  const b = document.getElementById('retryBtn');
+  if (b) b.onclick = () => location.reload();
 }
 
 /* ---------------- Vue : Feuille mensuelle (type Excel) ---------------- */
@@ -1823,5 +1854,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // MouseEvent comme `auto` — toujours vrai — et l'écran de connexion annoncerait
   // à tort une déconnexion pour inactivité.
   document.getElementById('logoutBtn').onclick = () => doLogout(false);
-  boot().catch((e) => { console.error('[boot]', e); showFatal((e && e.message) || 'Démarrage impossible.'); });
+  boot().catch((e) => {
+    console.error('[boot]', e);
+    if (e && e.code === 'hors-ligne') return showHorsLigne();
+    showFatal((e && e.message) || 'Démarrage impossible.');
+  });
 });
