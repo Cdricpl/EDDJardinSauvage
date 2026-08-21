@@ -3,7 +3,7 @@ const { defineConfig, devices } = require('@playwright/test');
 
 /**
  * Les tests s'exécutent en MODE DÉMO (localStorage) : déterministes, hors-ligne,
- * sans Supabase. Un petit serveur statique sert la racine du dépôt.
+ * sans Firebase. Un petit serveur statique sert la racine du dépôt.
  */
 const PORT = 4173;
 

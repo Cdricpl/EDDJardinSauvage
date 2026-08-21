@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>EDD Jardin Sauvage — Gestion</title>
-  <link rel="stylesheet" href="css/styles.css?v=v2026.08.20-2" />
+  <link rel="stylesheet" href="css/styles.css?v=v2026.08.21-1" />
   <!-- PWA : installable sur smartphone -->
   <link rel="manifest" href="manifest.webmanifest" />
   <meta name="theme-color" content="#241d19" />
@@ -40,25 +40,30 @@
   <div id="loadbar"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <!-- Bibliothèques externes (mode cloud + graphiques + PDF).
-       Chargées via CDN ; l'app fonctionne même si elles manquent (dégradé). -->
+  <!-- Bibliothèques externes (mode cloud).
+       Chargées via CDN ; l'app fonctionne même si elles manquent (dégradé).
+       Firebase doit être présent AVANT store.js, qui teste `window.firebase`
+       pour choisir entre le mode cloud et le mode démo : pas de `defer` ici.
+
+       Chart.js et jsPDF (194 Ko compressés) ne sont PAS chargés ici : ils ne
+       servent qu'à l'onglet Statistiques et aux boutons « Export PDF ». Les
+       charger au démarrage retardait le premier affichage d'environ une
+       seconde, pour des bibliothèques que l'on n'ouvre pas à chaque visite.
+       app.js les télécharge au moment où elles servent (voir `chargerScript`). -->
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 
   <!-- Application -->
-  <script src="js/config.js?v=v2026.08.20-2"></script>
-  <script src="js/store.js?v=v2026.08.20-2"></script>
-  <script src="js/app.js?v=v2026.08.20-2"></script>
+  <script src="js/config.js?v=v2026.08.21-1"></script>
+  <script src="js/store.js?v=v2026.08.21-1"></script>
+  <script src="js/app.js?v=v2026.08.21-1"></script>
 
   <!-- Enregistrement du service worker (installation sur smartphone + hors ligne) -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js?v=v2026.08.20-2').catch((e) => console.warn('SW non enregistré', e));
+        navigator.serviceWorker.register('sw.js?v=v2026.08.21-1').catch((e) => console.warn('SW non enregistré', e));
       });
     }
   </script>

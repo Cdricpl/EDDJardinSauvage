@@ -10,6 +10,7 @@ rules_version = '2';
 //     retrait sont reserves a l'admin
 //   - personne ne peut s'auto-promouvoir administrateur
 //   - aucune prestation avant aout 2026
+//   - la memoire du pre-encodage suit les memes droits que les presences
 //
 // A coller dans : console Firebase > Firestore Database > Regles > Publier.
 // NB : commentaires volontairement sans accents (l'analyseur de regles
@@ -80,6 +81,15 @@ service cloud.firestore {
 
     // ---- PRESENCES : encodage quotidien par l'equipe ----
     match /kid_attendance/{id} {
+      allow read:  if signedIn();
+      allow write: if isActive();
+    }
+
+    // ---- MEMOIRE DU PRE-ENCODAGE : quels mois ont deja ete pre-encodes ----
+    // Sans ce marqueur, une case effacee volontairement (3e etat du cycle) serait
+    // remise a "present" au chargement suivant. Ecrit par l'equipe, comme les
+    // presences : c'est le meme geste d'encodage.
+    match /kid_prefill/{id} {
       allow read:  if signedIn();
       allow write: if isActive();
     }
