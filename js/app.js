@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-4';
+const APP_VERSION = 'v2026.08.21-5';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -1684,6 +1684,16 @@ async function viewEmployees() {
     p: x, cloture: (await monthSummary(x.id, ANNEE + 1, 7)).closing,
   })));
 
+  /* Ce qui a déjà été encodé dans l'année ouverte. On l'annonce avant de
+   * proposer de la refermer : refermer ne supprime rien, mais il faut le dire
+   * plutôt que de le laisser deviner. */
+  const [prestAnnee, presAnnee] = ANNEE > MIN_YM.y
+    ? await Promise.all([
+        STORE.allEntriesEntre(debutAnnee(ANNEE), finAnnee(ANNEE)),
+        STORE.kidAttendanceEntre(debutAnnee(ANNEE), finAnnee(ANNEE)),
+      ])
+    : [[], []];
+
   app.innerHTML = `<div class="card">
       <div class="row-between">
         <h2 style="margin:0">📅 Année scolaire ${libelleAnnee(ANNEE)}</h2>
@@ -1708,6 +1718,18 @@ async function viewEmployees() {
         et ajouterez les nouveaux. L'année ${libelleAnnee(ANNEE)} passe alors en lecture seule pour les employées ;
         vous pourrez encore la corriger.
       </p>
+      ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:16px;gap:12px;flex-wrap:wrap;align-items:center">
+        <p class="muted small" style="margin:0;flex:1;min-width:220px">
+          <strong>Ouverte par erreur ?</strong> Vous pouvez refermer ${libelleAnnee(ANNEE)} et revenir à
+          ${libelleAnnee(ANNEE - 1)} — les employées y encoderont de nouveau.
+          ${(prestAnnee.length || presAnnee.length)
+            ? `Rien n'est supprimé : les <strong>${prestAnnee.length} prestation(s)</strong> et
+               <strong>${presAnnee.length} présence(s)</strong> déjà encodées en ${libelleAnnee(ANNEE)}
+               sont conservées et réapparaîtront si vous la rouvrez.`
+            : `Aucune donnée n'a encore été encodée en ${libelleAnnee(ANNEE)}.`}
+        </p>
+        <button class="small gray" id="retourAnnee">↩ Revenir à ${libelleAnnee(ANNEE - 1)}</button>
+      </div>` : ''}
     </div>
     <div class="card">
       <div class="row-between"><h2>👥 Utilisateurs</h2><button class="small" id="addBtn">+ Ajouter un utilisateur</button></div>
@@ -1791,6 +1813,40 @@ async function viewEmployees() {
       console.error('[nouvelle-annee]', e);
       nouvelle.disabled = false;
       toast("Ouverture impossible : " + e.message, 'error');
+    }
+  };
+
+  /* Retour à l'année précédente. Symétrique de l'ouverture, et tout aussi
+   * explicite : on ne supprime AUCUNE donnée, on déplace seulement la borne de
+   * ce qui est encodable. Les soldes de départ de l'année refermée restent
+   * enregistrés ; ils seront recalculés si on la rouvre. */
+  const retour = document.getElementById('retourAnnee');
+  if (retour) retour.onclick = async () => {
+    const precedente = ANNEE - 1;
+    if (!confirm(
+      `Revenir à l'année scolaire ${libelleAnnee(precedente)} ?\n\n`
+      + `${libelleAnnee(ANNEE)} sera refermée, et les employées encoderont de nouveau `
+      + `en ${libelleAnnee(precedente)}.\n\n`
+      + `Aucune donnée n'est supprimée : ${prestAnnee.length} prestation(s) et `
+      + `${presAnnee.length} présence(s) déjà encodées en ${libelleAnnee(ANNEE)} sont conservées, `
+      + `et réapparaîtront si vous rouvrez cette année.`)) return;
+    retour.disabled = true;
+    try {
+      await STORE.setAnneeScolaire(precedente);
+      // On se replace sur le mois en cours s'il appartient à l'année rouverte,
+      // sinon sur son mois d'août : c'est là qu'on veut reprendre l'encodage.
+      const d = new Date();
+      if (anneeScolaireDe(d.getFullYear(), d.getMonth() + 1) === precedente) {
+        CUR.y = d.getFullYear(); CUR.m = d.getMonth() + 1;
+      } else { CUR.y = precedente; CUR.m = 8; }
+      await chargerAnnee();
+      PREFILLED_KIDS.clear(); PREFILLED_SHEETS.clear();
+      toast(`Retour à l'année ${libelleAnnee(precedente)}`);
+      render();
+    } catch (e) {
+      console.error('[retour-annee]', e);
+      retour.disabled = false;
+      toast('Retour impossible : ' + e.message, 'error');
     }
   };
 
