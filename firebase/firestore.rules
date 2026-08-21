@@ -94,6 +94,15 @@ service cloud.firestore {
       allow write: if isActive();
     }
 
+    // ---- REGLAGES PARTAGES : annee scolaire en cours ----
+    // Lisible par toute l'equipe (elle determine ce qui est modifiable),
+    // modifiable par la seule administration : ouvrir une nouvelle annee
+    // scolaire fige l'annee precedente pour les employees.
+    match /settings/{id} {
+      allow read:  if signedIn();
+      allow write: if isAdmin();
+    }
+
     // Tout le reste est refuse par defaut.
     match /{document=**} {
       allow read, write: if false;

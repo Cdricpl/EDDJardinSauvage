@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-2';
+const APP_VERSION = 'v2026.08.21-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -47,26 +47,35 @@ const moisAnnee = (a) => [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7]
   .map((m) => ({ m, y: m >= 8 ? a : a + 1 }));
 
 const ymNum = (y, m) => y * 12 + (m - 1);
-const atOrBeforeMin = () => ymNum(CUR.y, CUR.m) <= ymNum(MIN_YM.y, MIN_YM.m);
 /* Borne HAUTE : juin, fin de l'année scolaire en cours. Sans elle, le bouton ▶
  * n'avait aucune limite — quatorze clics menaient à octobre 2027, où le
  * pré-encodage écrivait des présences plus d'un an à l'avance. De juillet à
  * décembre, l'année scolaire en cours se termine en juin de l'année suivante. */
-const MAX_YM = () => {
-  const d = new Date();
-  return { y: d.getMonth() + 1 >= 7 ? d.getFullYear() + 1 : d.getFullYear(), m: 6 };
+/* ANNEE = année scolaire OUVERTE, décidée par l'administration (bouton
+ * « Nouvelle année ») et mémorisée côté serveur, pas déduite de l'horloge :
+ * une année ne se clôture pas toute seule un 31 juillet à minuit, elle se
+ * clôture quand l'administration a fini de la vérifier. */
+let ANNEE = MIN_YM.y;              // année scolaire ouverte (2026 = 2026-2027)
+let ANNEE_VUE = MIN_YM.y;          // année scolaire affichée (peut être passée)
+
+// Bornes de navigation : l'année AFFICHÉE, jamais avant la mise en service ni
+// après la fin de l'année ouverte.
+const borneBasse = () => {
+  const d = { y: ANNEE_VUE, m: 8 };
+  return ymNum(d.y, d.m) < ymNum(MIN_YM.y, MIN_YM.m) ? { ...MIN_YM } : d;
 };
-const atOrAfterMax = () => {
-  const M = MAX_YM();
-  // Si la fin d'année scolaire précède la mise en service, la borne haute n'a
-  // pas de sens : on ne bloque rien plutôt que de tout bloquer.
-  return ymNum(M.y, M.m) >= ymNum(MIN_YM.y, MIN_YM.m) && ymNum(CUR.y, CUR.m) >= ymNum(M.y, M.m);
-};
+const borneHaute = () => ({ y: ANNEE_VUE + 1, m: 7 });
+const atOrBeforeMin = () => ymNum(CUR.y, CUR.m) <= ymNum(borneBasse().y, borneBasse().m);
+const atOrAfterMax = () => ymNum(CUR.y, CUR.m) >= ymNum(borneHaute().y, borneHaute().m);
 function clampMonth() {
-  if (ymNum(CUR.y, CUR.m) < ymNum(MIN_YM.y, MIN_YM.m)) { CUR.y = MIN_YM.y; CUR.m = MIN_YM.m; return; }
-  const M = MAX_YM();
-  if (ymNum(M.y, M.m) >= ymNum(MIN_YM.y, MIN_YM.m) && ymNum(CUR.y, CUR.m) > ymNum(M.y, M.m)) { CUR.y = M.y; CUR.m = M.m; }
+  const bas = borneBasse(), haut = borneHaute();
+  if (ymNum(CUR.y, CUR.m) < ymNum(bas.y, bas.m)) { CUR.y = bas.y; CUR.m = bas.m; return; }
+  if (ymNum(CUR.y, CUR.m) > ymNum(haut.y, haut.m)) { CUR.y = haut.y; CUR.m = haut.m; }
 }
+// Une année scolaire close n'est plus modifiable par les employées.
+const anneeClose = () => ANNEE_VUE < ANNEE;
+// L'année ouverte est terminée : l'administration doit ouvrir la suivante.
+const anneeAEcheance = () => todayISO() > finAnnee(ANNEE);
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 /* Mode « en ligne » (données partagées + envoi d'emails de réinitialisation). */
 const isCloud = () => MODE === 'firebase';
@@ -328,25 +337,44 @@ async function avecBarre(travail) {
   finally { if (bar) bar.classList.remove('on'); }
 }
 
+/* Relit l'année scolaire ouverte (réglage partagé). Par défaut : la première. */
+async function chargerAnnee() {
+  let a = MIN_YM.y;
+  try { a = Number((await STORE.getReglages()).annee_scolaire) || MIN_YM.y; }
+  catch (e) { console.warn('[annee]', e && e.message); }
+  ANNEE = Math.max(MIN_YM.y, a);
+  /* On se place TOUJOURS sur l'année ouverte. Conserver l'année précédemment
+   * affichée paraissait plus courtois, mais au démarrage cette valeur vaut
+   * encore la première année : l'application s'ouvrait alors sur une année
+   * close, en lecture seule, sans que personne l'ait demandé. Consulter une
+   * année passée reste un geste volontaire, via le sélecteur d'année. */
+  ANNEE_VUE = ANNEE;
+}
+
 /* ---------------- Calculs mensuels + solde reporté ---------------- */
 // Solde de départ d'une employée : les heures supplémentaires (ou à récupérer)
 // accumulées AVANT la mise en service du programme. Saisi une seule fois par
 // l'administratrice, il sert de point de départ au tout premier mois.
-async function openingMinutes(empId) {
+async function openingMinutes(empId, annee) {
   const p = (await STORE.listProfiles()).find((x) => x.id === empId);
-  return (p && Number(p.opening_minutes)) || 0;
+  if (!p) return 0;
+  // Première année : le solde saisi une fois par l'administration.
+  // Années suivantes : le solde reporté au moment d'ouvrir l'année.
+  if (annee === MIN_YM.y) return Number(p.opening_minutes) || 0;
+  return Number((p.soldes || {})[String(annee)]) || 0;
 }
 async function monthSummary(empId, y, m) {
+  const annee = anneeScolaireDe(y, m);
+  // Début de l'année scolaire du mois demandé : le cumul repart de là, sur le
+  // solde reporté. Les prestations des années précédentes sont déjà comprises
+  // dans ce solde — les recompter ferait double emploi.
+  const depart = debutAnnee(annee) > MIN_ISO ? debutAnnee(annee) : MIN_ISO;
   const all = await STORE.entriesForEmployee(empId);
   const firstOfMonth = `${y}-${pad(m)}-01`;
-  // Le report part du solde de départ, puis cumule les mois écoulés DEPUIS la
-  // mise en service. Les prestations antérieures à MIN_ISO sont ignorées :
-  // elles sont déjà comprises dans le solde de départ, les compter à nouveau
-  // ferait double emploi.
-  let planned = 0, worked = 0, carryIn = await openingMinutes(empId);
+  let planned = 0, worked = 0, carryIn = await openingMinutes(empId, annee);
   all.forEach((e) => {
     const w = effectiveWorked(e), p = plannedMinutes(e);
-    if (e.entry_date < MIN_ISO) return;
+    if (e.entry_date < depart) return;
     if (e.entry_date < firstOfMonth) carryIn += (w - p);
     else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) { planned += p; worked += w; }
   });
@@ -358,9 +386,10 @@ async function monthSummary(empId, y, m) {
  * Démarrage
  * ================================================================ */
 async function boot() {
-  clampMonth();
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
+  await chargerAnnee();
+  clampMonth();
   const vEl = document.getElementById('appVersion');
   if (vEl) vEl.textContent = APP_VERSION;
   document.getElementById('modeBadge').textContent = MODE === 'firebase' ? '🔥 Firebase' : '🧪 Démo (local)';
@@ -477,23 +506,53 @@ async function toolbar(showEmployee, actionHTML) {
   }
   const now = new Date();
   const onCurrentMonth = CUR.y === now.getFullYear() && CUR.m === now.getMonth() + 1;
+  const bas = borneBasse(), haut = borneHaute();
+  /* Sélecteur d'année scolaire : n'apparaît QUE s'il existe une année passée.
+   * Tant qu'il n'y en a qu'une, il n'aurait rien à proposer et encombrerait la
+   * barre — les années passées se consultent « en cas de besoin ». */
+  let anneeSel = '';
+  if (ANNEE > MIN_YM.y) {
+    const options = [];
+    for (let a = ANNEE; a >= MIN_YM.y; a--) {
+      options.push(`<option value="${a}" ${a === ANNEE_VUE ? 'selected' : ''}>${libelleAnnee(a)}${a < ANNEE ? ' (close)' : ''}</option>`);
+    }
+    anneeSel = `<select id="anneeSel" title="Année scolaire">${options.join('')}</select>`;
+  }
   return `<div class="toolbar">
-    <button class="small" id="prevM" ${atOrBeforeMin() ? `disabled title="${monthName(MIN_YM.y, MIN_YM.m)} = premier mois"` : ''}>◀</button>
+    <button class="small" id="prevM" ${atOrBeforeMin() ? `disabled title="${monthName(bas.y, bas.m)} = premier mois de l'année"` : ''}>◀</button>
     <strong style="min-width:170px;text-align:center;text-transform:capitalize">${monthName(CUR.y, CUR.m)}</strong>
-    <button class="small" id="nextM" ${atOrAfterMax() ? `disabled title="${monthName(MAX_YM().y, MAX_YM().m)} = fin de l'année scolaire"` : ''}>▶</button>
+    <button class="small" id="nextM" ${atOrAfterMax() ? `disabled title="${monthName(haut.y, haut.m)} = dernier mois de l'année"` : ''}>▶</button>
     <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours">📅 Aujourd'hui</button>
+    ${anneeSel}
     ${empSel}
     <span style="flex:1"></span>
     ${actionHTML || ''}
-  </div>`;
+  </div>
+  ${anneeClose() ? `<div class="msg" style="margin:0 0 12px">📁 Année scolaire <strong>${libelleAnnee(ANNEE_VUE)}</strong> — close, en consultation.
+     ${ME.role === 'admin' ? "Vous pouvez encore la corriger ; les employées n'y ont plus accès en écriture."
+                           : 'Cette année n\'est plus modifiable. Contactez l\'administration si une correction est nécessaire.'}</div>` : ''}
+  ${(!anneeClose() && anneeAEcheance()) ? `<div class="msg error" style="margin:0 0 12px">📅 L'année scolaire <strong>${libelleAnnee(ANNEE)}</strong> est terminée depuis le ${finAnnee(ANNEE)}.
+     ${ME.role === 'admin' ? "Ouvrez l'année suivante dans l'onglet 👥 <strong>Utilisateurs</strong> pour continuer à encoder."
+                           : "L'administration doit ouvrir la nouvelle année avant de pouvoir encoder au-delà."}</div>` : ''}`;
 }
 function wireToolbar() {
   const p = document.getElementById('prevM'), n = document.getElementById('nextM'),
         t = document.getElementById('todayM'), s = document.getElementById('empSel');
   if (p) p.onclick = () => { if (atOrBeforeMin()) return; CUR.m--; if (CUR.m < 1) { CUR.m = 12; CUR.y--; } clampMonth(); render(); };
   if (n) n.onclick = () => { if (atOrAfterMax()) return; CUR.m++; if (CUR.m > 12) { CUR.m = 1; CUR.y++; } clampMonth(); render(); };
-  if (t) t.onclick = () => { const d = new Date(); CUR.y = d.getFullYear(); CUR.m = d.getMonth() + 1; clampMonth(); render(); };
+  if (t) t.onclick = () => {
+    // « Aujourd'hui » ramène aussi sur l'année ouverte : sinon, depuis une année
+    // close, le mois courant serait hors bornes et aussitôt ramené à juillet.
+    ANNEE_VUE = ANNEE;
+    const d = new Date(); CUR.y = d.getFullYear(); CUR.m = d.getMonth() + 1; clampMonth(); render();
+  };
   if (s) s.onchange = () => { SEL_EMP = s.value; render(); };
+  const a = document.getElementById('anneeSel');
+  if (a) a.onchange = () => {
+    ANNEE_VUE = Number(a.value);
+    // On se place en août, premier mois de l'année choisie.
+    CUR.y = ANNEE_VUE; CUR.m = 8; clampMonth(); render();
+  };
 }
 
 /* ================================================================
@@ -588,7 +647,7 @@ async function viewSheet() {
   // aussitôt viewSheet → pré-remplissage → render()… en boucle, jusqu'à figer
   // l'appareil. Le pré-encodage des présences enfants a la même protection.
   const sheetKey = `${empId}|${CUR.y}-${pad(CUR.m)}`;
-  if (ME.role === 'admin' && month.status === 'open' && entries.length === 0 && templateHasSlots(tpl)
+  if (ME.role === 'admin' && month.status === 'open' && !anneeClose() && entries.length === 0 && templateHasSlots(tpl)
       && !APPLYING && !PREFILLED_SHEETS.has(sheetKey)) {
     PREFILLED_SHEETS.add(sheetKey);   // marqué comme tenté AVANT l'écriture (anti-boucle)
     APPLYING = true;
@@ -601,8 +660,10 @@ async function viewSheet() {
   const byDate = {}; entries.forEach((e) => (byDate[e.entry_date] = e));
   const dim = daysInMonth(CUR.y, CUR.m);
 
+  /* L'administration garde la main sur une année close (correction d'après
+   * coup) ; les employées n'y écrivent plus, comme sur un mois validé. */
   const canEditPlanned = ME.role === 'admin';
-  const monthEditable = month.status === 'open';
+  const monthEditable = month.status === 'open' && !anneeClose();
   const canEditWorked = ME.role === 'admin' || (empId === ME.id && monthEditable && editableProf.active);
 
   const statusBadge = { open: '<span class="badge open">En cours</span>',
@@ -999,7 +1060,7 @@ async function viewChildren() {
   // Verrou de session, en plus de la mémoire en base : sinon un échec d'écriture
   // (ou un retour temps réel) relancerait render() → pré-encodage → render()…
   // en boucle, saturant l'appareil.
-  if (monthIsCurrentOrFuture && !APPLYING_KIDS && !PREFILLED_KIDS.has(prefillKey)) {
+  if (monthIsCurrentOrFuture && !anneeClose() && !APPLYING_KIDS && !PREFILLED_KIDS.has(prefillKey)) {
     PREFILLED_KIDS.add(prefillKey);   // marqué comme tenté AVANT l'écriture (anti-boucle)
     const dejaFait = new Set(await STORE.kidPrefilledFor(CUR.y, CUR.m));
     const aMarquer = kids.filter((k) => !dejaFait.has(k.id)).map((k) => k.id);
@@ -1268,6 +1329,11 @@ async function viewChildren() {
   app.onclick = async (ev) => {
     const el = ev.target && ev.target.closest ? ev.target.closest('button.presbtn') : null;
     if (!el) return;
+    // Année close : lecture seule pour les employées, corrigeable par l'admin.
+    if (anneeClose() && ME.role !== 'admin') {
+      toast(`Année ${libelleAnnee(ANNEE_VUE)} close — encodage impossible.`, 'error');
+      return;
+    }
     const kid = el.dataset.kid, date = el.dataset.date, key = kid + '|' + date;
     const cur = stat.get(key);                              // 'present' | 'absent' | undefined
     const next = cur === 'present' ? 'absent' : cur === 'absent' ? null : 'present';
@@ -1604,7 +1670,38 @@ async function viewEmployees() {
       </td>
     </tr>`;
   }).join('');
+  // Aperçu du report : ce que chaque employée emporterait dans la nouvelle année.
+  const emps = profs.filter((x) => x.role === 'employee' && x.active);
+  const soldesFin = await Promise.all(emps.map(async (x) => ({
+    p: x, cloture: (await monthSummary(x.id, ANNEE + 1, 7)).closing,
+  })));
+
   app.innerHTML = `<div class="card">
+      <div class="row-between">
+        <h2 style="margin:0">📅 Année scolaire ${libelleAnnee(ANNEE)}</h2>
+        <button class="small green" id="nouvelleAnnee">Ouvrir l'année ${libelleAnnee(ANNEE + 1)}</button>
+      </div>
+      <p class="muted small" style="margin-top:8px">
+        L'encodage est ouvert du <strong>1<sup>er</sup> août ${ANNEE}</strong> au <strong>31 juillet ${ANNEE + 1}</strong>.
+        ${ANNEE > MIN_YM.y ? `Les années précédentes restent consultables via le sélecteur d'année, en lecture seule pour les employées.` : ''}
+      </p>
+      ${anneeAEcheance() ? `<div class="msg error">Cette année scolaire est terminée depuis le ${finAnnee(ANNEE)}.
+        Ouvrez la suivante pour continuer à encoder.</div>` : ''}
+      <div class="table-wrap"><table>
+        <thead><tr><th>Employée</th><th>Solde au 31 juillet ${ANNEE + 1}</th></tr></thead>
+        <tbody>${soldesFin.map(({ p, cloture }) => `<tr>
+          <td>${echapper(p.full_name)}</td>
+          <td class="${cloture >= 0 ? 'pos' : 'neg'}"><strong>${fmtDelta(cloture)}</strong></td>
+        </tr>`).join('') || '<tr><td colspan="2" class="muted">Aucune employée active.</td></tr>'}</tbody>
+      </table></div>
+      <p class="muted small" style="margin-top:8px">
+        À l'ouverture de la nouvelle année, ces soldes deviennent le <strong>solde de départ</strong> du 1<sup>er</sup> août ${ANNEE + 1} :
+        rien ne se perd. Les enfants et leurs jours habituels sont conservés — vous retirerez ceux qui partent
+        et ajouterez les nouveaux. L'année ${libelleAnnee(ANNEE)} passe alors en lecture seule pour les employées ;
+        vous pourrez encore la corriger.
+      </p>
+    </div>
+    <div class="card">
       <div class="row-between"><h2>👥 Utilisateurs</h2><button class="small" id="addBtn">+ Ajouter un utilisateur</button></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Nom</th><th>Email</th><th>Rôle</th>
@@ -1658,6 +1755,37 @@ async function viewEmployees() {
         <button class="small red" id="impBtn">⬆️ Restaurer</button>
       </div>
     </div>`;
+
+  /* Ouverture d'une nouvelle année scolaire.
+   * Les soldes sont écrits AVANT de changer l'année : si l'écriture échoue en
+   * cours de route, l'année reste ouverte et l'opération est simplement à
+   * refaire — jamais une année neuve avec des soldes manquants. */
+  const nouvelle = document.getElementById('nouvelleAnnee');
+  if (nouvelle) nouvelle.onclick = async () => {
+    const suivante = ANNEE + 1;
+    const detail = soldesFin.map(({ p, cloture }) => `  · ${p.full_name} : ${fmtDelta(cloture)}`).join('\n');
+    if (!confirm(
+      `Ouvrir l'année scolaire ${libelleAnnee(suivante)} ?\n\n`
+      + `Soldes reportés au 1er août ${suivante} :\n${detail || '  (aucune employée active)'}\n\n`
+      + `Les enfants et leurs jours habituels sont conservés.\n`
+      + `L'année ${libelleAnnee(ANNEE)} passera en lecture seule pour les employées ; `
+      + `vous pourrez encore la corriger.`)) return;
+    nouvelle.disabled = true;
+    try {
+      for (const { p, cloture } of soldesFin) await STORE.setSoldeAnnee(p.id, suivante, cloture);
+      await STORE.setAnneeScolaire(suivante);
+      await chargerAnnee();
+      ANNEE_VUE = ANNEE;
+      CUR.y = ANNEE; CUR.m = 8; clampMonth();
+      PREFILLED_KIDS.clear(); PREFILLED_SHEETS.clear();
+      toast(`Année ${libelleAnnee(ANNEE)} ouverte`);
+      render();
+    } catch (e) {
+      console.error('[nouvelle-annee]', e);
+      nouvelle.disabled = false;
+      toast("Ouverture impossible : " + e.message, 'error');
+    }
+  };
 
   document.getElementById('addBtn').onclick = () => document.getElementById('addForm').classList.toggle('hidden');
   document.getElementById('saveEmp').onclick = async () => {

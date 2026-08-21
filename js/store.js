@@ -57,6 +57,7 @@ class DemoStore {
       ],
       kidatt: [],       // présences : { kid_id, entry_date }
       kidprefill: [],   // mois déjà pré-encodés : { kid_id, month }
+      settings: {},     // réglages partagés : { annee_scolaire }
       // Horaire type hebdomadaire par employée : slots[weekday] = {start,end} (0=Dim..6=Sam)
       templates: [
         { employee_id: e1, slots: { 1: { start: '14:00', end: '18:00' }, 2: { start: '14:00', end: '18:00' }, 3: { start: '14:00', end: '18:00' }, 4: { start: '14:00', end: '18:00' }, 5: { start: '14:00', end: '18:00' } } },
@@ -168,6 +169,24 @@ class DemoStore {
     const db = this._db();
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.opening_minutes = Math.round(Number(minutes) || 0); this._save(db); }
+  }
+
+  /* ---- Réglages partagés ----
+   * L'année scolaire en cours est une donnée d'équipe, pas une préférence
+   * d'appareil : elle doit être la même pour tout le monde, et survivre à un
+   * changement de téléphone. */
+  async getReglages() { return this._db().settings || {}; }
+  async setAnneeScolaire(annee) {
+    const db = this._db();
+    db.settings = db.settings || {};
+    db.settings.annee_scolaire = Number(annee);
+    this._save(db);
+  }
+  // Solde d'heures repris au 1er août de l'année scolaire indiquée.
+  async setSoldeAnnee(id, annee, minutes) {
+    const db = this._db();
+    const p = db.profiles.find(x => x.id === id);
+    if (p) { p.soldes = p.soldes || {}; p.soldes[String(annee)] = Math.round(Number(minutes) || 0); this._save(db); }
   }
 
   /* ---- Horaire type ---- */
@@ -365,6 +384,7 @@ class DemoStore {
       schedule_templates: db.templates || [],
       kids: db.kids || [], kid_attendance: db.kidatt || [],
       kid_prefill: db.kidprefill || [],
+      settings: db.settings || {},
     };
   }
   // Restaure une sauvegarde. Remplace les tables de données ; pour les profils on
@@ -379,6 +399,7 @@ class DemoStore {
     if (Array.isArray(data.kids))               { db.kids = data.kids;                      counts.kids = db.kids.length; }
     if (Array.isArray(data.kid_attendance))     { db.kidatt = data.kid_attendance;          counts.kid_attendance = db.kidatt.length; }
     if (Array.isArray(data.kid_prefill))        { db.kidprefill = data.kid_prefill;          counts.kid_prefill = db.kidprefill.length; }
+    if (data.settings && typeof data.settings === 'object') { db.settings = data.settings;   counts.settings = 1; }
     if (Array.isArray(data.profiles)) {
       data.profiles.forEach((p) => {
         const ex = db.profiles.find((x) => x.id === p.id);
@@ -551,6 +572,28 @@ class FirebaseStore {
   async sendPasswordReset(email) {
     try { await this.auth.sendPasswordResetEmail((email || '').trim()); }
     catch (e) { throw new Error(this._authMsg(e)); }
+  }
+
+  /* ---- Reglages partages ----
+   * L'annee scolaire en cours doit etre la meme pour toute l'equipe : elle vit
+   * dans un document partage, pas dans le navigateur. Ecriture reservee a
+   * l'administration (voir firestore.rules). */
+  async getReglages() {
+    return this._cache('reglages', async () => {
+      const s = await this.db.collection('settings').doc('app').get();
+      return s.exists ? s.data() : {};
+    });
+  }
+  async setAnneeScolaire(annee) {
+    await this.db.collection('settings').doc('app')
+      .set({ annee_scolaire: Number(annee), updated_at: new Date().toISOString() }, { merge: true });
+    this._oublier('reglages');
+  }
+  // Solde d'heures repris au 1er aout de l'annee scolaire indiquee.
+  async setSoldeAnnee(id, annee, minutes) {
+    await this.db.collection('profiles').doc(id)
+      .set({ soldes: { [String(annee)]: Math.round(Number(minutes) || 0) } }, { merge: true });
+    this._profilesCache = null;
   }
 
   /* ---- Horaire type ---- */
@@ -739,8 +782,9 @@ class FirebaseStore {
     const get = async (c) => this._docs(await this.db.collection(c).get());
     const [profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill] = await Promise.all(
       ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance', 'kid_prefill'].map(get));
+    const settings = await this.getReglages();
     return { exported_at: new Date().toISOString(), mode: 'firebase',
-      profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill };
+      profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill, settings };
   }
   // Restaure une sauvegarde JSON (y compris une ancienne sauvegarde exportee).
   // Les identifiants d'employées diffèrent d'un hébergeur à l'autre : on les
@@ -804,6 +848,12 @@ class FirebaseStore {
         data: { ...rest, employee_id: id },
       });
     });
+    // L'annee scolaire en cours fait partie de la sauvegarde : sans elle, une
+    // restauration ramenerait l'application a la premiere annee.
+    if (data.settings && typeof data.settings === 'object' && data.settings.annee_scolaire) {
+      ops.push({ ref: this.db.collection('settings').doc('app'),
+        data: { annee_scolaire: Number(data.settings.annee_scolaire) } });
+    }
     await this._commit(ops);
     this._entriesCache = {}; this._profilesCache = null; this._memo.clear();
     if (missing.size) {
@@ -853,7 +903,7 @@ class FirebaseStore {
         day_entries: (col) => (estAdmin ? anneeEnCours(col) : col.where('employee_id', '==', user.uid)),
         kid_attendance: anneeEnCours,
       };
-      ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates'].forEach((c) => {
+      ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
         const base = this.db.collection(c);
         const un = (BORNE[c] ? BORNE[c](base) : base).onSnapshot(
           { includeMetadataChanges: false },
@@ -881,6 +931,7 @@ class FirebaseStore {
             if (c === 'kid_attendance') this._oublier('presences:', 'presencesPeriode:');
             if (c === 'kid_prefill') this._oublier('preremplissage:');
             if (c === 'schedule_templates') this._oublier('horaire:');
+            if (c === 'settings') this._oublier('reglages');
             cb();
           },
           (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));
