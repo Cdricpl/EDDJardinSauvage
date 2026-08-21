@@ -290,11 +290,18 @@ class DemoStore {
     const prefix = Util.monthKey(year, month);
     return this._db().kidatt.filter(a => a.entry_date.startsWith(prefix));
   }
-  async kidAttendanceForYear(year) {
-    return this._db().kidatt.filter(a => (a.entry_date || '').startsWith(`${year}-`));
+  /* Lectures sur une PÉRIODE (bornes ISO incluses) et non sur une année civile :
+   * l'année scolaire va du 1er août au 31 juillet, elle chevauche donc deux
+   * années civiles. */
+  async kidAttendanceEntre(debut, fin) {
+    return this._db().kidatt.filter(a => {
+      const d = a.entry_date || ''; return d >= debut && d <= fin;
+    });
   }
-  async allEntriesForYear(year) {
-    return this._db().entries.filter(e => (e.entry_date || '').startsWith(`${year}-`));
+  async allEntriesEntre(debut, fin) {
+    return this._db().entries.filter(e => {
+      const d = e.entry_date || ''; return d >= debut && d <= fin;
+    });
   }
   // status : 'present' | 'absent' | null (efface l'enregistrement).
   // Même logique que l'écriture groupée : on y délègue plutôt que de la répéter.
@@ -339,12 +346,10 @@ class DemoStore {
   }
 
   // Comptes agrégés par jour (enfants PRÉSENTS) — pour les statistiques.
-  async allChildren(year) {
-    const prefixe = `${year}-`;
+  async allChildrenEntre(debut, fin) {
     const byDate = {};
-    this._db().kidatt.forEach(a => {
+    (await this.kidAttendanceEntre(debut, fin)).forEach(a => {
       if (a.status === 'absent') return; // absence = pas comptée
-      if (!String(a.entry_date || '').startsWith(prefixe)) return;
       byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
     });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
@@ -600,7 +605,7 @@ class FirebaseStore {
     const s = await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date)).get();
     const saved = { id: s.id, ...s.data() };
     this._mergeCache(saved);
-    this._oublier('prestationsAn:');
+    this._oublier('prestationsPeriode:');
     return saved;
   }
   async upsertEntries(entries) {
@@ -611,7 +616,7 @@ class FirebaseStore {
       data: { ...e, updated_at: now },
     })));
     delete this._entriesCache[entries[0].employee_id];
-    this._oublier('prestationsAn:');
+    this._oublier('prestationsPeriode:');
     return entries;
   }
 
@@ -655,17 +660,21 @@ class FirebaseStore {
       return this._docs(snap);
     });
   }
-  async kidAttendanceForYear(year) {
-    return this._cache(`presencesAn:${year}`, async () => {
+  /* Lectures sur une PÉRIODE (bornes ISO incluses) et non sur une année civile :
+   * l'année scolaire va du 1er août au 31 juillet, elle chevauche donc deux
+   * années civiles. Une seule contrainte d'intervalle sur `entry_date` :
+   * Firestore l'indexe automatiquement, aucun index composite à créer. */
+  async kidAttendanceEntre(debut, fin) {
+    return this._cache(`presencesPeriode:${debut}_${fin}`, async () => {
       const snap = await this.db.collection('kid_attendance')
-        .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
+        .where('entry_date', '>=', debut).where('entry_date', '<=', fin).get();
       return this._docs(snap);
     });
   }
-  async allEntriesForYear(year) {
-    return this._cache(`prestationsAn:${year}`, async () => {
+  async allEntriesEntre(debut, fin) {
+    return this._cache(`prestationsPeriode:${debut}_${fin}`, async () => {
       const snap = await this.db.collection('day_entries')
-        .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
+        .where('entry_date', '>=', debut).where('entry_date', '<=', fin).get();
       return this._docs(snap);
     });
   }
@@ -674,7 +683,7 @@ class FirebaseStore {
     const ref = this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`);
     if (!status) await ref.delete();
     else await ref.set({ kid_id, entry_date, status });
-    this._oublier('presences:', 'presencesAn:');
+    this._oublier('presences:', 'presencesPeriode:');
   }
   async setKidAttendances(list) {
     if (!list || !list.length) return;
@@ -683,7 +692,7 @@ class FirebaseStore {
       data: status ? { kid_id, entry_date, status } : null, delete: !status,
     }));
     await this._commit(ops);
-    this._oublier('presences:', 'presencesAn:');
+    this._oublier('presences:', 'presencesPeriode:');
   }
   /* ---- Memoire du pre-encodage ----
    * Voir DemoStore : sans ce marqueur, une case effacee volontairement serait
@@ -712,11 +721,11 @@ class FirebaseStore {
     this._oublier('preremplissage:');
   }
 
-  // Nombre d'enfants presents par jour, pour UNE annee. Le balayage complet de
-  // la collection etait inutile (les statistiques sont annuelles) et devenait
-  // de plus en plus lourd au fil des annees.
-  async allChildren(year) {
-    const att = await this.kidAttendanceForYear(year);
+  // Nombre d'enfants presents par jour, sur une periode. Le balayage complet de
+  // la collection etait inutile et devenait de plus en plus lourd au fil des
+  // annees.
+  async allChildrenEntre(debut, fin) {
+    const att = await this.kidAttendanceEntre(debut, fin);
     const byDate = {};
     att.forEach((a) => {
       if (a.status === 'absent') return;
@@ -864,12 +873,12 @@ class FirebaseStore {
               });
               if (touchees.size) touchees.forEach((e) => delete this._entriesCache[e]);
               else this._entriesCache = {};
-              this._oublier('prestationsAn:');
+              this._oublier('prestationsPeriode:');
             }
             if (c === 'profiles') this._profilesCache = null;
             if (c === 'months') this._oublier('mois:');
             if (c === 'kids') this._oublier('enfants:');
-            if (c === 'kid_attendance') this._oublier('presences:', 'presencesAn:');
+            if (c === 'kid_attendance') this._oublier('presences:', 'presencesPeriode:');
             if (c === 'kid_prefill') this._oublier('preremplissage:');
             if (c === 'schedule_templates') this._oublier('horaire:');
             cb();
@@ -890,7 +899,19 @@ class FirebaseStore {
 async function createStore() {
   // ...?store=demo force le mode local (utile pour tester sans toucher au cloud).
   const forced = new URLSearchParams(location.search).get('store');
-  if (forced !== 'demo' && HAS_FIREBASE && window.firebase) {
+  if (forced !== 'demo' && HAS_FIREBASE) {
+    /* Les bibliothèques Firebase viennent d'un serveur externe (gstatic.com) que
+     * le service worker ne met jamais en cache. Hors réseau, elles manquent.
+     * Basculer alors en mode démo est un piège : l'application s'ouvre sur une
+     * base LOCALE et FACTICE, où l'on peut encoder des présences en croyant
+     * travailler dans la vraie. On signale l'absence de réseau, et l'appelant
+     * affiche un écran explicite. Le mode démo reste accessible volontairement
+     * par ?store=demo. */
+    if (!window.firebase) {
+      const e = new Error('Connexion Internet requise.');
+      e.code = 'hors-ligne';
+      throw e;
+    }
     const app = firebase.apps && firebase.apps.length
       ? firebase.app() : firebase.initializeApp(window.APP_CONFIG.FIREBASE_CONFIG);
     const s = new FirebaseStore(app);

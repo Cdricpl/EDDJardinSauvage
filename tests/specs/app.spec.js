@@ -9,7 +9,13 @@ const { test, expect } = require('@playwright/test');
  * hors-ligne. L'application gère l'absence de Chart.js / jsPDF (dégradé).
  */
 async function setupDemo(page) {
-  await page.route('**/js/config.js', (route) =>
+  /* Le motif doit accepter le paramètre de version : l'application demande
+   * « js/config.js?v=vAAAA.MM.JJ-N », qu'un glob « **\/js/config.js » ne
+   * reconnaît pas. Tant qu'il ne correspondait pas, la vraie configuration
+   * Firebase était servie et les tests ne basculaient en mode démo que parce
+   * que les CDN coupés faisaient échouer Firebase — un repli accidentel, pas
+   * le mode démo explicite qu'on croyait tester. */
+  await page.route(/\/js\/config\.js/, (route) =>
     route.fulfill({ contentType: 'application/javascript', body: 'window.APP_CONFIG = {};' }));
   await page.route(/cdn\.jsdelivr\.net|gstatic\.com/, (route) => route.abort());
 }

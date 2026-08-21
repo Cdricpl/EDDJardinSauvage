@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-1';
+const APP_VERSION = 'v2026.08.21-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -34,6 +34,18 @@ const KIDS_MIN_ISO = '2026-08-24';
 // chaque cellule de la grille (près de 700 par mois), ce qui rappelait ce
 // formatage autant de fois pour une valeur qui ne change jamais.
 const KIDS_MIN_LISIBLE = new Date(KIDS_MIN_ISO).toLocaleDateString('fr-FR');
+/* ---- Année scolaire : du 1er août au 31 juillet ----
+ * Les statistiques et les critères d'agrément portent sur l'année SCOLAIRE,
+ * pas sur l'année civile : le dossier d'agrément se raisonne en septembre-juin,
+ * et couper au 31 décembre séparait en deux un même cycle d'accueil. */
+const anneeScolaireDe = (y, m) => (m >= 8 ? y : y - 1);
+const debutAnnee   = (a) => `${a}-08-01`;
+const finAnnee     = (a) => `${a + 1}-07-31`;
+const libelleAnnee = (a) => `${a}-${a + 1}`;
+// Mois dans l'ordre scolaire, avec l'année civile à laquelle chacun appartient.
+const moisAnnee = (a) => [8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7]
+  .map((m) => ({ m, y: m >= 8 ? a : a + 1 }));
+
 const ymNum = (y, m) => y * 12 + (m - 1);
 const atOrBeforeMin = () => ymNum(CUR.y, CUR.m) <= ymNum(MIN_YM.y, MIN_YM.m);
 /* Borne HAUTE : juin, fin de l'année scolaire en cours. Sans elle, le bouton ▶
@@ -514,13 +526,44 @@ async function render() {
 }
 
 function showFatal(msg) {
-  const app = document.getElementById('app');
-  if (!app) return;
-  app.innerHTML = `<div class="card">
-    <div class="msg error"><strong>Une erreur est survenue.</strong><br>${msg || ''}</div>
+  /* `#app` est à l'intérieur de `#appShell`, masqué tant qu'on n'est pas
+   * connecté : une erreur au démarrage s'écrivait donc dans un conteneur
+   * INVISIBLE, et l'utilisatrice ne voyait qu'une page blanche. On bascule sur
+   * l'écran de connexion, lui toujours affichable, dans ce cas. */
+  const shell = document.getElementById('appShell');
+  const visible = shell && shell.style.display !== 'none';
+  const contenu = `<div class="card">
+    <div class="msg error"><strong>Une erreur est survenue.</strong><br>${echapper(msg)}</div>
     <p class="muted small">Vos données sont en sécurité. Réessayez, ou rechargez l'application.</p>
     <button onclick="location.reload()">Recharger</button>
   </div>`;
+  if (visible) { document.getElementById('app').innerHTML = contenu; return; }
+  const login = document.getElementById('login');
+  if (login) { login.style.display = 'flex'; login.innerHTML = `<div class="login-card">${contenu}</div>`; }
+}
+
+/* Écran dédié quand l'application ne peut pas joindre le serveur au démarrage.
+ * Distinct d'une erreur : il n'y a rien à réparer, il faut du réseau. */
+function showHorsLigne() {
+  const shell = document.getElementById('appShell');
+  if (shell) shell.style.display = 'none';
+  const login = document.getElementById('login');
+  if (!login) return;
+  login.style.display = 'flex';
+  login.innerHTML = `
+    <div class="card login-card">
+      <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
+      <h1>Connexion Internet requise</h1>
+      <p class="muted">Les horaires et les présences sont enregistrés sur le serveur.
+        L'application a besoin d'une connexion pour les lire et les enregistrer.</p>
+      <div class="msg error" style="margin-top:14px">Aucune connexion détectée.</div>
+      <p class="muted small">Vérifiez le wifi ou les données mobiles, puis réessayez.
+        Rien n'est perdu : aucune saisie n'est conservée sur l'appareil.</p>
+      <button class="big" id="retryBtn">Réessayer</button>
+      <p class="muted small" style="margin-top:14px">${APP_VERSION}</p>
+    </div>`;
+  const b = document.getElementById('retryBtn');
+  if (b) b.onclick = () => location.reload();
 }
 
 /* ---------------- Vue : Feuille mensuelle (type Excel) ---------------- */
@@ -1265,11 +1308,17 @@ async function viewStats() {
    * une non-admin on ne les demande pas — la garde ci-dessus rend ce cas
    * theorique, mais la vue ne doit jamais lire ce qu'elle n'affiche pas. */
   const estAdmin = ME.role === 'admin';
+  /* Période couverte : l'année scolaire du mois affiché, bornée à la mise en
+   * service d'un côté et à aujourd'hui de l'autre. */
+  const ANNEE = anneeScolaireDe(CUR.y, CUR.m);
+  const auj = todayISO();
+  const debut = debutAnnee(ANNEE) > MIN_ISO ? debutAnnee(ANNEE) : MIN_ISO;
+  const fin = finAnnee(ANNEE) < auj ? finAnnee(ANNEE) : auj;
   const [all, kidsAll, attAnnee, prestationsAnnee] = await Promise.all([
-    STORE.allChildren(CUR.y),
+    STORE.allChildrenEntre(debut, fin),
     estAdmin ? STORE.listKids(true) : Promise.resolve([]),
-    estAdmin ? STORE.kidAttendanceForYear(CUR.y) : Promise.resolve([]),
-    estAdmin ? STORE.allEntriesForYear(CUR.y) : Promise.resolve([]),
+    estAdmin ? STORE.kidAttendanceEntre(debut, fin) : Promise.resolve([]),
+    estAdmin ? STORE.allEntriesEntre(debut, fin) : Promise.resolve([]),
   ]);
   // Rien avant le premier jour d'accueil : sinon des jours d'ouverture fictifs
   // (issus d'un pré-encodage antérieur) tireraient la moyenne vers le bas.
@@ -1278,25 +1327,26 @@ async function viewStats() {
   // compris. Sans cette borne, les statistiques et les critères d'agrément
   // comptaient des journées qui n'ont pas encore eu lieu — une prévision
   // présentée comme un constat.
-  const auj = todayISO();
   const inYear = all.filter((c) => c.entry_date >= KIDS_MIN_ISO && c.entry_date <= auj);
   const annualTotal = inYear.reduce((s, c) => s + (Number(c.children) || 0), 0);
   const dailyYear = inYear.length ? annualTotal / inYear.length : 0;
 
-  // Détail mois par mois (moyenne / total / jours encodés).
+  // Détail mois par mois, dans l'ordre SCOLAIRE (août → juillet).
   // Le suivi commence avec la mise en service : pas de mois vides avant.
-  const months = [];
-  const premierMois = CUR.y === MIN_YM.y ? MIN_YM.m : 1;
-  for (let mm = premierMois; mm <= 12; mm++) {
-    const arr = inYear.filter((c) => c.entry_date.startsWith(`${CUR.y}-${pad(mm)}`));
-    const tot = arr.reduce((s, c) => s + (Number(c.children) || 0), 0);
-    months.push({
-      short: new Date(CUR.y, mm - 1, 1).toLocaleDateString('fr-FR', { month: 'short' }),
-      long: new Date(CUR.y, mm - 1, 1).toLocaleDateString('fr-FR', { month: 'long' }),
-      days: arr.length, total: tot, avg: arr.length ? tot / arr.length : 0,
+  const months = moisAnnee(ANNEE)
+    .filter(({ y, m }) => ymNum(y, m) >= ymNum(MIN_YM.y, MIN_YM.m))
+    .map(({ y, m }) => {
+      const arr = inYear.filter((c) => c.entry_date.startsWith(`${y}-${pad(m)}`));
+      const tot = arr.reduce((s, c) => s + (Number(c.children) || 0), 0);
+      const d = new Date(y, m - 1, 1);
+      return {
+        short: d.toLocaleDateString('fr-FR', { month: 'short' }),
+        long: d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+        days: arr.length, total: tot, avg: arr.length ? tot / arr.length : 0,
+      };
     });
-  }
-  const stats = { dailyYear, annualTotal, annualDays: inYear.length, year: CUR.y };
+  const stats = { dailyYear, annualTotal, annualDays: inYear.length,
+                  annee: libelleAnnee(ANNEE), debut, fin, months };
 
   /* ---- Critères d'agrément (public accueilli + ouverture) ----
    * Le calcul lit les prestations de TOUTES les employées : il est réservé à
@@ -1307,8 +1357,7 @@ async function viewStats() {
   let crit = null;
   if (ME.role === 'admin') {
   const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
-  const att = attAnnee
-    .filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO && (a.entry_date || '') <= auj);
+  const att = attAnnee.filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO);
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
   const byDay = {};
   att.forEach((a) => {
@@ -1327,8 +1376,7 @@ async function viewStats() {
   presentKidIds.forEach((id) => { const s = (kidById[id] || {}).school; if (s) schoolsPresent.add(s); });
   const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
   // Semaines d'ouverture : semaines ISO avec ≥ 2h de prestation (heures d'ouverture).
-  const entriesYear = prestationsAnnee
-    .filter((e) => (e.entry_date || '') >= MIN_ISO && (e.entry_date || '') <= auj);
+  const entriesYear = prestationsAnnee;   // déjà borné à la période par la lecture
   const weekMinutes = {};
   entriesYear.forEach((e) => {
     const w = effectiveWorked(e); if (!w) return;
@@ -1353,19 +1401,20 @@ async function viewStats() {
       note: '' },
   ];
   }
+  stats.crit = crit;   // le PDF doit contenir tout ce que l'écran affiche
 
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <div class="row-between">
-        <h2 style="margin:0">📈 Statistiques — année ${CUR.y}</h2>
+        <h2 style="margin:0">📈 Statistiques — année scolaire ${libelleAnnee(ANNEE)}</h2>
         <button class="small" id="statsPdfBtn">🖨️ Export PDF</button>
       </div>
       <div class="hero-stat">
         <div class="big">${dailyYear.toFixed(1)}</div>
-        <div class="lbl2">enfants en moyenne <strong>par jour</strong> sur l'année ${CUR.y}</div>
+        <div class="lbl2">enfants en moyenne <strong>par jour</strong> sur l'année scolaire ${libelleAnnee(ANNEE)}</div>
         <div class="muted small">${annualTotal} enfants encodés · ${inYear.length} jour(s) avec encodage</div>
       </div>
-      ${crit ? `<h3 style="margin-top:20px">✅ Critères d'agrément — ${CUR.y}</h3>
+      ${crit ? `<h3 style="margin-top:20px">✅ Critères d'agrément — ${libelleAnnee(ANNEE)}</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>Critère</th><th>Situation</th><th>État</th></tr></thead>
         <tbody>${crit.map((c) => `<tr>
@@ -1404,45 +1453,120 @@ async function viewStats() {
   document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, chartMonthly)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
 }
 
-/* ---------------- Export PDF des statistiques ANNUELLES ---------------- */
-// N'inclut que les statistiques de l'année : moyenne annuelle, total, et le
-// graphique de moyenne mensuelle sur l'année.
+/* ---------------- Export PDF des statistiques de l'année scolaire ----------------
+ * Le PDF doit contenir TOUT ce que l'onglet Statistiques affiche : c'est lui
+ * qui part dans le dossier d'agrément, et il ne doit rien laisser à retrouver
+ * à l'écran. Dans l'ordre : la moyenne d'enfants par jour, les critères
+ * d'agrément avec leur état, le graphique mensuel, puis le tableau mois par
+ * mois. Une page est ajoutée dès que la suivante ne tient plus. */
 async function exportStatsPDF(stats, chartMonthly) {
+  const titre = "Statistiques de fréquentation";
+  const sousTitre = `Année scolaire ${stats.annee}`;
+  const lignesMois = stats.months.map((m) => [
+    m.long.charAt(0).toUpperCase() + m.long.slice(1),
+    m.avg ? m.avg.toFixed(1) : '—',
+    m.total || '—',
+    m.days || '—',
+  ]);
+
   // Repli impression si jsPDF reste indisponible (hors ligne).
   if (!(await assurerPdf())) {
     const w = window.open('', '_blank');
     if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
-    w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Statistiques annuelles ${stats.year} — Fréquentation</h2>
+    const tableau = (entetes, lignes) =>
+      `<table border=1 cellpadding=5 style="border-collapse:collapse">
+        <tr>${entetes.map((h) => `<th>${h}</th>`).join('')}</tr>
+        ${lignes.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}
+      </table>`;
+    w.document.write(`<img src="assets/logo.svg" style="height:60px">
+      <h2>${titre} — ${sousTitre}</h2>
       <ul>
-        <li>Moyenne journalière (année) : <b>${stats.dailyYear.toFixed(1)}</b> enfants</li>
-        <li>Total enfants sur l'année : <b>${stats.annualTotal}</b> (sur ${stats.annualDays} jours encodés)</li>
+        <li>Moyenne d'enfants par jour : <b>${stats.dailyYear.toFixed(1)}</b></li>
+        <li>Total d'enfants encodés : <b>${stats.annualTotal}</b> sur ${stats.annualDays} jour(s)</li>
+        <li>Période : du ${stats.debut} au ${stats.fin}</li>
       </ul>
-      ${chartMonthly ? `<img src="${chartMonthly.toBase64Image()}" style="max-width:100%"/>` : ''}
+      ${stats.crit ? `<h3>Critères d'agrément</h3>${tableau(['Critère', 'Situation', 'État'],
+        stats.crit.map((c) => [c.label, c.val + (c.note ? ' — ' + c.note : ''), c.ok ? 'atteint' : 'non atteint']))}` : ''}
+      ${chartMonthly ? `<h3>Moyenne d'enfants par jour, mois par mois</h3><img src="${chartMonthly.toBase64Image()}" style="max-width:100%"/>` : ''}
+      <h3>Détail mensuel</h3>${tableau(['Mois', 'Moyenne / jour', 'Total', 'Jours'], lignesMois)}
       <button onclick="print()">Imprimer</button>`);
     w.document.close(); return;
   }
+
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
-  let y = await pdfHeader(doc, 'Statistiques annuelles de fréquentation', `Année ${stats.year}`);
+  const BLEU = [59, 91, 219];
+  const BAS = doc.internal.pageSize.getHeight() - 18;
+  let y = await pdfHeader(doc, titre, sousTitre);
 
+  // Saut de page dès que le bloc suivant ne tient plus.
+  const place = (hauteur) => { if (y + hauteur > BAS) { doc.addPage(); y = 20; } };
+  const sousTitreBloc = (texte) => {
+    place(14);
+    doc.setTextColor(0); doc.setFontSize(12);
+    doc.text(texte, 14, y); y += 6;
+  };
+
+  // 1. Synthèse de l'année.
   doc.autoTable({
     startY: y,
-    head: [['Indicateur (année ' + stats.year + ')', 'Valeur']],
+    head: [[`Fréquentation — année scolaire ${stats.annee}`, 'Valeur']],
     body: [
-      ['Moyenne journalière', stats.dailyYear.toFixed(1) + ' enfants'],
-      ['Total sur l\'année', stats.annualTotal + ' enfants'],
-      ['Jours encodés', String(stats.annualDays)],
-    ],
-    styles: { fontSize: 11 }, headStyles: { fillColor: [59, 91, 219] },
+      ["Moyenne d'enfants par jour", stats.dailyYear.toFixed(1) + ' enfants'],
+      ["Total d'enfants encodés", stats.annualTotal + ' enfants'],
+      ['Jours avec encodage', String(stats.annualDays)],
+      ['Période prise en compte', `du ${stats.debut} au ${stats.fin}`],
+    ].map((r) => r.map(pourPdf)),
+    styles: { fontSize: 11 }, headStyles: { fillColor: BLEU },
   });
   y = doc.lastAutoTable.finalY + 10;
 
-  if (chartMonthly) {
-    doc.setTextColor(0); doc.setFontSize(12);
-    doc.text(`Moyenne d'enfants par jour, mois par mois — ${stats.year}`, 14, y); y += 4;
-    doc.addImage(chartMonthly.toBase64Image('image/png', 1), 'PNG', 14, y, 180, 180 * 0.42);
+  // 2. Critères d'agrément — la raison d'être du document.
+  if (stats.crit && stats.crit.length) {
+    sousTitreBloc("Critères d'agrément");
+    doc.autoTable({
+      startY: y,
+      head: [['Critère', 'Situation', 'État']],
+      body: lignesPdf(stats.crit.map((c) => [
+        c.label,
+        c.val + (c.note ? '\n' + c.note : ''),
+        c.ok ? 'atteint' : 'non atteint',
+      ])),
+      styles: { fontSize: 9, cellPadding: 3 },
+      columnStyles: { 0: { cellWidth: 78 }, 2: { cellWidth: 26, halign: 'center' } },
+      headStyles: { fillColor: BLEU },
+      // Vert si le critère est atteint, rouge sinon : lisible d'un coup d'œil.
+      didParseCell: (data) => {
+        if (data.section !== 'body' || data.column.index !== 2) return;
+        const ok = data.cell.raw === 'atteint';
+        data.cell.styles.textColor = ok ? [47, 122, 62] : [190, 50, 40];
+        data.cell.styles.fontStyle = 'bold';
+      },
+    });
+    y = doc.lastAutoTable.finalY + 10;
   }
-  doc.save(`statistiques_annuelles_${stats.year}.pdf`);
+
+  // 3. Graphique mensuel.
+  if (chartMonthly) {
+    const hauteur = 180 * 0.42;
+    place(hauteur + 14);
+    sousTitreBloc("Moyenne d'enfants par jour, mois par mois");
+    doc.addImage(chartMonthly.toBase64Image('image/png', 1), 'PNG', 14, y, 180, hauteur);
+    y += hauteur + 10;
+  }
+
+  // 4. Détail mensuel chiffré, sous le graphique.
+  sousTitreBloc('Détail mensuel');
+  doc.autoTable({
+    startY: y,
+    head: [['Mois', 'Moyenne / jour', 'Total', 'Jours encodés']],
+    body: lignesPdf(lignesMois),
+    styles: { fontSize: 10 },
+    columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } },
+    headStyles: { fillColor: BLEU },
+  });
+
+  doc.save(`statistiques_${stats.annee}.pdf`);
 }
 
 /* ---------------- Vue : Utilisateurs (admin) ---------------- */
@@ -1687,6 +1811,21 @@ async function logoDataURL() {
   return _logoCache;
 }
 // En-tête commun des PDF : logo + titre.
+/* Les polices standard de jsPDF n'écrivent qu'un jeu de caractères restreint :
+ * l'apostrophe typographique « ’ » disparaissait purement et simplement
+ * (« Enfants d’au moins » devenait « Enfants dau moins »), et « ≥ » ressortait
+ * déformé. On normalise le texte À L'ENTRÉE DU PDF seulement — l'écran garde
+ * sa typographie. */
+const pourPdf = (v) => String(v == null ? '' : v)
+  .replace(/[\u2018\u2019]/g, "'")
+  .replace(/[\u201C\u201D]/g, '"')
+  .replace(/\u2265/g, '>=').replace(/\u2264/g, '<=')
+  .replace(/\u2212/g, '-').replace(/[\u2013\u2014]/g, '-')
+  .replace(/\u2026/g, '...')
+  .replace(/\u00A0/g, ' ');
+// Normalise chaque cellule d'un tableau autoTable.
+const lignesPdf = (lignes) => lignes.map((r) => r.map(pourPdf));
+
 async function pdfHeader(doc, title, subtitle) {
   const logo = await logoDataURL();
   if (logo) { const h = 18, w = h * (logo.w / logo.h); doc.addImage(logo.url, 'PNG', 14, 10, w, h); }
@@ -1722,7 +1861,7 @@ async function exportRecapPDF(data) {
   doc.autoTable({
     startY,
     head: [['Employée', 'Prévu', 'Presté', 'Écart mois', 'Solde reporté', 'Solde cumulé', 'Statut']],
-    body, styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] },
+    body: lignesPdf(body), styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] },
   });
   doc.save(`recapitulatif_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
@@ -1762,7 +1901,7 @@ async function exportSheetPDF(empId) {
   doc.autoTable({
     startY,
     head: [['Date', 'Prévu déb.', 'Prévu fin', 'Réel déb.', 'Réel fin', 'Presté', 'Écart', 'Justification']],
-    body, styles: { fontSize: 9 }, headStyles: { fillColor: [59, 91, 219] },
+    body: lignesPdf(body), styles: { fontSize: 9 }, headStyles: { fillColor: [59, 91, 219] },
   });
   let y = doc.lastAutoTable.finalY + 10;
   doc.setFontSize(11); doc.setTextColor(0);
@@ -1823,5 +1962,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // MouseEvent comme `auto` — toujours vrai — et l'écran de connexion annoncerait
   // à tort une déconnexion pour inactivité.
   document.getElementById('logoutBtn').onclick = () => doLogout(false);
-  boot().catch((e) => { console.error('[boot]', e); showFatal((e && e.message) || 'Démarrage impossible.'); });
+  boot().catch((e) => {
+    console.error('[boot]', e);
+    if (e && e.code === 'hors-ligne') return showHorsLigne();
+    showFatal((e && e.message) || 'Démarrage impossible.');
+  });
 });
