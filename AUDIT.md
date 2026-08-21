@@ -436,6 +436,18 @@ Les écouteurs temps réel, eux, sont correctement bornés à l'année en cours
 (`js/store.js:733-745`) : c'est la lecture qui ne l'est pas. À ~250 prestations/an et par
 employée, comptez ~750 documents rechargés en année 3.
 
+> ⚠️ **CORRECTION (21/08/2026) — la solution proposée ici était FAUSSE.**
+> Borner cette lecture à l'année en cours **fait disparaître le solde reporté des années
+> précédentes**. `monthSummary` (`js/app.js:236`) cumule les prestations depuis la mise en
+> service pour calculer le report : la borne annuelle remet ce cumul à zéro chaque
+> 1ᵉʳ janvier. **Mesuré** : pour une employée ayant accumulé +10 h en 2026, le report
+> affiché en janvier 2027 passait de **10,0 h à 0,0 h**.
+>
+> Ce qui a été fait à la place (lot 2) : la lecture reste complète — elle doit l'être —
+> mais `onChange` ne vide plus **tout** le cache quand une collègue enregistre une heure ;
+> seules les employées réellement concernées par la modification sont relues. C'est le coût
+> décrit ci-dessus qui est traité, sans toucher au calcul du report.
+
 #### P5 — Recalculs redondants dans la boucle de rendu · **MINEUR** · effort : XS
 **`js/app.js:855`** — `new Date(KIDS_MIN_ISO).toLocaleDateString('fr-FR')` est évalué
 **dans chaque cellule** de la grille.
@@ -567,7 +579,7 @@ Corrections locales, chacune de quelques lignes, aucune n'affecte l'interface.
 |---|---|---|
 | 5 | **P1** — charger `chart.js` et `jsPDF` à la demande | **−1 000 ms au démarrage, −194 Ko** |
 | 6 | **P2** — grouper en `Promise.all` les lectures indépendantes de `viewSheet`, `viewChildren`, `viewStats` | **−300 à −900 ms par ouverture d'onglet** (cloud) |
-| 7 | **P4** — borner `entriesForEmployee` sur l'année (comme l'est déjà l'écouteur temps réel) | évite la dégradation progressive |
+| 7 | ~~**P4** — borner `entriesForEmployee` sur l'année~~ → **NE PAS FAIRE** (efface le solde reporté, voir la correction en P4). Vider le cache par employée au lieu de le vider entièrement. | évite la dégradation progressive |
 | 8 | **P5** — sortir `toLocaleDateString` de la boucle de cellules | ~3 ms — pour la propreté |
 
 Aucune de ces corrections ne change de bibliothèque, ne restructure l'architecture ni ne
