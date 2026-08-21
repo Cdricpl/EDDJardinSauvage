@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-1';
+const APP_VERSION = 'v2026.08.21-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
