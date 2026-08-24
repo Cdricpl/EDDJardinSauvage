@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-9';
+const APP_VERSION = 'v2026.08.21-10';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -1352,11 +1352,13 @@ async function viewChildren() {
       </label>
       <div id="archList" class="card sub hidden" style="margin-top:8px">
         <p class="muted small" style="margin-top:0">Ces fiches sont conservées ; leurs présences déjà encodées ne sont
-          pas perdues. Réactiver une fiche la remet dans la grille ci-dessus.</p>
+          pas perdues. « Réactiver » remet la fiche dans la grille ci-dessus.
+          « 🗑️ » l'efface <strong>définitivement</strong>, avec toutes ses présences.</p>
         ${archives.map((k) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
           <span class="avatar" style="background:${avatarColor(kidLabel(k))}" aria-hidden="true">${echapper(initials(k))}</span>
           <span style="flex:1">${echapper(kidLabel(k))}${k.school ? ` <span class="muted small">— ${echapper(k.school)}</span>` : ''}</span>
           <button class="small green" data-reactkid="${k.id}">Réactiver</button>
+          <button class="rowbtn danger" data-delkid="${k.id}" title="Effacer définitivement ${echapper(kidLabel(k))} et toutes ses présences" aria-label="Effacer définitivement ${echapper(kidLabel(k))}">🗑️</button>
         </div>`).join('')}
       </div>` : ''}
       <p class="muted small">« Prés. » = jours de présence de l'enfant ce mois-ci.${
@@ -1440,6 +1442,14 @@ async function viewChildren() {
     const showArch = document.getElementById('showArch');
     if (showArch) showArch.onchange = () =>
       document.getElementById('archList').classList.toggle('hidden', !showArch.checked);
+    /* Effacement définitif depuis la liste des enfants retirés.
+     * Indispensable : une fiche archivée ne figure plus dans la grille, donc sa
+     * fiche du mois — le seul autre endroit d'où l'effacer — est inatteignable. */
+    app.querySelectorAll('[data-delkid]').forEach((b) => b.onclick = async () => {
+      const k = tousKids.find((x) => x.id === b.dataset.delkid);
+      if (!k) return;
+      if (await effacerEnfant(k)) render();
+    });
     app.querySelectorAll('[data-reactkid]').forEach((b) => b.onclick = async () => {
       try { await STORE.setKidActive(b.dataset.reactkid, true); toast('Enfant remis dans la liste'); render(); }
       catch (e) { toast('Erreur : ' + e.message, 'error'); }
@@ -1503,25 +1513,7 @@ async function viewChildren() {
     // Effacement définitif — administration uniquement, avec double confirmation.
     const delBtn = document.getElementById('ficheDel');
     if (delBtn) delBtn.onclick = async () => {
-      let n;
-      try { n = await STORE.countKidData(k.id); }
-      catch (e) { toast('Erreur : ' + e.message, 'error'); return; }
-      if (!confirm(
-        `Effacer DÉFINITIVEMENT ${kidLabel(k)} ?\n\n`
-        + `Seront supprimées : sa fiche et ${n.kid_attendance} présence(s)/absence(s) enregistrée(s), `
-        + `sur toutes les années.\n\n`
-        + `Les statistiques déjà calculées en tiendront compte : les moyennes changeront.\n`
-        + `Cette action est irréversible — faites une sauvegarde (💾) avant.`)) return;
-      const saisi = prompt(`Confirmation : tapez le prénom « ${k.first_name} » pour effacer.`);
-      if (saisi == null) return;
-      if (saisi.trim() !== (k.first_name || '').trim()) { toast('Prénom incorrect — effacement annulé.', 'error'); return; }
-      try {
-        await STORE.deleteKid(k.id);
-        PREFILLED_KIDS.clear();
-        toast(`${kidLabel(k)} effacé définitivement`);
-        fiche.classList.add('hidden');
-        render();
-      } catch (e) { toast('Effacement impossible : ' + e.message, 'error'); }
+      if (await effacerEnfant(k)) { fiche.classList.add('hidden'); render(); }
     };
     fiche.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   });
@@ -1724,6 +1716,33 @@ async function viewStats() {
   });
   const chartMonthly = CHART;
   document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, chartMonthly)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+}
+
+/* Effacement DÉFINITIF d'un enfant — procédure unique, utilisée depuis sa fiche
+ * comme depuis la liste des enfants retirés. Deux confirmations : la première
+ * annonce ce qui sera perdu, la seconde demande de retaper le prénom.
+ * Renvoie true si l'effacement a bien eu lieu. */
+async function effacerEnfant(k) {
+  let n;
+  try { n = await STORE.countKidData(k.id); }
+  catch (e) { toast('Erreur : ' + e.message, 'error'); return false; }
+  if (!confirm(
+    `Effacer DÉFINITIVEMENT ${kidLabel(k)} ?\n\n`
+    + `Seront supprimées : sa fiche et ${n.kid_attendance} présence(s)/absence(s) enregistrée(s), `
+    + `sur toutes les années.\n\n`
+    + `Les statistiques déjà calculées en tiendront compte : les moyennes changeront.\n`
+    + `Cette action est irréversible — faites une sauvegarde (💾) avant.`)) return false;
+  const saisi = prompt(`Confirmation : tapez le prénom « ${k.first_name} » pour effacer.`);
+  if (saisi == null) return false;
+  if (saisi.trim() !== (k.first_name || '').trim()) {
+    toast('Prénom incorrect — effacement annulé.', 'error'); return false;
+  }
+  try {
+    await STORE.deleteKid(k.id);
+    PREFILLED_KIDS.clear();
+    toast(`${kidLabel(k)} effacé définitivement`);
+    return true;
+  } catch (e) { toast('Effacement impossible : ' + e.message, 'error'); return false; }
 }
 
 /* ---------------- Export PDF de la fiche d'un enfant ---------------- */

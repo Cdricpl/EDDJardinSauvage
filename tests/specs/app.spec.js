@@ -709,3 +709,35 @@ test('utilisateurs : la colonne Actions tient sur une seule ligne', async ({ pag
   expect(mesures.alignes, 'les actions doivent rester alignées sur une ligne').toBe(true);
   expect(mesures.hauteurLigne).toBeLessThan(100);
 });
+
+test('enfants retirés : ils restent effaçables définitivement', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+
+  // On retire un enfant de la liste (archivage).
+  page.once('dialog', (d) => d.accept());
+  await page.locator('[data-arch]').first().click();
+  await page.locator('#showArch').check();
+
+  /* Une fiche archivée ne figure plus dans la grille : sa fiche du mois — le
+   * seul autre endroit d'où l'effacer — devient inatteignable. La liste des
+   * enfants retirés doit donc porter elle aussi le bouton d'effacement. */
+  await expect(page.locator('[data-delkid]')).toHaveCount(1);
+
+  const cible = await page.evaluate(() => {
+    const id = document.querySelector('[data-delkid]').dataset.delkid;
+    const db = JSON.parse(localStorage.getItem('ecole_db'));
+    return { prenom: db.kids.find((k) => k.id === id).first_name, id };
+  });
+
+  // Effacement : fiche ET présences disparaissent.
+  const rep = ['', cible.prenom];
+  page.on('dialog', (d) => d.accept(rep.shift() ?? ''));
+  await page.locator('[data-delkid]').first().click();
+
+  await expect.poll(async () => page.evaluate((id) => {
+    const db = JSON.parse(localStorage.getItem('ecole_db'));
+    return db.kids.some((k) => k.id === id) || db.kidatt.some((a) => a.kid_id === id);
+  }, cible.id)).toBe(false);
+});
