@@ -914,6 +914,21 @@ class FirebaseStore {
       ref: this.db.collection('kid_prefill').doc(`${x.kid_id}_${x.month}`),
       data: { kid_id: String(x.kid_id), month: x.month },
     }));
+    /* Solde de départ des employées.
+     * La restauration ne recrée volontairement PAS les comptes (nom, email,
+     * rôle, activation) : ils vivent dans Firebase Auth, et les réécrire
+     * pourrait ressusciter un compte supprimé ou modifier des droits.
+     * Mais le solde de départ, lui, est une donnée métier : sans cette ligne,
+     * une restauration le remettait silencieusement à zéro et faussait tout le
+     * cumul d'heures de l'employée. On ne réécrit QUE ce champ. */
+    (data.profiles || []).forEach((pr) => {
+      const id = map[pr.id];
+      if (!id || pr.opening_minutes == null) return;
+      ops.push({
+        ref: this.db.collection('profiles').doc(id),
+        data: { opening_minutes: Math.round(Number(pr.opening_minutes) || 0) },
+      });
+    });
     (data.schedule_templates || []).forEach((t) => ops.push({
       ref: this.db.collection('schedule_templates').doc(emp(t.employee_id)),
       data: { employee_id: emp(t.employee_id), slots: t.slots || {} },

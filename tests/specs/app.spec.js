@@ -782,3 +782,52 @@ test('exports : le temps de midi et le statut des présences y figurent', async 
   const ligneAbs = kids.split('\r\n').find((l) => l.includes(dateAbs));
   expect(ligneAbs).toContain('Absence injustifiée');
 });
+
+test('restauration Firebase : le solde de départ revient, mais jamais les droits', async ({ page }) => {
+  await loginAdmin(page);
+
+  /* Le chemin FIREBASE de la restauration a sa propre liste de champs : c'est
+   * là qu'un oubli passe inaperçu, le mode démo recopiant tout en bloc.
+   * On instancie donc FirebaseStore avec un faux Firestore et on regarde
+   * exactement ce qu'il écrit. */
+  const ecrites = await page.evaluate(async () => {
+    const ecrites = [];
+    const col = (nom) => ({
+      doc: (id) => ({ __col: nom, __id: id }),
+      where: () => col(nom),
+      get: async () => ({ docs: [], size: 0, empty: true }),
+    });
+    const st = Object.create(FirebaseStore.prototype);
+    st.db = { collection: col };
+    st._memo = new Map(); st._entriesCache = {}; st._profilesCache = null;
+    st.listProfiles = async () => ([{ id: 'uid-reel', email: 'flora@ecole.be', full_name: 'Employée 1' }]);
+    st._commit = async (ops) => ops.forEach((o) => {
+      if (!o.delete) ecrites.push({ col: o.ref.__col, id: o.ref.__id, data: o.data });
+    });
+    await st.importAll({
+      profiles: [{
+        id: 'ancien', email: 'flora@ecole.be', opening_minutes: 435,
+        role: 'admin', active: false, full_name: 'Renommée',   // ne doivent PAS être restaurés
+      }],
+      day_entries: [{ id: 'x', employee_id: 'ancien', entry_date: '2026-08-26', break_minutes: 45 }],
+      kid_attendance: [{ kid_id: 'k1', entry_date: '2026-08-26', status: 'unjustified' }],
+      kids: [{ id: 'k1', first_name: 'Emma', last_name: 'B', school: 'ARAHF', grade: '5e', birthdate: '2015-09-15', days: [1, 2] }],
+    });
+    return ecrites;
+  });
+
+  // Le solde de départ est bien restauré (sinon tout le cumul d'heures est faux).
+  const profil = ecrites.find((e) => e.col === 'profiles');
+  expect(profil, 'le solde de départ doit être restauré').toBeTruthy();
+  expect(profil.data.opening_minutes).toBe(435);
+  // …mais RIEN d'autre : une sauvegarde trafiquée ne doit pas pouvoir accorder
+  // des droits d'administrateur ni désactiver un compte.
+  expect(Object.keys(profil.data)).toEqual(['opening_minutes']);
+
+  // Et les champs récents des autres tables survivent aussi.
+  expect(ecrites.find((e) => e.col === 'day_entries').data.break_minutes).toBe(45);
+  expect(ecrites.find((e) => e.col === 'kid_attendance').data.status).toBe('unjustified');
+  const enfant = ecrites.find((e) => e.col === 'kids').data;
+  expect(enfant.grade).toBe('5e');
+  expect(enfant.days).toEqual([1, 2]);
+});
