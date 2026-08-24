@@ -19,15 +19,10 @@ const HAS_FIREBASE =
  * Utilitaires partagés
  * ================================================================ */
 const Util = {
-  ym(date) { const [y, m] = date.split('-').map(Number); return { y, m }; },
   pad(n) { return String(n).padStart(2, '0'); },
   monthKey(y, m) { return `${y}-${Util.pad(m)}`; },
   minToTimeSafe(min) { return `${Util.pad(Math.floor(min / 60))}:${Util.pad(min % 60)}`; },
   daysInMonth(y, m) { return new Date(y, m, 0).getDate(); },
-  today() {
-    const d = new Date();
-    return `${d.getFullYear()}-${Util.pad(d.getMonth() + 1)}-${Util.pad(d.getDate())}`;
-  },
   uuid() {
     return (crypto && crypto.randomUUID) ? crypto.randomUUID()
       : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2);
@@ -61,6 +56,8 @@ class DemoStore {
         { id: 'k3', first_name: 'Noah', last_name: 'Dubois', active: true },
       ],
       kidatt: [],       // présences : { kid_id, entry_date }
+      kidprefill: [],   // mois déjà pré-encodés : { kid_id, month }
+      settings: {},     // réglages partagés : { annee_scolaire }
       // Horaire type hebdomadaire par employée : slots[weekday] = {start,end} (0=Dim..6=Sam)
       templates: [
         { employee_id: e1, slots: { 1: { start: '14:00', end: '18:00' }, 2: { start: '14:00', end: '18:00' }, 3: { start: '14:00', end: '18:00' }, 4: { start: '14:00', end: '18:00' }, 5: { start: '14:00', end: '18:00' } } },
@@ -97,14 +94,35 @@ class DemoStore {
         if ((d + ki) % 6 !== 0) db.kidatt.push({ kid_id: k.id, entry_date: date }); // ~1 absence / 6 jours
       });
     }
-    localStorage.setItem(this.KEY, JSON.stringify(db));
+    this._ecrire(db);
   }
 
-  _db() { return JSON.parse(localStorage.getItem(this.KEY)); }
+  /* Une seule porte d'écriture, pour que le quota saturé donne une phrase
+   * compréhensible au lieu d'un « QuotaExceededError » brut — et pour ne pas
+   * laisser croire qu'une saisie est enregistrée alors qu'elle ne l'est pas. */
+  _ecrire(db) {
+    try { localStorage.setItem(this.KEY, JSON.stringify(db)); }
+    catch (e) {
+      throw new Error("Mémoire du navigateur pleine : rien n'a été enregistré. "
+        + 'Exportez une sauvegarde, puis videz les données de ce site.');
+    }
+  }
+
+  _db() {
+    try {
+      const brut = localStorage.getItem(this.KEY);
+      if (brut) return JSON.parse(brut);
+    } catch {}
+    // Stockage vidé pendant la session (autre onglet, nettoyage du navigateur)
+    // ou contenu illisible : on reconstruit une base plutôt que de laisser
+    // TOUTES les lectures échouer sur `null.profiles`.
+    this._seed();
+    return JSON.parse(localStorage.getItem(this.KEY));
+  }
   _save(db) {
-    localStorage.setItem(this.KEY, JSON.stringify(db));
+    this._ecrire(db);
     // Notifie les autres onglets (simulation "temps réel").
-    localStorage.setItem('ecole_ping', String(Date.now()));
+    try { localStorage.setItem('ecole_ping', String(Date.now())); } catch {}
   }
   _session() { try { return JSON.parse(localStorage.getItem(this.SESSION) || 'null'); } catch { return null; } }
 
@@ -171,6 +189,24 @@ class DemoStore {
     db.templates = (db.templates || []).filter(t => t.employee_id !== id);
     this._save(db);
     return n;
+  }
+
+  /* ---- Réglages partagés ----
+   * L'année scolaire en cours est une donnée d'équipe, pas une préférence
+   * d'appareil : elle doit être la même pour tout le monde, et survivre à un
+   * changement de téléphone. */
+  async getReglages() { return this._db().settings || {}; }
+  async setAnneeScolaire(annee) {
+    const db = this._db();
+    db.settings = db.settings || {};
+    db.settings.annee_scolaire = Number(annee);
+    this._save(db);
+  }
+  // Solde d'heures repris au 1er août de l'année scolaire indiquée.
+  async setSoldeAnnee(id, annee, minutes) {
+    const db = this._db();
+    const p = db.profiles.find(x => x.id === id);
+    if (p) { p.soldes = p.soldes || {}; p.soldes[String(annee)] = Math.round(Number(minutes) || 0); this._save(db); }
   }
 
   /* ---- Horaire type ---- */
@@ -295,20 +331,23 @@ class DemoStore {
     const prefix = Util.monthKey(year, month);
     return this._db().kidatt.filter(a => a.entry_date.startsWith(prefix));
   }
-  async kidAttendanceForYear(year) {
-    return this._db().kidatt.filter(a => (a.entry_date || '').startsWith(`${year}-`));
+  /* Lectures sur une PÉRIODE (bornes ISO incluses) et non sur une année civile :
+   * l'année scolaire va du 1er août au 31 juillet, elle chevauche donc deux
+   * années civiles. */
+  async kidAttendanceEntre(debut, fin) {
+    return this._db().kidatt.filter(a => {
+      const d = a.entry_date || ''; return d >= debut && d <= fin;
+    });
   }
-  async allEntriesForYear(year) {
-    return this._db().entries.filter(e => (e.entry_date || '').startsWith(`${year}-`));
+  async allEntriesEntre(debut, fin) {
+    return this._db().entries.filter(e => {
+      const d = e.entry_date || ''; return d >= debut && d <= fin;
+    });
   }
   // status : 'present' | 'absent' | null (efface l'enregistrement).
+  // Même logique que l'écriture groupée : on y délègue plutôt que de la répéter.
   async setKidAttendance(kid_id, entry_date, status) {
-    const db = this._db();
-    const i = db.kidatt.findIndex(a => a.kid_id === kid_id && a.entry_date === entry_date);
-    if (!status) { if (i >= 0) db.kidatt.splice(i, 1); }
-    else if (i >= 0) db.kidatt[i].status = status;
-    else db.kidatt.push({ kid_id, entry_date, status });
-    this._save(db);
+    return this.setKidAttendances([{ kid_id, entry_date, status }]);
   }
   // Écriture groupée (pré-remplissage des présences habituelles).
   async setKidAttendances(list) {
@@ -321,13 +360,37 @@ class DemoStore {
     });
     this._save(db);
   }
+  /* ---- Mémoire du pré-encodage ----
+   * Sans elle, une case effacée volontairement (3e état du cycle) est
+   * indiscernable d'une case jamais encodée : le pré-encodage la remettrait à
+   * « présent » au chargement suivant. On retient donc, enfant par enfant et
+   * mois par mois, que le pré-encodage a déjà eu lieu. */
+  async kidPrefilledFor(year, month) {
+    const mois = Util.monthKey(year, month);
+    return (this._db().kidprefill || []).filter(x => x.month === mois).map(x => x.kid_id);
+  }
+  async markKidPrefilled(year, month, kidIds) {
+    if (!kidIds || !kidIds.length) return;
+    const mois = Util.monthKey(year, month);
+    const db = this._db();
+    db.kidprefill = db.kidprefill || [];
+    kidIds.forEach((kid_id) => {
+      if (!db.kidprefill.some(x => x.kid_id === kid_id && x.month === mois)) db.kidprefill.push({ kid_id, month: mois });
+    });
+    this._save(db);
+  }
+  // Les jours habituels de cet enfant ont changé : son pré-encodage est à refaire.
+  async clearKidPrefill(kid_id) {
+    const db = this._db();
+    db.kidprefill = (db.kidprefill || []).filter(x => x.kid_id !== kid_id);
+    this._save(db);
+  }
+
   // Comptes agrégés par jour (enfants PRÉSENTS) — pour les statistiques.
-  async allChildren(year) {
-    const prefixe = `${year}-`;
+  async allChildrenEntre(debut, fin) {
     const byDate = {};
-    this._db().kidatt.forEach(a => {
-      if (a.status && a.status !== 'present') return; // absence (justifiée ou non) = pas comptée
-      if (year != null && !String(a.entry_date || '').startsWith(prefixe)) return;
+    (await this.kidAttendanceEntre(debut, fin)).forEach(a => {
+      if (a.status && a.status !== 'present') return; // absence justifiée OU injustifiée
       byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
     });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
@@ -342,6 +405,8 @@ class DemoStore {
       months: db.months || [], day_entries: db.entries || [],
       schedule_templates: db.templates || [],
       kids: db.kids || [], kid_attendance: db.kidatt || [],
+      kid_prefill: db.kidprefill || [],
+      settings: db.settings || {},
     };
   }
   // Restaure une sauvegarde. Remplace les tables de données ; pour les profils on
@@ -355,6 +420,8 @@ class DemoStore {
     if (Array.isArray(data.schedule_templates)) { db.templates = data.schedule_templates;   counts.schedule_templates = db.templates.length; }
     if (Array.isArray(data.kids))               { db.kids = data.kids;                      counts.kids = db.kids.length; }
     if (Array.isArray(data.kid_attendance))     { db.kidatt = data.kid_attendance;          counts.kid_attendance = db.kidatt.length; }
+    if (Array.isArray(data.kid_prefill))        { db.kidprefill = data.kid_prefill;          counts.kid_prefill = db.kidprefill.length; }
+    if (data.settings && typeof data.settings === 'object') { db.settings = data.settings;   counts.settings = 1; }
     if (Array.isArray(data.profiles)) {
       data.profiles.forEach((p) => {
         const ex = db.profiles.find((x) => x.id === p.id);
@@ -558,6 +625,28 @@ class FirebaseStore {
     return n;
   }
 
+  /* ---- Reglages partages ----
+   * L'annee scolaire en cours doit etre la meme pour toute l'equipe : elle vit
+   * dans un document partage, pas dans le navigateur. Ecriture reservee a
+   * l'administration (voir firestore.rules). */
+  async getReglages() {
+    return this._cache('reglages', async () => {
+      const s = await this.db.collection('settings').doc('app').get();
+      return s.exists ? s.data() : {};
+    });
+  }
+  async setAnneeScolaire(annee) {
+    await this.db.collection('settings').doc('app')
+      .set({ annee_scolaire: Number(annee), updated_at: new Date().toISOString() }, { merge: true });
+    this._oublier('reglages');
+  }
+  // Solde d'heures repris au 1er aout de l'annee scolaire indiquee.
+  async setSoldeAnnee(id, annee, minutes) {
+    await this.db.collection('profiles').doc(id)
+      .set({ soldes: { [String(annee)]: Math.round(Number(minutes) || 0) } }, { merge: true });
+    this._profilesCache = null;
+  }
+
   /* ---- Horaire type ---- */
   async getTemplate(employee_id) {
     return this._cache(`horaire:${employee_id}`, async () => {
@@ -610,7 +699,7 @@ class FirebaseStore {
     const s = await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date)).get();
     const saved = { id: s.id, ...s.data() };
     this._mergeCache(saved);
-    this._oublier('prestationsAn:');
+    this._oublier('prestationsPeriode:');
     return saved;
   }
   async upsertEntries(entries) {
@@ -621,7 +710,7 @@ class FirebaseStore {
       data: { ...e, updated_at: now },
     })));
     delete this._entriesCache[entries[0].employee_id];
-    this._oublier('prestationsAn:');
+    this._oublier('prestationsPeriode:');
     return entries;
   }
 
@@ -665,17 +754,21 @@ class FirebaseStore {
       return this._docs(snap);
     });
   }
-  async kidAttendanceForYear(year) {
-    return this._cache(`presencesAn:${year}`, async () => {
+  /* Lectures sur une PÉRIODE (bornes ISO incluses) et non sur une année civile :
+   * l'année scolaire va du 1er août au 31 juillet, elle chevauche donc deux
+   * années civiles. Une seule contrainte d'intervalle sur `entry_date` :
+   * Firestore l'indexe automatiquement, aucun index composite à créer. */
+  async kidAttendanceEntre(debut, fin) {
+    return this._cache(`presencesPeriode:${debut}_${fin}`, async () => {
       const snap = await this.db.collection('kid_attendance')
-        .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
+        .where('entry_date', '>=', debut).where('entry_date', '<=', fin).get();
       return this._docs(snap);
     });
   }
-  async allEntriesForYear(year) {
-    return this._cache(`prestationsAn:${year}`, async () => {
+  async allEntriesEntre(debut, fin) {
+    return this._cache(`prestationsPeriode:${debut}_${fin}`, async () => {
       const snap = await this.db.collection('day_entries')
-        .where('entry_date', '>=', `${year}-01-01`).where('entry_date', '<=', `${year}-12-31`).get();
+        .where('entry_date', '>=', debut).where('entry_date', '<=', fin).get();
       return this._docs(snap);
     });
   }
@@ -684,7 +777,7 @@ class FirebaseStore {
     const ref = this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`);
     if (!status) await ref.delete();
     else await ref.set({ kid_id, entry_date, status });
-    this._oublier('presences:', 'presencesAn:');
+    this._oublier('presences:', 'presencesPeriode:');
   }
   async setKidAttendances(list) {
     if (!list || !list.length) return;
@@ -693,13 +786,40 @@ class FirebaseStore {
       data: status ? { kid_id, entry_date, status } : null, delete: !status,
     }));
     await this._commit(ops);
-    this._oublier('presences:', 'presencesAn:');
+    this._oublier('presences:', 'presencesPeriode:');
   }
-  // Nombre d'enfants presents par jour, pour UNE annee. Le balayage complet de
-  // la collection etait inutile (les statistiques sont annuelles) et devenait
-  // de plus en plus lourd au fil des annees.
-  async allChildren(year) {
-    const att = await this.kidAttendanceForYear(year);
+  /* ---- Memoire du pre-encodage ----
+   * Voir DemoStore : sans ce marqueur, une case effacee volontairement serait
+   * remise a « present » au chargement suivant. Identifiant deterministe
+   * kid_prefill/{enfant}_{AAAA-MM}. */
+  async kidPrefilledFor(year, month) {
+    return this._cache(`preremplissage:${Util.monthKey(year, month)}`, async () => {
+      const snap = await this.db.collection('kid_prefill')
+        .where('month', '==', Util.monthKey(year, month)).get();
+      return this._docs(snap).map((d) => d.kid_id);
+    });
+  }
+  async markKidPrefilled(year, month, kidIds) {
+    if (!kidIds || !kidIds.length) return;
+    const mois = Util.monthKey(year, month);
+    await this._commit(kidIds.map((kid_id) => ({
+      ref: this.db.collection('kid_prefill').doc(`${kid_id}_${mois}`),
+      data: { kid_id, month: mois },
+    })));
+    this._oublier('preremplissage:');
+  }
+  // Les jours habituels de cet enfant ont change : son pre-encodage est a refaire.
+  async clearKidPrefill(kid_id) {
+    const snap = await this.db.collection('kid_prefill').where('kid_id', '==', kid_id).get();
+    await this._commit(snap.docs.map((d) => ({ ref: d.ref, delete: true })));
+    this._oublier('preremplissage:');
+  }
+
+  // Nombre d'enfants presents par jour, sur une periode. Le balayage complet de
+  // la collection etait inutile et devenait de plus en plus lourd au fil des
+  // annees.
+  async allChildrenEntre(debut, fin) {
+    const att = await this.kidAttendanceEntre(debut, fin);
     const byDate = {};
     att.forEach((a) => {
       if (a.status && a.status !== 'present') return;   // absence justifiée OU injustifiée
@@ -711,10 +831,11 @@ class FirebaseStore {
   /* ---- Export / restauration ---- */
   async exportAll() {
     const get = async (c) => this._docs(await this.db.collection(c).get());
-    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance] = await Promise.all(
-      ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance'].map(get));
+    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill] = await Promise.all(
+      ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance', 'kid_prefill'].map(get));
+    const settings = await this.getReglages();
     return { exported_at: new Date().toISOString(), mode: 'firebase',
-      profiles, months, day_entries, schedule_templates, kids, kid_attendance };
+      profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill, settings };
   }
   // Restaure une sauvegarde JSON (y compris une ancienne sauvegarde exportee).
   // Les identifiants d'employées diffèrent d'un hébergeur à l'autre : on les
@@ -756,6 +877,12 @@ class FirebaseStore {
       data: { kid_id: String(a.kid_id), entry_date: a.entry_date,
         status: ['absent', 'unjustified'].includes(a.status) ? a.status : 'present' },
     }));
+    // Sans les marqueurs de pre-encodage, une restauration remettrait a
+    // « present » toutes les cases effacees volontairement.
+    (data.kid_prefill || []).forEach((x) => ops.push({
+      ref: this.db.collection('kid_prefill').doc(`${x.kid_id}_${x.month}`),
+      data: { kid_id: String(x.kid_id), month: x.month },
+    }));
     (data.schedule_templates || []).forEach((t) => ops.push({
       ref: this.db.collection('schedule_templates').doc(emp(t.employee_id)),
       data: { employee_id: emp(t.employee_id), slots: t.slots || {} },
@@ -772,6 +899,12 @@ class FirebaseStore {
         data: { ...rest, employee_id: id },
       });
     });
+    // L'annee scolaire en cours fait partie de la sauvegarde : sans elle, une
+    // restauration ramenerait l'application a la premiere annee.
+    if (data.settings && typeof data.settings === 'object' && data.settings.annee_scolaire) {
+      ops.push({ ref: this.db.collection('settings').doc('app'),
+        data: { annee_scolaire: Number(data.settings.annee_scolaire) } });
+    }
     await this._commit(ops);
     this._entriesCache = {}; this._profilesCache = null; this._memo.clear();
     if (missing.size) {
@@ -782,34 +915,82 @@ class FirebaseStore {
   }
 
   /* ---- Temps réel ----
-   * IMPORTANT : les deux collections qui grossissent sans fin (prestations et
-   * présences des enfants) sont écoutées UNIQUEMENT sur l'année en cours.
-   * Sans cette borne, chaque ouverture de l'application téléchargeait tout
-   * l'historique (plusieurs milliers de fiches après quelques années) et le
-   * gardait en mémoire en permanence : démarrage lent et appareil qui rame.
+   * Deux contraintes imposent la forme de ce bloc :
+   *
+   * 1. LES ÉCOUTEURS SE POSENT APRÈS LA CONNEXION. Les règles Firestore
+   *    refusent toute lecture à un visiteur non identifié ; posés au démarrage
+   *    comme avant, alors que la session n'était pas encore restaurée, les
+   *    écouteurs étaient refusés et JAMAIS reposés après la connexion — plus
+   *    aucune mise à jour en direct de la session. On les (re)pose donc à
+   *    chaque changement d'utilisatrice, en retirant d'abord les précédents
+   *    pour ne jamais en accumuler deux jeux.
+   *
+   * 2. UNE EMPLOYÉE NE LIT QUE SES PROPRES PRESTATIONS (voir firestore.rules).
+   *    Un écouteur non filtré sur `day_entries` porte sur des documents
+   *    qu'elle n'a pas le droit de lire : Firestore refuse l'abonnement EN
+   *    BLOC. D'où le filtre sur `employee_id` pour les non-admins.
+   *
+   * Les deux collections qui grossissent sans fin (prestations et présences)
+   * sont écoutées uniquement sur l'année en cours. Sans cette borne, chaque
+   * ouverture téléchargeait tout l'historique et le gardait en mémoire.
+   * Exception : pour une employée, `day_entries` est borné par `employee_id`
+   * au lieu de l'année — croiser les deux exigerait un index composite à créer
+   * à la main dans la console Firebase, et le volume d'UNE employée reste
+   * modeste (~250 fiches par an).
    * Les années passées restent consultables normalement (lecture à la demande),
    * elles ne sont simplement pas rafraîchies en direct — sans conséquence,
    * puisqu'on ne modifie pas une année clôturée à plusieurs en même temps. */
   onChange(cb) {
-    const y = new Date().getFullYear();
-    const thisYear = (col) => col.where('entry_date', '>=', `${y}-01-01`).where('entry_date', '<=', `${y}-12-31`);
-    const BOUNDED = { day_entries: thisYear, kid_attendance: thisYear };
-    ['day_entries', 'months', 'kids', 'kid_attendance', 'profiles', 'schedule_templates'].forEach((c) => {
-      const base = this.db.collection(c);
-      (BOUNDED[c] ? BOUNDED[c](base) : base).onSnapshot(
-        { includeMetadataChanges: false },
-        (snap) => {
-          if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
-          if (c === 'day_entries') { this._entriesCache = {}; this._oublier('prestationsAn:'); }
-          if (c === 'profiles') this._profilesCache = null;
-          if (c === 'months') this._oublier('mois:');
-          if (c === 'kids') this._oublier('enfants:');
-          if (c === 'kid_attendance') this._oublier('presences:', 'presencesAn:');
-          if (c === 'schedule_templates') this._oublier('horaire:');
-          cb();
-        },
-        (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));
-    });
+    let detacher = [];
+    const poser = async (user) => {
+      detacher.forEach((f) => { try { f(); } catch {} });
+      detacher = [];
+      if (!user) return;                                  // déconnectée : rien à écouter
+      const prof = await this.getCurrentUser().catch(() => null);
+      const estAdmin = !!(prof && prof.role === 'admin');
+      const y = new Date().getFullYear();
+      const anneeEnCours = (col) => col.where('entry_date', '>=', `${y}-01-01`).where('entry_date', '<=', `${y}-12-31`);
+      const BORNE = {
+        day_entries: (col) => (estAdmin ? anneeEnCours(col) : col.where('employee_id', '==', user.uid)),
+        kid_attendance: anneeEnCours,
+      };
+      ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
+        const base = this.db.collection(c);
+        const un = (BORNE[c] ? BORNE[c](base) : base).onSnapshot(
+          { includeMetadataChanges: false },
+          (snap) => {
+            if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
+            if (c === 'day_entries') {
+              /* Ne vider QUE les employées réellement concernées.
+               * Vider tout le cache faisait relire l'historique COMPLET de chaque
+               * employée dès qu'une collègue enregistrait une heure — et cet
+               * historique n'est pas bornable : le solde reporté cumule les
+               * prestations depuis la mise en service, années précédentes
+               * comprises (voir monthSummary). Borner la lecture à l'année en
+               * cours ferait disparaître le report du 1er janvier. */
+              const touchees = new Set();
+              snap.docChanges().forEach((ch) => {
+                const e = (ch.doc.data() || {}).employee_id; if (e) touchees.add(e);
+              });
+              if (touchees.size) touchees.forEach((e) => delete this._entriesCache[e]);
+              else this._entriesCache = {};
+              this._oublier('prestationsPeriode:');
+            }
+            if (c === 'profiles') this._profilesCache = null;
+            if (c === 'months') this._oublier('mois:');
+            if (c === 'kids') this._oublier('enfants:');
+            if (c === 'kid_attendance') this._oublier('presences:', 'presencesPeriode:');
+            if (c === 'kid_prefill') this._oublier('preremplissage:');
+            if (c === 'schedule_templates') this._oublier('horaire:');
+            if (c === 'settings') this._oublier('reglages');
+            cb();
+          },
+          (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));
+        detacher.push(un);
+      });
+    };
+    // Se déclenche aussi au démarrage, une fois la session restaurée.
+    this.auth.onAuthStateChanged((user) => { poser(user); });
   }
 }
 
@@ -820,7 +1001,19 @@ class FirebaseStore {
 async function createStore() {
   // ...?store=demo force le mode local (utile pour tester sans toucher au cloud).
   const forced = new URLSearchParams(location.search).get('store');
-  if (forced !== 'demo' && HAS_FIREBASE && window.firebase) {
+  if (forced !== 'demo' && HAS_FIREBASE) {
+    /* Les bibliothèques Firebase viennent d'un serveur externe (gstatic.com) que
+     * le service worker ne met jamais en cache. Hors réseau, elles manquent.
+     * Basculer alors en mode démo est un piège : l'application s'ouvre sur une
+     * base LOCALE et FACTICE, où l'on peut encoder des présences en croyant
+     * travailler dans la vraie. On signale l'absence de réseau, et l'appelant
+     * affiche un écran explicite. Le mode démo reste accessible volontairement
+     * par ?store=demo. */
+    if (!window.firebase) {
+      const e = new Error('Connexion Internet requise.');
+      e.code = 'hors-ligne';
+      throw e;
+    }
     const app = firebase.apps && firebase.apps.length
       ? firebase.app() : firebase.initializeApp(window.APP_CONFIG.FIREBASE_CONFIG);
     const s = new FirebaseStore(app);

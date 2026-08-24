@@ -5,11 +5,17 @@ const { test, expect } = require('@playwright/test');
  * Tests end-to-end en MODE DÉMO.
  *
  * On force le mode démo en remplaçant js/config.js par une config vide (aucune
- * clé Supabase), et on coupe les CDN externes pour rester déterministe et
+ * clé Firebase), et on coupe les CDN externes pour rester déterministe et
  * hors-ligne. L'application gère l'absence de Chart.js / jsPDF (dégradé).
  */
 async function setupDemo(page) {
-  await page.route('**/js/config.js', (route) =>
+  /* Le motif doit accepter le paramètre de version : l'application demande
+   * « js/config.js?v=vAAAA.MM.JJ-N », qu'un glob « **\/js/config.js » ne
+   * reconnaît pas. Tant qu'il ne correspondait pas, la vraie configuration
+   * Firebase était servie et les tests ne basculaient en mode démo que parce
+   * que les CDN coupés faisaient échouer Firebase — un repli accidentel, pas
+   * le mode démo explicite qu'on croyait tester. */
+  await page.route(/\/js\/config\.js/, (route) =>
     route.fulfill({ contentType: 'application/javascript', body: 'window.APP_CONFIG = {};' }));
   await page.route(/cdn\.jsdelivr\.net|gstatic\.com/, (route) => route.abort());
 }
@@ -529,7 +535,9 @@ test('enfants : la fiche du mois est consultable, y compris par une employée', 
 test('utilisateurs : supprimer un compte exige une double confirmation', async ({ page }) => {
   await loginAdmin(page);
   await page.locator('.navbtn[data-v="employees"]').click();
-  const lignes = page.locator('table tbody tr');
+  // Cet onglet contient plusieurs tableaux (soldes de fin d'année, utilisateurs) :
+  // on vise explicitement celui des utilisateurs.
+  const lignes = page.locator('#usersTable tbody tr');
   const avant = await lignes.count();
 
   // Ni son propre compte, ni le dernier administrateur ne sont supprimables.

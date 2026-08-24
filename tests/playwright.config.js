@@ -3,7 +3,7 @@ const { defineConfig, devices } = require('@playwright/test');
 
 /**
  * Les tests s'exécutent en MODE DÉMO (localStorage) : déterministes, hors-ligne,
- * sans Supabase. Un petit serveur statique sert la racine du dépôt.
+ * sans Firebase. Un petit serveur statique sert la racine du dépôt.
  */
 const PORT = 4173;
 
@@ -16,6 +16,14 @@ module.exports = defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     trace: 'on-first-retry',
+    /* Service worker désactivé pendant les tests.
+     * Il court-circuite l'interception réseau de Playwright : les requêtes qu'il
+     * émet lui-même n'étaient PAS interceptées, si bien que `setupDemo` croyait
+     * neutraliser js/config.js alors que la vraie configuration Firebase était
+     * servie. Les tests ne tombaient en mode démo que par un repli accidentel.
+     * Le test du numéro de version lit sw.js directement (page.request.get) et
+     * n'a donc pas besoin d'un service worker actif. */
+    serviceWorkers: 'block',
   },
   projects: [
     {
