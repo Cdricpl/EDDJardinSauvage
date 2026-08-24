@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-10';
+const APP_VERSION = 'v2026.08.21-11';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -2261,14 +2261,17 @@ async function viewEmployees() {
     try {
       const data = await STORE.exportAll();
       const nameById = {}; (data.profiles || []).forEach((p) => (nameById[p.id] = p.full_name));
-      const rows = [['Employée', 'Date', 'Prévu début', 'Prévu fin', 'Réel début', 'Réel fin', 'Presté (min)', 'Écart (min)', 'Justification']];
+      // Sans la colonne « Temps de midi », une ligne « 14:00 → 18:00, presté 195 »
+      // était incompréhensible : les 45 minutes déduites n'apparaissaient nulle part.
+      const rows = [['Employée', 'Date', 'Prévu début', 'Prévu fin', 'Réel début', 'Réel fin',
+        'Temps de midi (min)', 'Presté (min)', 'Écart (min)', 'Justification']];
       (data.day_entries || [])
         .slice().sort((a, b) => (a.entry_date + a.employee_id).localeCompare(b.entry_date + b.employee_id))
         .forEach((e) => {
           const p = plannedMinutes(e), w = effectiveWorked(e);
           rows.push([nameById[e.employee_id] || e.employee_id, e.entry_date,
             e.planned_start || '', e.planned_end || '', e.start_time || '', e.end_time || '',
-            w, w - p, e.justification || '']);
+            breakMinutes(e), w, w - p, e.justification || '']);
         });
       downloadFile(`prestations_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
       toast('CSV prestations téléchargé');
@@ -2278,12 +2281,16 @@ async function viewEmployees() {
     try {
       const data = await STORE.exportAll();
       const kidById = {}; (data.kids || []).forEach((k) => (kidById[k.id] = k));
-      const rows = [['Nom', 'Prénom', 'Date de présence']];
+      /* La colonne « Statut » est indispensable : le fichier contient AUSSI les
+       * absences. Sans elle, sous un en-tête « Date de présence », une absence
+       * était comptée comme une présence — y compris dans un dossier d'agrément. */
+      const rows = [['Nom', 'Prénom', 'Date', 'Statut']];
+      const MOTS = { present: 'Présent', absent: 'Absence justifiée', unjustified: 'Absence injustifiée' };
       (data.kid_attendance || [])
         .slice().sort((a, b) => (a.entry_date + a.kid_id).localeCompare(b.entry_date + b.kid_id))
         .forEach((a) => {
           const k = kidById[a.kid_id] || {};
-          rows.push([k.last_name || '', k.first_name || '', a.entry_date]);
+          rows.push([k.last_name || '', k.first_name || '', a.entry_date, MOTS[statutDe(a)]]);
         });
       downloadFile(`presences_enfants_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
       toast('CSV présences téléchargé');
@@ -2385,15 +2392,16 @@ async function exportSheetPDF(empId) {
     if (!planned && !worked) continue;
     body.push([`${pad(d)}/${pad(CUR.m)}`,
       e.planned_start || '—', e.planned_end || '—',
-      e.start_time || '—', e.end_time || '—', fmtHM(worked),
-      fmtHM(worked - planned), e.justification || '']);
+      e.start_time || '—', e.end_time || '—',
+      breakMinutes(e) ? fmtBreak(breakMinutes(e)) : '—',   // sinon l'écart semble inexpliqué
+      fmtHM(worked), fmtHM(worked - planned), e.justification || '']);
   }
 
   if (!(await assurerPdf())) { // repli impression
     const w = window.open('', '_blank');
     if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Prestations — ${prof.full_name} — ${monthName(CUR.y, CUR.m)}</h2>
-      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>Prévu début</th><th>Prévu fin</th><th>Réel début</th><th>Réel fin</th><th>Presté</th><th>Écart</th><th>Justif.</th></tr>
+      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>Prévu début</th><th>Prévu fin</th><th>Réel début</th><th>Réel fin</th><th>Midi</th><th>Presté</th><th>Écart</th><th>Justif.</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
       <p><b>Total presté:</b> ${fmtHM(sum.worked)} — <b>Solde cumulé:</b> ${fmtHM(sum.closing)}</p>
       <button onclick="print()">Imprimer</button>`);
@@ -2404,7 +2412,7 @@ async function exportSheetPDF(empId) {
   const startY = await pdfHeader(doc, `Prestations — ${prof.full_name}`, monthName(CUR.y, CUR.m));
   doc.autoTable({
     startY,
-    head: [['Date', 'Prévu déb.', 'Prévu fin', 'Réel déb.', 'Réel fin', 'Presté', 'Écart', 'Justification']],
+    head: [['Date', 'Prévu déb.', 'Prévu fin', 'Réel déb.', 'Réel fin', 'Midi', 'Presté', 'Écart', 'Justification']],
     body: lignesPdf(body), styles: { fontSize: 9 }, headStyles: { fillColor: [59, 91, 219] },
   });
   let y = doc.lastAutoTable.finalY + 10;

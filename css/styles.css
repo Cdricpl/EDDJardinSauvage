@@ -349,6 +349,8 @@ button.addkid { padding:9px 16px; font-weight:700; }
   input:not([type=checkbox]), select, button { min-height:44px; font-size:17px; }
   button.small { min-height:38px; }
   .attend .presbtn { width:30px; height:32px; font-size:17px; }
+  /* Cibles tactiles : 34px suffisent a la souris, pas au doigt. */
+  .rowbtn { width:40px; height:40px; font-size:18px; }
   .grid input.cell, .grid select.cell { min-height:38px; font-size:16.5px; }
   .grid select.cell.time { width:98px; }
   th, td { padding:9px 8px; }

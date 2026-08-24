@@ -741,3 +741,44 @@ test('enfants retirés : ils restent effaçables définitivement', async ({ page
     return db.kids.some((k) => k.id === id) || db.kidatt.some((a) => a.kid_id === id);
   }, cible.id)).toBe(false);
 });
+
+test('exports : le temps de midi et le statut des présences y figurent', async ({ page }) => {
+  await loginAdmin(page);
+
+  // Un jour avec 45 minutes de temps de midi.
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  const row = await firstWorkedRow(page);
+  const jour = await row.locator('[data-k="start_time"]').getAttribute('data-date');
+  await row.locator('[data-k="break_minutes"]').selectOption('45');
+  await expect(row.locator('.c-worked')).toContainText('3h15');
+
+  // Une absence injustifiée.
+  await page.locator('.navbtn[data-v="children"]').click();
+  // Localisateur FIGÉ sur cette case : « la première .pres-v » désignerait une
+  // autre case dès le premier clic, puisque la classe change.
+  const vide = page.locator('table.attend tbody button.presbtn.pres-v').first();
+  const kid = await vide.getAttribute('data-kid');
+  const dateAbs = await vide.getAttribute('data-date');
+  const c = page.locator(`button.presbtn[data-kid="${kid}"][data-date="${dateAbs}"]`);
+  await c.click(); await c.click(); await c.click();          // → absence injustifiée
+  await expect(c).toHaveClass(/pres-nj/);
+
+  await page.locator('.navbtn[data-v="employees"]').click();
+
+  /* Sans la colonne « Temps de midi », une ligne « 14:00 → 18:00, presté 195 »
+   * est inexplicable pour qui lit le fichier. */
+  const [dl1] = await Promise.all([page.waitForEvent('download'), page.locator('#expCsvPresta').click()]);
+  const presta = (await (await dl1.createReadStream()).toArray()).join('');
+  expect(presta).toContain('Temps de midi (min)');
+  const ligne = presta.split('\r\n').find((l) => l.includes(jour));
+  expect(ligne, 'la ligne doit porter les 45 minutes déduites').toContain(';45;');
+
+  /* Le fichier des présences contient AUSSI les absences : sans statut, elles
+   * étaient comptées comme des présences, y compris dans un dossier d'agrément. */
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.locator('#expCsvKids').click()]);
+  const kids = (await (await dl2.createReadStream()).toArray()).join('');
+  expect(kids).toContain('Statut');
+  expect(kids).not.toContain('Date de présence');
+  const ligneAbs = kids.split('\r\n').find((l) => l.includes(dateAbs));
+  expect(ligneAbs).toContain('Absence injustifiée');
+});
