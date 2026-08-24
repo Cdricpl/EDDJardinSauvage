@@ -614,3 +614,45 @@ test('utilisateurs : le bouton Supprimer est visible sans défilement', async ({
   });
   expect(dansLeCadre, 'le bouton Supprimer doit tenir dans le cadre visible').toBe(true);
 });
+
+test('feuille : le temps de midi n’exige aucune justification', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#warnBanner')).toBeHidden();
+
+  // Une ligne sans écart au départ.
+  const idx = await page.evaluate(() => [...document.querySelectorAll('#sheetTable tbody tr')]
+    .findIndex((r) => {
+      const s = r.querySelector('[data-k="start_time"]');
+      const e = r.querySelector('[data-k="end_time"]');
+      return s && e && s.value && e.value && r.querySelector('.c-delta').textContent.trim() === '—';
+    }));
+  expect(idx).toBeGreaterThanOrEqual(0);
+  const row = page.locator('#sheetTable tbody tr').nth(idx);
+  const justif = row.locator('.c-justif input');
+
+  // La pause creuse un écart… mais elle l'explique déjà d'elle-même.
+  await row.locator('[data-k="break_minutes"]').selectOption('45');
+  await expect(row.locator('.c-delta')).toHaveText('-0h45');
+  await expect(justif).toHaveAttribute('placeholder', '');
+  await expect(justif).not.toHaveClass(/err/);
+  await expect(page.locator('#warnBanner')).toBeHidden();
+
+  // En revanche, un horaire réellement différent du prévu reste à justifier.
+  await pickTime(row.locator('[data-k="end_time"]'), '21:00');
+  await expect(justif).toHaveAttribute('placeholder', 'Justification requise');
+  await expect(page.locator('#warnBanner')).toBeVisible();
+});
+
+test('entête : le raccourci « Installer » est proposé à tous', async ({ page }) => {
+  await loginEmployee(page);
+  // Le raccourci n'a rien d'administratif : chacune doit pouvoir le créer.
+  await expect(page.locator('#installBtn')).toBeVisible();
+
+  // Sans prise en charge native (cas d'un navigateur tiers), on explique la
+  // marche à suivre au lieu de ne rien faire.
+  let message = null;
+  page.on('dialog', async (d) => { message = d.message(); await d.accept(); });
+  await page.locator('#installBtn').click();
+  await expect.poll(() => message).toContain('Installer');
+});

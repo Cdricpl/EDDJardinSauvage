@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-7';
+const APP_VERSION = 'v2026.08.21-8';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -243,16 +243,20 @@ function breakSelect(date, value, disabled) {
     .map((m) => `<option value="${m}"${m === v ? ' selected' : ''}>${fmtBreak(m)}</option>`).join('');
   return `<select class="cell brk${v ? ' brk-on' : ''}" data-k="break_minutes" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts}</select>`;
 }
-// Heures PRESTÉES effectives : calculées depuis début/fin réels, moins le temps
-// de midi ; si l'employée n'a rien modifié, on retombe sur l'horaire prévu
-// (pré-remplissage), lui aussi diminué de la pause éventuelle.
-function effectiveWorked(e) {
-  const pause = breakMinutes(e);
+// Heures ENCODÉES, avant déduction du temps de midi.
+function grossWorked(e) {
   const s = timeToMin(e.start_time), f = timeToMin(e.end_time);
-  if (s != null && f != null) return Math.max(0, f - s - pause);
-  if (!e.worked_touched) return Math.max(0, plannedMinutes(e) - pause);
-  return Math.max(0, (e.worked_minutes || 0) - pause);
+  if (s != null && f != null) return Math.max(0, f - s);
+  if (!e.worked_touched) return plannedMinutes(e);
+  return e.worked_minutes || 0;
 }
+// Heures PRESTÉES effectives : les heures encodées, moins le temps de midi.
+function effectiveWorked(e) { return Math.max(0, grossWorked(e) - breakMinutes(e)); }
+/* Écart qui doit être JUSTIFIÉ par écrit : celui qui subsiste une fois le temps
+ * de midi mis de côté. Une pause encodée explique déjà l'écart qu'elle crée —
+ * demander en plus une phrase serait redondant. Seule une différence entre
+ * l'horaire prévu et l'horaire réellement encodé appelle une explication. */
+function deltaAJustifier(e) { return grossWorked(e) - plannedMinutes(e); }
 function fmtHM(min) {
   const sign = min < 0 ? '-' : '';
   min = Math.abs(Math.round(min));
@@ -414,6 +418,77 @@ async function monthSummary(empId, y, m) {
 }
 
 /* ================================================================
+ * Raccourci sur l'ordinateur (PWA)
+ * ----------------------------------------------------------------
+ * Il ne s'agit pas d'une installation classique : le navigateur crée un
+ * raccourci qui ouvre le programme dans sa propre fenêtre, sans barre
+ * d'adresse. Rien n'est déposé dans « Programmes », et le désinstaller
+ * revient à supprimer le raccourci.
+ * Chrome et Edge proposent cela via une icône discrète dans la barre
+ * d'adresse, que personne ne remarque : d'où ce bouton explicite.
+ * ================================================================ */
+let INSTALL_PROMPT = null;
+const dejaInstalle = () =>
+  (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+  || window.navigator.standalone === true;
+
+window.addEventListener('beforeinstallprompt', (ev) => {
+  ev.preventDefault();          // on déclenche nous-mêmes, au clic
+  INSTALL_PROMPT = ev;
+  majBoutonInstaller();
+});
+window.addEventListener('appinstalled', () => {
+  INSTALL_PROMPT = null;
+  majBoutonInstaller();
+  toast('Raccourci créé. Vous pouvez ouvrir le programme depuis votre bureau.');
+});
+
+function majBoutonInstaller() {
+  const b = document.getElementById('installBtn');
+  if (!b) return;
+  // Masqué seulement si le programme tourne DÉJÀ depuis son raccourci.
+  b.style.display = dejaInstalle() ? 'none' : '';
+}
+
+// Marche à suivre quand le navigateur n'offre pas d'installation automatique.
+function marcheASuivreInstallation() {
+  const ua = navigator.userAgent;
+  if (/Firefox/i.test(ua)) {
+    return "Firefox ne crée pas de raccourci automatiquement.\n\n"
+      + "Le plus simple : ouvrez ce programme dans Chrome ou Edge, puis cliquez sur « 📥 Installer ».\n\n"
+      + "Sinon, réduisez la fenêtre et faites glisser l'adresse du site (dans la barre d'adresse) "
+      + "vers votre bureau : cela crée un raccourci classique.";
+  }
+  if (/iPhone|iPad|iPod/i.test(ua)) {
+    return "Sur iPhone / iPad :\n\n"
+      + "1. Touchez le bouton Partager (le carré avec une flèche vers le haut)\n"
+      + "2. Choisissez « Sur l'écran d'accueil »";
+  }
+  if (/Macintosh/i.test(ua) && /Safari/i.test(ua) && !/Chrome/i.test(ua)) {
+    return "Sur Safari (Mac) :\n\nMenu « Fichier » → « Ajouter au Dock ».";
+  }
+  return "Dans Chrome ou Edge :\n\n"
+    + "1. Cliquez sur le menu ⋮ (en haut à droite du navigateur)\n"
+    + "2. Choisissez « Installer EDD Jardin Sauvage »\n"
+    + "   (parfois rangé sous « Enregistrer et partager » ou « Applications »)\n\n"
+    + "Une icône dans la barre d'adresse propose parfois directement l'installation.";
+}
+
+async function installerRaccourci() {
+  if (dejaInstalle()) { toast('Le programme est déjà ouvert depuis son raccourci.'); return; }
+  if (!INSTALL_PROMPT) { alert(marcheASuivreInstallation()); return; }
+  try {
+    INSTALL_PROMPT.prompt();
+    const { outcome } = await INSTALL_PROMPT.userChoice;
+    INSTALL_PROMPT = null;
+    if (outcome !== 'accepted') toast('Installation annulée — vous pourrez la refaire plus tard.');
+  } catch (e) {
+    INSTALL_PROMPT = null;
+    alert(marcheASuivreInstallation());
+  }
+}
+
+/* ================================================================
  * Démarrage
  * ================================================================ */
 async function boot() {
@@ -462,6 +537,9 @@ async function afterLogin() {
   const backupBtn = document.getElementById('backupBtn');
   if (ME.role === 'admin') { backupBtn.style.display = ''; backupBtn.onclick = () => backupJSON(); }
   else { backupBtn.style.display = 'none'; }
+  // Raccourci sur l'ordinateur : proposé à TOUT LE MONDE, employées comprises.
+  const installBtn = document.getElementById('installBtn');
+  if (installBtn) { installBtn.onclick = () => installerRaccourci(); majBoutonInstaller(); }
   startIdleTimer();   // déconnexion auto après 15 min d'inactivité
   buildNav();
   render();
@@ -715,7 +793,7 @@ async function viewSheet() {
     const worked = effectiveWorked(e);
     const delta = worked - planned;
     const modified = !!e.worked_touched;
-    const needJustif = delta !== 0 && !e.justification;
+    const needJustif = deltaAJustifier(e) !== 0 && !e.justification;
     if (needJustif) warnings++;
     // Valeurs réelles affichées : par défaut = prévu (pré-remplissage) si non modifié.
     const realStart = e.start_time || (!modified ? (e.planned_start || '') : '');
@@ -802,7 +880,7 @@ async function viewSheet() {
     const e = byDate[date] || {};
     const planned = plannedMinutes(e), worked = effectiveWorked(e), delta = worked - planned;
     const modified = !!e.worked_touched;
-    const needJustif = delta !== 0 && !e.justification;
+    const needJustif = deltaAJustifier(e) !== 0 && !e.justification;
     const weekend = new Date(date.slice(0, 4), Number(date.slice(5, 7)) - 1, Number(date.slice(8))).getDay();
     tr.className = [(weekend === 0 || weekend === 6) ? 'weekend' : '', modified ? 'modified' : ''].filter(Boolean).join(' ');
     const [, mo, dd] = date.split('-');
@@ -819,7 +897,7 @@ async function viewSheet() {
     for (let d = 1; d <= dim; d++) {
       const e = byDate[`${CUR.y}-${pad(CUR.m)}-${pad(d)}`]; if (!e) continue;
       const p = plannedMinutes(e), w = effectiveWorked(e); P += p; W += w;
-      if ((w - p) !== 0 && !e.justification) warn++;
+      if (deltaAJustifier(e) !== 0 && !e.justification) warn++;
     }
     const delta = W - P, closing = baseCarry + delta;
     setTile('tPlanned', fmtHM(P)); setTile('tWorked', fmtHM(W));
