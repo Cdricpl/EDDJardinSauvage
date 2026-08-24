@@ -561,3 +561,56 @@ test('utilisateurs : supprimer un compte exige une double confirmation', async (
   await suppr.click();
   await expect(lignes).toHaveCount(avant - 1);
 });
+
+test('enfants : seul l’administrateur peut effacer définitivement un enfant', async ({ page }) => {
+  // Une employée consulte la fiche mais n'y trouve aucun moyen d'effacer.
+  await loginEmployee(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await page.locator('[data-fiche]').first().click();
+  await expect(page.locator('#ficheEnfant')).toBeVisible();
+  await expect(page.locator('#ficheDel')).toHaveCount(0);
+
+  // L'administrateur, lui, dispose du bouton — protégé par une double confirmation.
+  await page.locator('#logoutBtn').click();
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  const avant = await page.locator('table.attend tbody tr').count();
+  // Le prénom RÉEL, pas le texte affiché : la grille met les noms en capitales
+  // par CSS, et `innerText` renverrait « EMMA » là où la fiche attend « Emma ».
+  const id = await page.locator('[data-fiche]').first().getAttribute('data-fiche');
+  const prenom = await page.evaluate((kid) => {
+    const db = JSON.parse(localStorage.getItem('ecole_db'));
+    return (db.kids.find((k) => k.id === kid) || {}).first_name;
+  }, id);
+  await page.locator('[data-fiche]').first().click();
+  await expect(page.locator('#ficheDel')).toHaveCount(1);
+
+  // Un prénom mal recopié annule l'effacement.
+  const faux = ['', 'pas le bon'];
+  const h1 = async (d) => d.accept(faux.shift() ?? '');
+  page.on('dialog', h1);
+  await page.locator('#ficheDel').click();
+  await expect(page.locator('#toast')).toContainText('annulé');
+  await expect(page.locator('table.attend tbody tr')).toHaveCount(avant);
+  page.off('dialog', h1);
+
+  // Le bon prénom efface l'enfant et ses présences.
+  const vrai = ['', prenom];
+  page.on('dialog', (d) => d.accept(vrai.shift() ?? ''));
+  await page.locator('#ficheDel').click();
+  await expect(page.locator('table.attend tbody tr')).toHaveCount(avant - 1);
+});
+
+test('utilisateurs : le bouton Supprimer est visible sans défilement', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const btn = page.locator('[data-del]').first();
+  await expect(btn).toBeVisible();
+  // La cellule était en `nowrap` : le 3e bouton sortait du cadre défilant.
+  const dansLeCadre = await btn.evaluate((b) => {
+    const r = b.getBoundingClientRect();
+    const w = b.closest('.table-wrap').getBoundingClientRect();
+    return r.right <= w.right + 1 && r.left >= w.left - 1;
+  });
+  expect(dansLeCadre, 'le bouton Supprimer doit tenir dans le cadre visible').toBe(true);
+});

@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-6';
+const APP_VERSION = 'v2026.08.21-7';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -1405,9 +1405,37 @@ async function viewChildren() {
         <div class="stat"><div class="num">${encodes}/${c.attendus || '—'}</div><div class="lbl">Jours encodés / attendus</div></div>
       </div>
       <p style="margin:12px 0 0"><strong class="small">Détail des absences :</strong><br>${ligneAbs}</p>
-      <p class="muted small" style="margin-top:8px">« Attendus » = jours habituels de l'enfant sur le mois affiché.</p>`;
+      <p class="muted small" style="margin-top:8px">« Attendus » = jours habituels de l'enfant sur le mois affiché.</p>
+      ${ME.role === 'admin' ? `<div style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px">
+        <button class="small red" id="ficheDel">🗑️ Effacer définitivement cet enfant</button>
+        <span class="muted small"> — sa fiche et TOUTES ses présences, sans retour possible.
+        Pour retirer l'enfant en gardant l'historique, utilisez ✕ dans la liste.</span>
+      </div>` : ''}`;
     fiche.classList.remove('hidden');
     document.getElementById('ficheClose').onclick = () => fiche.classList.add('hidden');
+    // Effacement définitif — administration uniquement, avec double confirmation.
+    const delBtn = document.getElementById('ficheDel');
+    if (delBtn) delBtn.onclick = async () => {
+      let n;
+      try { n = await STORE.countKidData(k.id); }
+      catch (e) { toast('Erreur : ' + e.message, 'error'); return; }
+      if (!confirm(
+        `Effacer DÉFINITIVEMENT ${kidLabel(k)} ?\n\n`
+        + `Seront supprimées : sa fiche et ${n.kid_attendance} présence(s)/absence(s) enregistrée(s), `
+        + `sur toutes les années.\n\n`
+        + `Les statistiques déjà calculées en tiendront compte : les moyennes changeront.\n`
+        + `Cette action est irréversible — faites une sauvegarde (💾) avant.`)) return;
+      const saisi = prompt(`Confirmation : tapez le prénom « ${k.first_name} » pour effacer.`);
+      if (saisi == null) return;
+      if (saisi.trim() !== (k.first_name || '').trim()) { toast('Prénom incorrect — effacement annulé.', 'error'); return; }
+      try {
+        await STORE.deleteKid(k.id);
+        PREFILLED_KIDS.clear();
+        toast(`${kidLabel(k)} effacé définitivement`);
+        fiche.classList.add('hidden');
+        render();
+      } catch (e) { toast('Effacement impossible : ' + e.message, 'error'); }
+    };
     fiche.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   });
 
@@ -1734,8 +1762,10 @@ async function viewEmployees() {
   const nbAdmins = profs.filter((p) => p.role === 'admin' && p.active).length;
   const rows = profs.map((p) => {
     const isLastAdmin = p.role === 'admin' && nbAdmins <= 1;
+    // « Archiver » est réversible : il ne doit pas porter la couleur d'alerte,
+    // sinon on le confond avec la suppression définitive juste à côté.
     const activeBtn = p.role === 'employee'
-      ? (p.active ? `<button class="small red" data-arch="${p.id}">Archiver</button>`
+      ? (p.active ? `<button class="small gray" data-arch="${p.id}" title="Retirer de la liste en conservant l'historique">📥 Archiver</button>`
                   : `<button class="small green" data-react="${p.id}">Réactiver</button>`)
       : '';
     // Suppression définitive. Interdite sur son propre compte (on se couperait
@@ -1760,7 +1790,7 @@ async function viewEmployees() {
       <td>${roleSel}</td>
       ${soldeCell}
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
-      <td class="nowrap">
+      <td class="actions">
         <button class="small" data-reset="${p.id}">✉️ Réinit. mot de passe</button>
         ${activeBtn}
         ${suppr}

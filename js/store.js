@@ -311,6 +311,22 @@ class DemoStore {
     if (!k.first_name) throw new Error('Le prénom est requis.');
     db.kids.push(k); this._save(db); return k;
   }
+  // Compte les présences d'un enfant (pour annoncer ce qui sera perdu).
+  async countKidData(id) {
+    return { kid_attendance: (this._db().kidatt || []).filter(a => a.kid_id === id).length };
+  }
+  // Suppression DÉFINITIVE : la fiche et TOUTES ses présences.
+  async deleteKid(id) {
+    const db = this._db();
+    const n = await this.countKidData(id);
+    db.kids = (db.kids || []).filter(k => k.id !== id);
+    db.kidatt = (db.kidatt || []).filter(a => a.kid_id !== id);
+    // Sans cela, un enfant recréé plus tard avec le même identifiant hériterait
+    // du suivi de pré-encodage de l'ancien.
+    db.kidprefill = (db.kidprefill || []).filter(x => x.kid_id !== id);
+    this._save(db);
+    return n;
+  }
   async setKidInfo(id, info) {
     const first = (info.first_name || '').trim();
     if (!first) throw new Error('Le prénom est requis.');
@@ -736,6 +752,21 @@ class FirebaseStore {
   async setKidActive(id, active) {
     await this.db.collection('kids').doc(id).set({ active }, { merge: true });
     this._oublier('enfants:');
+  }
+  // Compte les présences d'un enfant (pour annoncer ce qui sera perdu).
+  async countKidData(id) {
+    const snap = await this.db.collection('kid_attendance').where('kid_id', '==', id).get();
+    return { kid_attendance: snap.size };
+  }
+  // Suppression DÉFINITIVE : la fiche et TOUTES ses présences.
+  async deleteKid(id) {
+    const snap = await this.db.collection('kid_attendance').where('kid_id', '==', id).get();
+    const ops = snap.docs.map((d) => ({ ref: d.ref, delete: true }));
+    ops.push({ ref: this.db.collection('kids').doc(id), delete: true });
+    await this._commit(ops);
+    await this.clearKidPrefill(id);   // sinon le suivi de pré-encodage subsiste
+    this._oublier('enfants:', 'presences:', 'presencesAn:');
+    return { kid_attendance: snap.size };
   }
   async setKidInfo(id, info) {
     const first_name = (info.first_name || '').trim();

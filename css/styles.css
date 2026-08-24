@@ -37,6 +37,8 @@ html {
 body {
   margin:0; color:var(--text);
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  /* Taille de base relevée : tout le texte qui n'a pas de taille propre suit. */
+  font-size:17px;
   line-height:1.5;
   background:
     radial-gradient(1200px 500px at 100% -10%, rgba(138,31,31,.05), transparent 60%),
@@ -47,7 +49,7 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
 /* ---------- Connexion ---------- */
 .login-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
 .login-card { width:100%; max-width:400px; text-align:center; padding:30px 26px; border-top:4px solid var(--brand); }
-.login-card h1 { margin:6px 0 2px; font-size:26px; color:var(--ink); }
+.login-card h1 { margin:6px 0 2px; font-size:27.5px; color:var(--ink); }
 .login-card .logo-login { max-width:190px; margin:0 auto 6px; }
 .login-card label { text-align:left; }
 .login-card input { text-align:center; }
@@ -59,15 +61,15 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
   color:#f6ede0; padding:14px 22px; box-shadow:var(--shadow-sm);
   position:sticky; top:0; z-index:10;
 }
-.brand { display:flex; align-items:center; gap:12px; font-family:var(--serif); font-size:20px; font-weight:700; }
+.brand { display:flex; align-items:center; gap:12px; font-family:var(--serif); font-size:21.5px; font-weight:700; }
 .brand .logo-header { height:38px; width:auto; border-radius:8px; background:#fffdf9; padding:3px 5px; box-shadow:var(--shadow-sm); }
-.who { font-size:14px; opacity:.9; margin-right:8px; }
+.who { font-size:15.5px; opacity:.9; margin-right:8px; }
 /* Groupe de droite de l'entete : reste sur une seule ligne. */
 .topbar > div:last-of-type { display:flex; align-items:center; gap:6px; flex-shrink:0; }
 .topbar .badge { white-space:nowrap; }
 /* Numero de version, centre dans l'entete (verification de mise a jour). */
 .version {
-  flex:1; text-align:center; font-size:12.5px; letter-spacing:.4px;
+  flex:1; text-align:center; font-size:14px; letter-spacing:.4px;
   color:#c9b9a4; font-variant-numeric:tabular-nums; white-space:nowrap;
 }
 
@@ -91,7 +93,7 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
   background:var(--card); border:1px solid var(--border); border-radius:16px;
   padding:22px; margin-bottom:20px; box-shadow:var(--shadow);
 }
-.card h2 { margin:0 0 4px; font-size:20px; color:var(--ink); }
+.card h2 { margin:0 0 4px; font-size:21.5px; color:var(--ink); }
 .card h3 { color:var(--ink); }
 .row-between { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 
@@ -104,14 +106,14 @@ button {
 button:hover { background:var(--primary-dark); }
 button:active { transform:translateY(1px); }
 button:disabled { background:var(--gray); cursor:not-allowed; box-shadow:none; }
-button.big { width:100%; padding:14px; font-size:16px; margin-top:16px; border-radius:12px; }
-button.small { padding:8px 12px; font-size:13px; border-radius:9px; }
+button.big { width:100%; padding:14px; font-size:17px; margin-top:16px; border-radius:12px; }
+button.small { padding:8px 12px; font-size:14.5px; border-radius:9px; }
 button.green { background:var(--green); } button.green:hover { background:var(--green-dark); }
 button.red { background:var(--red); } button.red:hover { background:var(--red-dark); }
 button.gray { background:#b7ab97; } button.gray:hover { background:#a89b86; }
 
 /* ---------- Formulaires ---------- */
-label { display:block; font-size:13px; font-weight:700; margin:10px 0 5px; color:#6f6455; letter-spacing:.2px; }
+label { display:block; font-size:14.5px; font-weight:700; margin:10px 0 5px; color:#6f6455; letter-spacing:.2px; }
 input, select, textarea {
   font:inherit; width:100%; padding:10px 11px; border:1px solid var(--border-strong);
   border-radius:10px; background:#fff; color:var(--text); transition:border-color .15s, box-shadow .15s;
@@ -125,14 +127,14 @@ textarea { min-height:70px; resize:vertical; }
 
 /* ---------- Barre mois / employée ---------- */
 .toolbar { display:flex; align-items:center; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
-.toolbar strong { font-family:var(--serif); font-size:18px; color:var(--ink); }
+.toolbar strong { font-family:var(--serif); font-size:19.5px; color:var(--ink); }
 .toolbar select { width:auto; min-width:150px; }
 
 /* ---------- Tableaux ---------- */
 .table-wrap { overflow-x:auto; border-radius:12px; }
-table { width:100%; border-collapse:collapse; font-size:14px; }
+table { width:100%; border-collapse:collapse; font-size:15.5px; }
 th, td { text-align:left; padding:10px 11px; border-bottom:1px solid var(--border); }
-th { background:#f2ead9; color:#6b5f4c; font-weight:700; font-size:12.5px; letter-spacing:.3px; text-transform:uppercase; }
+th { background:#f2ead9; color:#6b5f4c; font-weight:700; font-size:14px; letter-spacing:.3px; text-transform:uppercase; }
 .table-wrap table:not(.grid) tbody tr:nth-child(even) { background:#faf5ec; }
 .table-wrap table:not(.grid) tbody tr:hover { background:#fff4e2; }
 
@@ -144,7 +146,7 @@ th { background:#f2ead9; color:#6b5f4c; font-weight:700; font-size:12.5px; lette
 .grid select.cell { border:none; padding:6px; background:transparent; }
 .grid select.cell.time { width:84px; }
 /* Temps de midi : colonne etroite, elle reste discrete car rarement utilisee. */
-.grid select.cell.brk { width:92px; font-size:13px; color:var(--muted); }
+.grid select.cell.brk { width:92px; font-size:14.5px; color:var(--muted); }
 .grid select.cell.brk:not(.brk-on) { opacity:.75; }
 .grid select.cell.brk.brk-on { color:var(--red-dark); font-weight:700; opacity:1; }
 .grid input.cell:focus, .grid select.cell:focus { outline:2px solid var(--primary); border-radius:6px; }
@@ -161,7 +163,7 @@ tr.weekend td { background:#f7f2e8; color:#b3a893; }
 .grid td.grp-real { background:#f5fbf7; }
 .grid tr.modified td { background:#fdf6e3; }
 .grid tr.modified td:first-child { box-shadow:inset 3px 0 0 var(--orange); }
-.dot { color:var(--orange); font-size:11px; }
+.dot { color:var(--orange); font-size:12.5px; }
 .legend { display:inline-block; margin:2px 14px 2px 0; }
 .legend .sw { display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:middle; margin-right:5px; }
 .legend .sw.grp-plan-h { background:var(--plan-bg); border:1px solid var(--plan); }
@@ -178,7 +180,7 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
   max-height:calc(100vh - 240px); overflow:auto;
   border:1px solid var(--border); border-radius:12px;
 }
-.attend { border-collapse:separate; border-spacing:0; font-size:13px; }
+.attend { border-collapse:separate; border-spacing:0; font-size:14.5px; }
 /* --- En-tête collant : ligne des jours, puis ligne des totaux juste dessous. --- */
 .attend thead tr:first-child > * { position:sticky; top:0; z-index:3; height:38px; }
 .attend thead tr.totrow > *      { position:sticky; top:38px; z-index:3; }
@@ -202,7 +204,7 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
 .attend thead .kidname, .attend tfoot .kidname { background:#f2ead9; }
 /* Le nom de l'enfant n'est pas un libellé de colonne : il garde la couleur du
    texte courant plutôt que le doré discret des en-têtes de tableau. */
-.attend tbody .kidname { text-transform:none; letter-spacing:0; color:var(--text); font-size:13px; }
+.attend tbody .kidname { text-transform:none; letter-spacing:0; color:var(--text); font-size:14.5px; }
 
 /* --- Identité de l'enfant : pastille, nom, puis infos empilées ---
    Empilé plutôt qu'en ligne : sur 31 colonnes, une ligne d'identité courte
@@ -211,14 +213,14 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
 .kidcell .avatar {
   flex:0 0 30px; width:30px; height:30px; border-radius:50%;
   display:flex; align-items:center; justify-content:center;
-  color:#fff; font-size:12px; font-weight:700; letter-spacing:.5px;
+  color:#fff; font-size:13.5px; font-weight:700; letter-spacing:.5px;
   text-transform:none; font-family:system-ui,sans-serif;
 }
 .kidcell .kidinfo { flex:1; min-width:0; }
 /* Le nom est un bouton (il ouvre la fiche du mois) mais doit se lire comme un
    titre de ligne : on neutralise l'apparence de bouton. */
 button.kidnom {
-  font-weight:700; font-size:13px; line-height:1.25; white-space:normal;
+  font-weight:700; font-size:14.5px; line-height:1.25; white-space:normal;
   text-transform:uppercase; letter-spacing:.2px; text-align:left;
   background:transparent; color:var(--text); border:0; box-shadow:none;
   padding:0; margin:0; min-height:0; cursor:pointer; font-family:inherit;
@@ -226,24 +228,24 @@ button.kidnom {
 button.kidnom:hover { background:transparent; color:var(--primary); text-decoration:underline; }
 button.kidnom:focus-visible { outline:2px solid var(--primary); outline-offset:2px; border-radius:4px; }
 /* Étiquettes de dates dans la fiche récapitulative. */
-.abs-tag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; margin:2px 4px 2px 0; }
+.abs-tag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:13.5px; font-weight:700; margin:2px 4px 2px 0; }
 .abs-tag.j  { background:#fbe4e3; color:var(--red-dark); }
 .abs-tag.nj { background:#fbe0d2; color:#a5480f; }
 .kidcell .kidmeta {
-  font-size:11.5px; font-weight:500; color:var(--muted);
+  font-size:13px; font-weight:500; color:var(--muted);
   text-transform:none; letter-spacing:0; line-height:1.45; white-space:nowrap;
 }
 .kidcell .kidacts { display:flex; flex-direction:column; gap:2px; }
 .iconbtn {
   background:transparent; box-shadow:none; border:0; cursor:pointer;
-  padding:2px 4px; font-size:14px; line-height:1; border-radius:6px; min-height:0;
+  padding:2px 4px; font-size:15.5px; line-height:1; border-radius:6px; min-height:0;
 }
 .iconbtn.edit { color:var(--primary); }
 .iconbtn.del  { color:var(--red); }
 .iconbtn:hover { background:var(--paper-2); }
 .iconbtn:focus-visible { outline:2px solid var(--primary); }
 
-.attend .daycol { width:30px; padding:4px 1px; font-size:11px; line-height:1.15; }
+.attend .daycol { width:30px; padding:4px 1px; font-size:12.5px; line-height:1.15; }
 .attend .daycol .dnum { font-weight:700; }
 .attend .daycol .dini { color:var(--muted); font-weight:400; }
 .attend .daycol.dim .dnum, .attend .daycol.dim .dini { color:var(--red); }  /* dimanche = repère de semaine */
@@ -254,7 +256,7 @@ button.kidnom:focus-visible { outline:2px solid var(--primary); outline-offset:2
 /* --- Cellule de présence à 3 états : ✓ présent / ✗ absent / — non défini --- */
 .presbtn {
   width:26px; height:26px; padding:0; border:1px solid transparent; border-radius:7px;
-  background:#f1ece2; color:var(--muted); font-size:14px; font-weight:700; line-height:1;
+  background:#f1ece2; color:var(--muted); font-size:15.5px; font-weight:700; line-height:1;
   cursor:pointer; box-shadow:none; min-height:0;
   display:inline-flex; align-items:center; justify-content:center;
 }
@@ -280,38 +282,38 @@ button.kidnom:focus-visible { outline:2px solid var(--primary); outline-offset:2
   margin-top:0; padding:10px 12px; border:1px solid var(--border); border-top:0;
   border-radius:0 0 10px 10px; background:#fdfbf6;
 }
-.legtitle { font-weight:700; color:var(--primary); font-size:13px; }
-.pres-leg { display:inline-flex; align-items:center; gap:6px; font-size:13px; margin-right:12px; }
-.pres-leg .presbtn { cursor:default; width:24px; height:24px; font-size:13px; }
-.kidcount { font-size:13px; color:var(--text); }
+.legtitle { font-weight:700; color:var(--primary); font-size:14.5px; }
+.pres-leg { display:inline-flex; align-items:center; gap:6px; font-size:14.5px; margin-right:12px; }
+.pres-leg .presbtn { cursor:default; width:24px; height:24px; font-size:14.5px; }
+.kidcount { font-size:14.5px; color:var(--text); }
 button.addkid { padding:9px 16px; font-weight:700; }
 .card.sub { background:#fbf6ec; margin:10px 0 4px; box-shadow:none; border:1px solid var(--border); }
 .daychks { display:flex; flex-wrap:wrap; gap:10px; margin-top:4px; }
-.daychk { display:inline-flex; align-items:center; gap:5px; font-weight:600; font-size:13px; color:var(--text); }
+.daychk { display:inline-flex; align-items:center; gap:5px; font-weight:600; font-size:14.5px; color:var(--text); }
 .daychk input { width:auto; }
 
 /* ---------- Tuiles de stats ---------- */
 .stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
 .stat { background:linear-gradient(180deg,#fffdf9,#faf4e9); border:1px solid var(--border); border-radius:12px; padding:14px; text-align:center; }
-.stat .num { font-size:23px; font-weight:800; font-family:var(--serif); color:var(--ink); }
-.stat .lbl { font-size:12px; color:var(--muted); }
+.stat .num { font-size:24.5px; font-weight:800; font-family:var(--serif); color:var(--ink); }
+.stat .lbl { font-size:13.5px; color:var(--muted); }
 
 /* Statistique annuelle en vedette */
 .hero-stat { text-align:center; padding:26px 16px; border-radius:16px; border:1px solid var(--border);
   background:radial-gradient(600px 200px at 50% -20%, color-mix(in srgb,var(--primary) 12%, transparent), transparent 70%), linear-gradient(180deg,#fffdf9,#f6efe2); }
 .hero-stat .big { font-size:60px; font-weight:800; line-height:1; font-family:var(--serif); color:var(--primary); }
-.hero-stat .lbl2 { font-size:16px; margin-top:8px; }
+.hero-stat .lbl2 { font-size:17px; margin-top:8px; }
 
 /* ---------- Badges & messages ---------- */
-.badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700; }
+.badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:13.5px; font-weight:700; }
 .badge.open { background:#efe7d7; color:#7a6d57; }
 .badge.validated { background:#e7f4ec; color:var(--green-dark); }
 .badge.pending { background:#fbefd0; color:#a5760f; }
 .badge.refused { background:#f7e0df; color:var(--red-dark); }
-.msg { padding:11px 14px; border-radius:10px; margin:10px 0; font-size:14px; background:#eef2fb; color:#2f48af; }
+.msg { padding:11px 14px; border-radius:10px; margin:10px 0; font-size:15.5px; background:#eef2fb; color:#2f48af; }
 .msg.error { background:#f8e2e1; color:var(--red-dark); }
 .msg.ok { background:#e7f4ec; color:var(--green-dark); }
-.muted { color:var(--muted); } .small { font-size:12px; }
+.muted { color:var(--muted); } .small { font-size:13.5px; }
 .hidden { display:none; }
 /* Réservé aux lecteurs d'écran (visuellement masqué). */
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
@@ -319,7 +321,7 @@ button.addkid { padding:9px 16px; font-weight:700; }
 
 /* ---------- Toast & barre de chargement ---------- */
 .toast { display:none; position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
-  background:var(--green); color:#fff; padding:12px 20px; border-radius:12px; box-shadow:var(--shadow); z-index:50; font-size:14px; }
+  background:var(--green); color:#fff; padding:12px 20px; border-radius:12px; box-shadow:var(--shadow); z-index:50; font-size:15.5px; }
 .toast.error { background:var(--red); }
 #loadbar { position:fixed; top:0; left:0; height:3px; width:0; background:var(--brand); z-index:100; opacity:0; transition:width .2s ease; }
 #loadbar.on { width:80%; opacity:1; transition:width 1.2s ease; }
@@ -330,24 +332,24 @@ button.addkid { padding:9px 16px; font-weight:700; }
 
 /* ---------- Lisibilité smartphone ---------- */
 @media (max-width:600px) {
-  body { font-size:16px; }
+  body { font-size:17px; }
   .container { padding:0 10px; margin:16px auto; }
   .card { padding:16px; border-radius:14px; }
   .topbar { padding:12px 12px; gap:8px; }
-  .brand { font-size:16px; gap:9px; min-width:0; }
+  .brand { font-size:17px; gap:9px; min-width:0; }
   .brand .logo-header { height:32px; }
   /* Sur petit ecran, le logo suffit : masquer le titre libere la place pour
      la version et le bouton de deconnexion (qui etait tronque). */
   .brand > span:not(.badge) { display:none; }
   .who { display:none; }
-  .version { font-size:11px; letter-spacing:0; padding:0 4px; }
-  #logoutBtn { padding:8px 10px; font-size:12.5px; white-space:nowrap; }
+  .version { font-size:12.5px; letter-spacing:0; padding:0 4px; }
+  #logoutBtn { padding:8px 10px; font-size:14px; white-space:nowrap; }
   .nav { position:static; flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; padding:9px 10px; gap:7px; }
-  .navbtn { white-space:nowrap; padding:10px 14px; font-size:14px; }
-  input:not([type=checkbox]), select, button { min-height:44px; font-size:16px; }
+  .navbtn { white-space:nowrap; padding:10px 14px; font-size:15.5px; }
+  input:not([type=checkbox]), select, button { min-height:44px; font-size:17px; }
   button.small { min-height:38px; }
-  .attend .presbtn { width:30px; height:32px; font-size:16px; }
-  .grid input.cell, .grid select.cell { min-height:38px; font-size:15px; }
+  .attend .presbtn { width:30px; height:32px; font-size:17px; }
+  .grid input.cell, .grid select.cell { min-height:38px; font-size:16.5px; }
   .grid select.cell.time { width:98px; }
   th, td { padding:9px 8px; }
   .stat-grid { grid-template-columns:repeat(2,1fr); }
@@ -360,3 +362,12 @@ button.addkid { padding:9px 16px; font-weight:700; }
 }
 /* Jour antérieur à l'ouverture de l'accueil : case neutre, non cliquable. */
 .presbtn.pres-off { background:transparent; border:1px dashed var(--border); cursor:default; }
+
+/* Colonne « Actions » de la liste des utilisateurs.
+   Elle était en `nowrap` : au-delà de deux boutons, le troisième (Supprimer)
+   sortait de l'écran et devenait invisible sans défilement horizontal. */
+td.actions { white-space:normal; }
+td.actions > button { display:inline-flex; align-items:center; margin:2px 4px 2px 0; }
+/* Sélecteur de rôle : avec la typographie agrandie, « Administrateur » était
+   coupé (« Admir »). On lui laisse la place de son libellé le plus long. */
+select.rolesel { min-width:165px; }
