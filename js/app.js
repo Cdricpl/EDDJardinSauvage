@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.20-2';
+const APP_VERSION = 'v2026.08.20-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -51,6 +51,18 @@ const REQUIRED_SCHOOLS = ['Saint-Remacle', 'ARAHF'];
 /* Responsables à contacter pour toute correction d'une fiche enfant.
  * Les employées ne modifient pas ces fiches : elles signalent le changement. */
 const ADMINS_CONTACT = 'Stéphanie Lejeune ou PIELTAIN Cédric';
+
+/* Statuts de présence d'un enfant. Un enregistrement ancien, sans statut,
+ * vaut « présent » (c'était le seul état possible à l'origine). */
+const PRES_ETATS = {
+  present:     { sym: '✓', cls: 'pres-p',  mot: 'présent' },
+  absent:      { sym: '✗', cls: 'pres-a',  mot: 'absence justifiée' },
+  unjustified: { sym: '!', cls: 'pres-nj', mot: 'absence injustifiée' },
+};
+// Enchaînement au clic : vide → présent → absence justifiée → injustifiée → vide.
+const PRES_SUIVANT = { undefined: 'present', present: 'absent', absent: 'unjustified', unjustified: null };
+const statutDe = (a) => (!a.status || a.status === 'present') ? 'present'
+  : (a.status === 'unjustified' ? 'unjustified' : 'absent');
 
 /* Pastille d'initiales devant chaque enfant : repère visuel qui aide à
  * retrouver sa ligne dans une grille de 31 colonnes. La couleur est tirée du
@@ -161,13 +173,29 @@ function plannedMinutes(e) {
   if (s != null && f != null) return Math.max(0, f - s);
   return e.planned_minutes || 0; // compat anciennes données
 }
-// Heures PRESTÉES effectives : calculées depuis début/fin réels ; si l'employée
-// n'a rien modifié, on retombe sur l'horaire prévu (pré-remplissage).
+/* Temps de midi : pause NON comptée dans les prestations. En temps normal il
+ * n'y en a pas ; certains jours seulement, l'employée prend une pause qui ne
+ * doit pas être payée. On la déduit donc des heures prestées.
+ * Choix limité aux quarts d'heure, jusqu'à 2 h, comme le reste de la feuille. */
+const BREAK_LIST = [0, 15, 30, 45, 60, 75, 90, 105, 120];
+const breakMinutes = (e) => Math.max(0, Number(e && e.break_minutes) || 0);
+function fmtBreak(min) { return !min ? '—' : (min < 60 ? `${min} min` : fmtHM(min)); }
+function breakSelect(date, value, disabled) {
+  const v = Math.max(0, Number(value) || 0);
+  const opts = BREAK_LIST.concat(BREAK_LIST.includes(v) ? [] : [v])
+    .sort((a, b) => a - b)
+    .map((m) => `<option value="${m}"${m === v ? ' selected' : ''}>${fmtBreak(m)}</option>`).join('');
+  return `<select class="cell brk${v ? ' brk-on' : ''}" data-k="break_minutes" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts}</select>`;
+}
+// Heures PRESTÉES effectives : calculées depuis début/fin réels, moins le temps
+// de midi ; si l'employée n'a rien modifié, on retombe sur l'horaire prévu
+// (pré-remplissage), lui aussi diminué de la pause éventuelle.
 function effectiveWorked(e) {
+  const pause = breakMinutes(e);
   const s = timeToMin(e.start_time), f = timeToMin(e.end_time);
-  if (s != null && f != null) return Math.max(0, f - s);
-  if (!e.worked_touched) return plannedMinutes(e);
-  return e.worked_minutes || 0;
+  if (s != null && f != null) return Math.max(0, f - s - pause);
+  if (!e.worked_touched) return Math.max(0, plannedMinutes(e) - pause);
+  return Math.max(0, (e.worked_minutes || 0) - pause);
 }
 function fmtHM(min) {
   const sign = min < 0 ? '-' : '';
@@ -482,9 +510,10 @@ async function viewSheet() {
       <td class="grp-plan">${timeSelect('planned_end', date, e.planned_end || '', !canEditPlanned)}</td>
       <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked)}</td>
       <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked)}</td>
-      <td class="nowrap"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
-      <td class="${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
-      <td><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${(e.justification || '').replace(/"/g, '&quot;')}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
+      <td class="grp-real">${breakSelect(date, e.break_minutes, !canEditWorked)}</td>
+      <td class="nowrap c-worked"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
+      <td class="c-delta ${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
+      <td class="c-justif"><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${(e.justification || '').replace(/"/g, '&quot;')}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
     </tr>`;
   }
 
@@ -513,12 +542,13 @@ async function viewSheet() {
             <tr>
               <th rowspan="2">Date</th><th rowspan="2">Jour</th>
               <th colspan="2" class="grp-plan-h">Horaire prévu (admin)</th>
-              <th colspan="2" class="grp-real-h">Horaire réel</th>
+              <th colspan="3" class="grp-real-h">Horaire réel</th>
               <th rowspan="2">Presté</th><th rowspan="2">Écart</th><th rowspan="2">Justification</th>
             </tr>
             <tr>
               <th class="grp-plan-h">Début</th><th class="grp-plan-h">Fin</th>
               <th class="grp-real-h">Début</th><th class="grp-real-h">Fin</th>
+              <th class="grp-real-h" title="Pause de midi non comptée dans les heures prestées">Midi</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -559,11 +589,11 @@ async function viewSheet() {
     tr.className = [(weekend === 0 || weekend === 6) ? 'weekend' : '', modified ? 'modified' : ''].filter(Boolean).join(' ');
     const [, mo, dd] = date.split('-');
     tr.children[0].innerHTML = `${dd}/${mo}${modified ? ' <span class="dot" title="Jour modifié">●</span>' : ''}`;
-    tr.children[6].innerHTML = `<strong>${worked ? fmtHM(worked) : '—'}</strong>`;   // Presté
-    const ec = tr.children[7];                                                       // Écart
+    tr.querySelector('.c-worked').innerHTML = `<strong>${worked ? fmtHM(worked) : '—'}</strong>`;
+    const ec = tr.querySelector('.c-delta');
     ec.textContent = fmtDelta(delta);
-    ec.className = delta > 0 ? 'pos' : delta < 0 ? 'neg' : '';
-    const jinp = tr.children[8].querySelector('input');                              // Justification
+    ec.className = 'c-delta ' + (delta > 0 ? 'pos' : delta < 0 ? 'neg' : '');
+    const jinp = tr.querySelector('.c-justif input');
     if (jinp) { jinp.classList.toggle('err', needJustif); jinp.placeholder = needJustif ? 'Justification requise' : ''; }
   }
   function refreshTotals() {
@@ -626,6 +656,10 @@ async function viewSheet() {
         patch.worked_touched = true;
         patch.worked_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
       }
+    } else if (k === 'break_minutes') {
+      // Temps de midi : simple déduction des heures prestées, l'horaire encodé
+      // ne change pas. Un jour SANS pause reste un jour non « modifié ».
+      patch.break_minutes = Math.max(0, Number(el.value) || 0);
     } else if (k === 'justification') {
       patch.justification = el.value;
     }
@@ -638,6 +672,7 @@ async function viewSheet() {
         setTimeValue(tr.querySelector('[data-k="start_time"]'), saved.start_time);
         setTimeValue(tr.querySelector('[data-k="end_time"]'), saved.end_time);
       }
+      if (k === 'break_minutes') el.classList.toggle('brk-on', !!patch.break_minutes);
       refreshRow(tr, date);
       refreshTotals();
       flashSaved(el);
@@ -797,7 +832,7 @@ async function viewChildren() {
   const att = await STORE.kidAttendanceForMonth(CUR.y, CUR.m);
   // Statut par (kid,date) : 'present' | 'absent'. Ancien enregistrement sans statut = présent.
   const stat = new Map();
-  att.forEach((a) => stat.set(a.kid_id + '|' + a.entry_date, a.status === 'absent' ? 'absent' : 'present'));
+  att.forEach((a) => stat.set(a.kid_id + '|' + a.entry_date, statutDe(a)));
   const getSt = (kid, date) => stat.get(kid + '|' + date);
   const dim = daysInMonth(CUR.y, CUR.m);
   const days = [];
@@ -858,9 +893,10 @@ async function viewChildren() {
     const expected = isExpected(k, day.dow);
     // Seuls les états SAISIS portent un symbole : ✓ vert, ✗ rouge. Une case non
     // définie reste vide — un tiret se confondait avec le ✓ d'un coup d'œil.
-    const cls = st === 'present' ? 'pres-p' : st === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : 'pres-v');
-    const sym = st === 'present' ? '✓' : st === 'absent' ? '✗' : '';
-    const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${st === 'present' ? 'présent' : st === 'absent' ? 'absent' : 'non défini'}`;
+    const etat = PRES_ETATS[st];
+    const cls = etat ? etat.cls : (expected ? 'pres-exp' : 'pres-v');
+    const sym = etat ? etat.sym : '';
+    const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${etat ? etat.mot : 'non défini'}`;
     return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absent → non défini" aria-label="${lbl.replace(/"/g, '&quot;')}">${sym}</button></td>`;
   };
   const kidRows = kids.length ? kids.map((k) => {
@@ -876,7 +912,8 @@ async function viewChildren() {
         <div class="kidcell">
           <span class="avatar" style="background:${avatarColor(nom)}" aria-hidden="true">${initials(k)}</span>
           <div class="kidinfo">
-            <div class="kidnom">${nom}</div>
+            <button type="button" class="kidnom" data-fiche="${k.id}"
+              title="Voir la fiche du mois de ${esc}">${nom}</button>
             ${lignes}${habituels}
           </div>
           ${ME.role === 'admin' ? `<div class="kidacts">
@@ -900,7 +937,8 @@ async function viewChildren() {
   const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="kd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
 
   const legende = `<span class="pres-leg"><span class="presbtn pres-p" aria-hidden="true">✓</span> Présent</span>
-    <span class="pres-leg"><span class="presbtn pres-a" aria-hidden="true">✗</span> Absent</span>
+    <span class="pres-leg"><span class="presbtn pres-a" aria-hidden="true">✗</span> Absence justifiée</span>
+    <span class="pres-leg"><span class="presbtn pres-nj" aria-hidden="true">!</span> Absence injustifiée</span>
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
   app.innerHTML = `${await toolbar(false, ME.role === 'admin'
@@ -947,6 +985,7 @@ async function viewChildren() {
         <strong>En cas de changement de situation pour un enfant</strong>, soumettez la
         correction à un administrateur : <strong>${ADMINS_CONTACT}</strong>.
       </div>`}
+      <div class="card sub hidden" id="ficheEnfant"></div>
       <div class="legbar">
         <div><span class="legtitle">Légende :</span> ${legende}</div>
         <p class="muted small" style="margin:0">Les jours habituels de chaque enfant sont
@@ -1036,6 +1075,52 @@ async function viewChildren() {
     });
   }
 
+  /* Fiche récapitulative d'un enfant pour le mois affiché : combien de jours
+   * présent, combien d'absences justifiées, combien d'injustifiées. Consultable
+   * par les employées aussi — c'est une lecture, jamais une modification. */
+  const fiche = document.getElementById('ficheEnfant');
+  const compterFiche = (kidId) => {
+    const c = { present: 0, absent: 0, unjustified: 0, attendus: 0 };
+    const absences = [];
+    days.forEach((day) => {
+      if (day.date < KIDS_MIN_ISO) return;
+      const kk = kids.find((x) => x.id === kidId);
+      if (kk && isExpected(kk, day.dow)) c.attendus++;
+      const st = getSt(kidId, day.date);
+      if (!st) return;
+      c[st]++;
+      if (st !== 'present') absences.push({ jour: day.d, dow: day.dow, st });
+    });
+    return { c, absences };
+  };
+  app.querySelectorAll('[data-fiche]').forEach((b) => b.onclick = () => {
+    const k = kids.find((x) => x.id === b.dataset.fiche) || {};
+    const { c, absences } = compterFiche(k.id);
+    const encodes = c.present + c.absent + c.unjustified;
+    const ligneAbs = absences.length
+      ? absences.map((a) => `<span class="abs-tag ${a.st === 'unjustified' ? 'nj' : 'j'}">${DOW[a.dow]} ${a.jour}/${pad(CUR.m)}</span>`).join(' ')
+      : '<span class="muted">Aucune absence ce mois-ci.</span>';
+    fiche.innerHTML = `
+      <div class="row-between">
+        <h3 style="margin:0">📄 ${kidLabel(k)} — ${monthName(CUR.y, CUR.m)}</h3>
+        <button class="small gray" id="ficheClose">Fermer</button>
+      </div>
+      <p class="muted small" style="margin:4px 0 12px">
+        ${[k.grade, k.school].filter(Boolean).join(' · ')}${(k.days || []).length
+          ? ` · jours habituels : ${(k.days || []).slice().sort().map((w) => DOW[w]).join(' ')}` : ''}</p>
+      <div class="stat-grid">
+        <div class="stat"><div class="num pos">${c.present}</div><div class="lbl">Présences</div></div>
+        <div class="stat"><div class="num" style="color:var(--orange)">${c.absent}</div><div class="lbl">Absences justifiées</div></div>
+        <div class="stat"><div class="num neg">${c.unjustified}</div><div class="lbl">Absences injustifiées</div></div>
+        <div class="stat"><div class="num">${encodes}/${c.attendus || '—'}</div><div class="lbl">Jours encodés / attendus</div></div>
+      </div>
+      <p style="margin:12px 0 0"><strong class="small">Détail des absences :</strong><br>${ligneAbs}</p>
+      <p class="muted small" style="margin-top:8px">« Attendus » = jours habituels de l'enfant sur le mois affiché.</p>`;
+    fiche.classList.remove('hidden');
+    document.getElementById('ficheClose').onclick = () => fiche.classList.add('hidden');
+    fiche.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+
   // Les totaux figurent en double (au-dessus et sous la grille) : on met donc à
   // jour TOUTES les cellules portant le repère, pas seulement la première.
   const setTotal = (sel, valeur) => app.querySelectorAll(sel).forEach((el) => (el.textContent = valeur));
@@ -1048,17 +1133,18 @@ async function viewChildren() {
     const el = ev.target && ev.target.closest ? ev.target.closest('button.presbtn') : null;
     if (!el) return;
     const kid = el.dataset.kid, date = el.dataset.date, key = kid + '|' + date;
-    const cur = stat.get(key);                              // 'present' | 'absent' | undefined
-    const next = cur === 'present' ? 'absent' : cur === 'absent' ? null : 'present';
+    const cur = stat.get(key);
+    const next = PRES_SUIVANT[cur];                          // vide → ✓ → ✗ → ! → vide
     if (next) stat.set(key, next); else stat.delete(key);
-    // Rendu de la cellule.
-    el.classList.remove('pres-p', 'pres-a', 'pres-exp');
+    // Rendu de la cellule (identique à celui d'un rendu neuf).
+    el.classList.remove('pres-p', 'pres-a', 'pres-nj', 'pres-exp', 'pres-v');
     const day = days.find((d) => d.date === date);
     const kk = kids.find((k) => k.id === kid);
     const expected = kk && isExpected(kk, day.dow);
-    el.textContent = next === 'present' ? '✓' : next === 'absent' ? '✗' : (expected ? '·' : '');
-    const cls = next === 'present' ? 'pres-p' : next === 'absent' ? 'pres-a' : (expected ? 'pres-exp' : '');
-    if (cls) el.classList.add(cls);
+    const etat = PRES_ETATS[next];
+    el.textContent = etat ? etat.sym : '';
+    el.classList.add(etat ? etat.cls : (expected ? 'pres-exp' : 'pres-v'));
+    el.setAttribute('aria-label', `${kidLabel(kk || {})} le ${Number(date.slice(8))}/${pad(CUR.m)} : ${etat ? etat.mot : 'non défini'}`);
     // Totaux en place.
     const kt = document.getElementById('kidtot_' + kid);
     if (kt) kt.textContent = days.reduce((n, d) => n + compte(kid, d.date), 0);
@@ -1110,7 +1196,7 @@ async function viewStats() {
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
   const byDay = {};
   att.forEach((a) => {
-    if (a.status === 'absent') return; // les absences ne comptent pas comme présence
+    if (statutDe(a) !== 'present') return;   // absence justifiée OU injustifiée
     const k = kidById[a.kid_id]; if (!k) return;
     (byDay[a.entry_date] = byDay[a.entry_date] || { total: 0, eligible: 0 }).total++;
     const age = ageAt(k.birthdate, a.entry_date);
@@ -1120,7 +1206,7 @@ async function viewStats() {
   const avgEligible = openDays.length
     ? openDays.reduce((s, d) => s + byDay[d].eligible, 0) / openDays.length : 0;
   // Écoles représentées parmi les enfants présents cette année.
-  const presentKidIds = new Set(att.filter((a) => a.status !== 'absent').map((a) => a.kid_id));
+  const presentKidIds = new Set(att.filter((a) => statutDe(a) === 'present').map((a) => a.kid_id));
   const schoolsPresent = new Set();
   presentKidIds.forEach((id) => { const s = (kidById[id] || {}).school; if (s) schoolsPresent.add(s); });
   const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
@@ -1248,13 +1334,17 @@ async function viewEmployees() {
   const profs = await STORE.listProfiles();
   const nbAdmins = profs.filter((p) => p.role === 'admin' && p.active).length;
   const rows = profs.map((p) => {
+    const isLastAdmin = p.role === 'admin' && nbAdmins <= 1;
     const activeBtn = p.role === 'employee'
       ? (p.active ? `<button class="small red" data-arch="${p.id}">Archiver</button>`
                   : `<button class="small green" data-react="${p.id}">Réactiver</button>`)
       : '';
+    // Suppression définitive. Interdite sur son propre compte (on se couperait
+    // l'accès) et sur le dernier administrateur (plus personne pour gérer).
+    const suppr = (p.id === ME.id || isLastAdmin) ? ''
+      : `<button class="small red" data-del="${p.id}" title="Supprimer définitivement ce compte et ses données">🗑️ Supprimer</button>`;
     // Sélecteur de rôle. On empêche de retirer le dernier administrateur (sinon
     // plus personne ne pourrait gérer les utilisateurs).
-    const isLastAdmin = p.role === 'admin' && nbAdmins <= 1;
     const roleSel = `<select class="rolesel" data-role="${p.id}" ${isLastAdmin ? 'disabled title="Dernier administrateur"' : ''}>
         <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employée</option>
         <option value="admin" ${p.role === 'admin' ? 'selected' : ''}>Administrateur</option>
@@ -1274,6 +1364,7 @@ async function viewEmployees() {
       <td class="nowrap">
         <button class="small" data-reset="${p.id}">✉️ Réinit. mot de passe</button>
         ${activeBtn}
+        ${suppr}
       </td>
     </tr>`;
   }).join('');
@@ -1294,7 +1385,8 @@ async function viewEmployees() {
       <p class="muted small">
         Le <strong>rôle</strong> se change directement dans la liste (le dernier administrateur ne peut pas être rétrogradé).
         « ✏️ » modifie le nom ou l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
-        Archiver conserve les données en lecture seule.
+        Archiver conserve les données en lecture seule ; « 🗑️ Supprimer » efface
+        le compte et son historique <strong>définitivement</strong>.
         ${isCloud() ? "L'email modifié sert de contact/réinitialisation." : ''}
       </p>
     </div>
@@ -1388,6 +1480,38 @@ async function viewEmployees() {
     if (email == null) return;
     try { await STORE.setEmail(b.dataset.email, email); toast('Email mis à jour'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
+  });
+  /* Suppression définitive d'un compte.
+   * Deux confirmations : la première annonce précisément ce qui sera effacé
+   * (on interroge d'abord la base), la seconde demande de taper le nom — une
+   * action irréversible ne doit pas tenir à un clic malheureux. */
+  app.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    const p = profs.find((x) => x.id === b.dataset.del) || {};
+    let n;
+    try { n = await STORE.countUserData(p.id); }
+    catch (e) { toast('Erreur : ' + e.message, 'error'); return; }
+    const detail = `${n.day_entries} prestation(s), ${n.months} mois, `
+      + `${n.templates ? 'son horaire type' : 'aucun horaire type'}`;
+    if (!confirm(
+      `Supprimer DÉFINITIVEMENT le compte de ${p.full_name} ?\n\n`
+      + `Seront effacés : ${detail}.\n\n`
+      + `Cette action est irréversible. Si vous souhaitez seulement retirer la personne `
+      + `sans perdre son historique, utilisez « Archiver » à la place.\n\n`
+      + `Faites une sauvegarde (💾) avant de continuer.`)) return;
+    const saisi = prompt(`Confirmation : tapez le nom exact « ${p.full_name} » pour supprimer.`);
+    if (saisi == null) return;
+    if (saisi.trim() !== (p.full_name || '').trim()) { toast('Nom incorrect — suppression annulée.', 'error'); return; }
+    try {
+      await STORE.deleteProfile(p.id);
+      // Le compte de CONNEXION survit à la suppression du profil : sans cette
+      // étape, la personne pourrait se reconnecter et un profil vierge serait recréé.
+      if (isCloud()) {
+        alert(`Compte supprimé de l'application.\n\nIMPORTANT : l'accès de connexion existe toujours. `
+          + `Pour l'empêcher définitivement de se reconnecter, supprimez aussi ${p.email || 'son adresse'} `
+          + `dans la console Firebase (Authentication → Users).`);
+      }
+      toast(`Compte de ${p.full_name} supprimé`); render();
+    } catch (e) { toast('Suppression impossible : ' + e.message, 'error'); }
   });
   app.querySelectorAll('[data-reset]').forEach((b) => b.onclick = async () => {
     const p = profs.find((x) => x.id === b.dataset.reset) || {};

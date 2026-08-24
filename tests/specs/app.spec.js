@@ -175,8 +175,9 @@ test('performance : les menus d’heures se remplissent au clic (feuille allég�
 
   // Au repos la feuille reste légère : sans ce remplissage différé elle
   // contiendrait plusieurs milliers de balises <option> et deviendrait saccadée.
+  // Budget : ~140 heures repliées + ~280 pour la colonne « Midi » (9 choix/jour).
   const auRepos = await page.locator('#app option').count();
-  expect(auRepos).toBeLessThan(300);
+  expect(auRepos).toBeLessThan(600);
 
   // Mais un clic doit bien proposer TOUS les créneaux (6:00 → 21:00 au quart d'heure).
   const sel = (await firstWorkedRow(page)).locator('[data-k="end_time"]');
@@ -332,9 +333,14 @@ test('enfants : un clic met à jour les deux lignes de totaux', async ({ page })
   const totaux = page.locator('[data-grandtot]');
   await expect(totaux).toHaveCount(2);          // une en haut, une en bas
   const avant = Number(await totaux.first().textContent());
+  const vide = page.locator('table.attend tbody button.presbtn.pres-v').first();
+  const numJour = Number(((await vide.getAttribute('data-date')) || '').slice(8));
+  const jourAvant = Number(await page.locator(`[data-daytot="${numJour}"]`).first().textContent());
 
-  // On coche une case encodable (à partir du premier jour d'accueil).
-  const cases = page.locator('table.attend tbody button.presbtn');
+  // On coche une case encore VIDE : viser « la première » dépendrait de la date
+  // du jour (les données de démo remplissent le mois jusqu'à aujourd'hui).
+  const cases = page.locator('table.attend tbody button.presbtn.pres-v');
+  await expect(cases.first()).toBeVisible();
   await cases.first().click();
 
   // Les DEUX lignes doivent suivre : elles portent le même repère, pas un id unique.
@@ -342,12 +348,10 @@ test('enfants : un clic met à jour les deux lignes de totaux', async ({ page })
   await expect(totaux.last()).toHaveText(String(avant + 1));
 
   // Le total du JOUR aussi, en haut comme en bas.
-  const jour = await cases.first().getAttribute('data-date');
-  const numJour = Number((jour || '').slice(8));
   const totJour = page.locator(`[data-daytot="${numJour}"]`);
   await expect(totJour).toHaveCount(2);
-  await expect(totJour.first()).toHaveText('1');
-  await expect(totJour.last()).toHaveText('1');
+  await expect(totJour.first()).toHaveText(String(jourAvant + 1));
+  await expect(totJour.last()).toHaveText(String(jourAvant + 1));
 });
 
 test('enfants : rien n’est encodable avant le premier jour d’accueil', async ({ page }) => {
@@ -452,4 +456,100 @@ test('employée : fiches enfants en lecture seule, avec qui contacter', async ({
 
   // L'encodage des présences, lui, reste possible.
   await expect(page.locator('table.attend tbody button.presbtn').first()).toBeEnabled();
+});
+
+test('feuille : le temps de midi est déduit des heures prestées', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  const row = await firstWorkedRow(page);
+
+  const avantJour = (await row.locator('.c-worked').innerText()).trim();
+  const avantMois = await page.locator('#tWorked').innerText();
+
+  // 30 minutes de pause de midi, non comptées dans la prestation.
+  await row.locator('[data-k="break_minutes"]').selectOption('30');
+  await expect(row.locator('.c-worked')).not.toHaveText(avantJour);
+  await expect(page.locator('#tWorked')).not.toHaveText(avantMois);
+
+  // 4h00 - 30 min = 3h30 ; l'écart vaut exactement la pause.
+  await expect(row.locator('.c-worked')).toContainText('3h30');
+  await expect(row.locator('.c-delta')).toHaveText('-0h30');
+
+  // Remise à zéro : on retrouve la durée d'origine.
+  await row.locator('[data-k="break_minutes"]').selectOption('0');
+  await expect(row.locator('.c-worked')).toContainText(avantJour);
+});
+
+test('enfants : trois états — présent, absence justifiée, absence injustifiée', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  const premiere = page.locator('table.attend tbody button.presbtn.pres-v').first();
+  await expect(premiere).toBeVisible();
+  // Localisateur figé sur CETTE case : viser « .pres-v en premier » désignerait
+  // une autre case dès que celle-ci change d'état.
+  const kid = await premiere.getAttribute('data-kid');
+  const date = await premiere.getAttribute('data-date');
+  const c = page.locator(`button.presbtn[data-kid="${kid}"][data-date="${date}"]`);
+
+  // Vide → présent → absence justifiée → absence injustifiée → vide.
+  await c.click();
+  await expect(c).toHaveClass(/pres-p/); await expect(c).toHaveText('✓');
+  await c.click();
+  await expect(c).toHaveClass(/pres-a/); await expect(c).toHaveText('✗');
+  await c.click();
+  await expect(c).toHaveClass(/pres-nj/); await expect(c).toHaveText('!');
+  await expect(c).toHaveAttribute('aria-label', /absence injustifiée/);
+  await c.click();
+  await expect(c).toHaveClass(/pres-v/); await expect(c).toHaveText('');
+
+  // Une absence, quelle qu'elle soit, ne compte jamais comme une présence.
+  await c.click(); await c.click();                       // → absence justifiée
+  const jour = Number(date.slice(8));
+  const totAvant = Number(await page.locator(`[data-daytot="${jour}"]`).first().textContent());
+  await c.click();                                        // → absence injustifiée
+  await expect(page.locator(`[data-daytot="${jour}"]`).first()).toHaveText(String(totAvant));
+});
+
+test('enfants : la fiche du mois est consultable, y compris par une employée', async ({ page }) => {
+  await loginEmployee(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('#ficheEnfant')).toBeHidden();
+
+  await page.locator('[data-fiche]').first().click();
+  const fiche = page.locator('#ficheEnfant');
+  await expect(fiche).toBeVisible();
+  await expect(fiche).toContainText('Présences');
+  await expect(fiche).toContainText('Absences justifiées');
+  await expect(fiche).toContainText('Absences injustifiées');
+
+  await page.locator('#ficheClose').click();
+  await expect(fiche).toBeHidden();
+});
+
+test('utilisateurs : supprimer un compte exige une double confirmation', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const lignes = page.locator('table tbody tr');
+  const avant = await lignes.count();
+
+  // Ni son propre compte, ni le dernier administrateur ne sont supprimables.
+  await expect(page.locator('[data-del]')).toHaveCount(avant - 1);
+
+  // Un nom mal recopié annule la suppression.
+  const dialogues = ['', 'nom incorrect'];
+  const handler = async (d) => d.accept(dialogues.shift() ?? '');
+  page.on('dialog', handler);
+  await page.locator('[data-del]').last().click();
+  await expect(page.locator('#toast')).toContainText('annulée');
+  await expect(lignes).toHaveCount(avant);
+  page.off('dialog', handler);
+
+  // Le nom exact confirme la suppression.
+  const suppr = page.locator('[data-del]').last();
+  // Le nom seul : la cellule contient aussi le bouton crayon.
+  const nom = await suppr.evaluate((b) => b.closest('tr').children[0].childNodes[0].textContent.trim());
+  const dialogues2 = ['', nom];
+  page.on('dialog', (d) => d.accept(dialogues2.shift() ?? ''));
+  await suppr.click();
+  await expect(lignes).toHaveCount(avant - 1);
 });

@@ -152,6 +152,26 @@ class DemoStore {
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.opening_minutes = Math.round(Number(minutes) || 0); this._save(db); }
   }
+  // Compte ce qui serait supprimé avec le compte (pour l'annoncer AVANT d'agir).
+  async countUserData(id) {
+    const db = this._db();
+    return {
+      day_entries: (db.entries || []).filter(e => e.employee_id === id).length,
+      months: (db.months || []).filter(m => m.employee_id === id).length,
+      templates: (db.templates || []).filter(t => t.employee_id === id).length,
+    };
+  }
+  // Suppression DÉFINITIVE : le profil et tout ce qui s'y rattache.
+  async deleteProfile(id) {
+    const db = this._db();
+    const n = await this.countUserData(id);
+    db.profiles = (db.profiles || []).filter(p => p.id !== id);
+    db.entries = (db.entries || []).filter(e => e.employee_id !== id);
+    db.months = (db.months || []).filter(m => m.employee_id !== id);
+    db.templates = (db.templates || []).filter(t => t.employee_id !== id);
+    this._save(db);
+    return n;
+  }
 
   /* ---- Horaire type ---- */
   async getTemplate(employee_id) {
@@ -216,11 +236,13 @@ class DemoStore {
     if (!e) {
       e = { id: Util.uuid(), employee_id: entry.employee_id, entry_date: entry.entry_date,
             planned_start: '', planned_end: '', planned_minutes: 0, worked_minutes: 0,
-            start_time: '', end_time: '', worked_touched: false, justification: '' };
+            start_time: '', end_time: '', worked_touched: false, justification: '',
+            break_minutes: 0 };
       db.entries.push(e);
     }
+    // Liste blanche : tout champ oublié ici serait silencieusement perdu.
     ['planned_start', 'planned_end', 'planned_minutes', 'worked_minutes', 'start_time',
-     'end_time', 'worked_touched', 'justification'].forEach(k => {
+     'end_time', 'worked_touched', 'justification', 'break_minutes'].forEach(k => {
       if (entry[k] !== undefined) e[k] = entry[k];
     });
     return e;
@@ -304,7 +326,7 @@ class DemoStore {
     const prefixe = `${year}-`;
     const byDate = {};
     this._db().kidatt.forEach(a => {
-      if (a.status === 'absent') return; // absence = pas comptée
+      if (a.status && a.status !== 'present') return; // absence (justifiée ou non) = pas comptée
       if (year != null && !String(a.entry_date || '').startsWith(prefixe)) return;
       byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
     });
@@ -506,6 +528,35 @@ class FirebaseStore {
     try { await this.auth.sendPasswordResetEmail((email || '').trim()); }
     catch (e) { throw new Error(this._authMsg(e)); }
   }
+  // Compte ce qui serait supprimé avec le compte (pour l'annoncer AVANT d'agir).
+  async countUserData(id) {
+    const [entries, months, tpl] = await Promise.all([
+      this.db.collection('day_entries').where('employee_id', '==', id).get(),
+      this.db.collection('months').where('employee_id', '==', id).get(),
+      this.db.collection('schedule_templates').doc(id).get(),
+    ]);
+    return { day_entries: entries.size, months: months.size, templates: tpl.exists ? 1 : 0 };
+  }
+  /* Suppression DÉFINITIVE du profil et de toutes ses données.
+   * ATTENTION : le compte de CONNEXION (Firebase Auth) ne peut pas être
+   * supprimé depuis le navigateur — seul un administrateur Firebase peut le
+   * faire dans la console. Tant qu'il existe, la personne peut se reconnecter
+   * et un profil vierge lui serait recréé. L'interface le rappelle. */
+  async deleteProfile(id) {
+    const n = await this.countUserData(id);
+    const [entries, months] = await Promise.all([
+      this.db.collection('day_entries').where('employee_id', '==', id).get(),
+      this.db.collection('months').where('employee_id', '==', id).get(),
+    ]);
+    const ops = [];
+    entries.docs.forEach((d) => ops.push({ ref: d.ref, delete: true }));
+    months.docs.forEach((d) => ops.push({ ref: d.ref, delete: true }));
+    ops.push({ ref: this.db.collection('schedule_templates').doc(id), delete: true });
+    ops.push({ ref: this.db.collection('profiles').doc(id), delete: true });
+    await this._commit(ops);
+    this._profilesCache = null; this._entriesCache = {}; this._memo.clear();
+    return n;
+  }
 
   /* ---- Horaire type ---- */
   async getTemplate(employee_id) {
@@ -651,7 +702,7 @@ class FirebaseStore {
     const att = await this.kidAttendanceForYear(year);
     const byDate = {};
     att.forEach((a) => {
-      if (a.status === 'absent') return;
+      if (a.status && a.status !== 'present') return;   // absence justifiée OU injustifiée
       byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
     });
     return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
@@ -703,7 +754,7 @@ class FirebaseStore {
     (data.kid_attendance || []).forEach((a) => ops.push({
       ref: this.db.collection('kid_attendance').doc(`${a.kid_id}_${a.entry_date}`),
       data: { kid_id: String(a.kid_id), entry_date: a.entry_date,
-        status: a.status === 'absent' ? 'absent' : 'present' },
+        status: ['absent', 'unjustified'].includes(a.status) ? a.status : 'present' },
     }));
     (data.schedule_templates || []).forEach((t) => ops.push({
       ref: this.db.collection('schedule_templates').doc(emp(t.employee_id)),
