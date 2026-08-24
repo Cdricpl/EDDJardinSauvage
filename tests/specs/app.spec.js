@@ -656,3 +656,56 @@ test('entête : le raccourci « Installer » est proposé à tous', async ({ pag
   await page.locator('#installBtn').click();
   await expect.poll(() => message).toContain('Installer');
 });
+
+test('enfants : la fiche du mois s’exporte en PDF', async ({ page }) => {
+  await loginEmployee(page);            // une employée doit pouvoir l'exporter
+  await page.locator('.navbtn[data-v="children"]').click();
+
+  // jsPDF vient d'un CDN, coupé pendant les tests : on le remplace par un
+  // double qui enregistre ce que l'application lui demande.
+  await page.evaluate(() => {
+    window.__pdf = { tables: [], saved: null, texts: [] };
+    class FauxDoc {
+      setFontSize() {} setTextColor() {} addImage() {}
+      text(t) { window.__pdf.texts.push(t); }
+      autoTable(o) {
+        window.__pdf.tables.push({ head: o.head, lignes: (o.body || []).length });
+        this.lastAutoTable = { finalY: window.__pdf.tables.length * 40 };
+      }
+      save(n) { window.__pdf.saved = n; }
+    }
+    window.jspdf = { jsPDF: FauxDoc };
+  });
+
+  await page.locator('[data-fiche]').first().click();
+  await expect(page.locator('#fichePdf')).toBeVisible();
+  await page.locator('#fichePdf').click();
+
+  const r = await expect.poll(async () => (await page.evaluate(() => window.__pdf)).saved).toBeTruthy()
+    .then(() => page.evaluate(() => window.__pdf));
+  expect(r.saved).toMatch(/^fiche_.+_\d{4}-\d{2}\.pdf$/);
+  // Le PDF reprend les trois blocs de la fiche affichée.
+  expect(r.tables).toHaveLength(3);
+  expect(r.texts.join(' ')).toContain('Fiche de présence');
+  // Et aucune erreur n'a été signalée à l'utilisatrice.
+  await expect(page.locator('#toast')).not.toContainText('impossible');
+});
+
+test('utilisateurs : la colonne Actions tient sur une seule ligne', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const cellule = page.locator('#usersTable tbody tr').nth(1).locator('td.actions');
+  await expect(cellule.locator('button')).toHaveCount(3);
+
+  // Avec des libellés, cette colonne occupait trois lignes par utilisateur.
+  const mesures = await cellule.evaluate((td) => {
+    const b = [...td.querySelectorAll('button')];
+    const haut = b[0].getBoundingClientRect().top;
+    return {
+      alignes: b.every((x) => Math.abs(x.getBoundingClientRect().top - haut) < 2),
+      hauteurLigne: td.closest('tr').getBoundingClientRect().height,
+    };
+  });
+  expect(mesures.alignes, 'les actions doivent rester alignées sur une ligne').toBe(true);
+  expect(mesures.hauteurLigne).toBeLessThan(100);
+});

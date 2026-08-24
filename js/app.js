@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-8';
+const APP_VERSION = 'v2026.08.21-9';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -115,6 +115,10 @@ const PRES_ETATS = {
 const PRES_SUIVANT = { undefined: 'present', present: 'absent', absent: 'unjustified', unjustified: null };
 const statutDe = (a) => (!a.status || a.status === 'present') ? 'present'
   : (a.status === 'unjustified' ? 'unjustified' : 'absent');
+
+/* Nom affiché d'un enfant : « DUPONT Victor ». Défini au niveau global — il
+ * sert aussi bien à la grille qu'à l'export PDF de la fiche. */
+const kidLabel = (k) => `${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name || ''}`.trim();
 
 /* Pastille d'initiales devant chaque enfant : repère visuel qui aide à
  * retrouver sa ligne dans une grille de 31 colonnes. La couleur est tirée du
@@ -1220,7 +1224,6 @@ async function viewChildren() {
   const headDays = days.map((day) =>
     `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}"><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
 
-  const kidLabel = (k) => `${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name}`.trim();
   const cellHtml = (k, day) => {
     // Avant le premier jour d'accueil, la case est neutralisée : on ne peut rien
     // y cocher, et un éventuel enregistrement résiduel n'est pas affiché.
@@ -1471,7 +1474,10 @@ async function viewChildren() {
     fiche.innerHTML = `
       <div class="row-between">
         <h3 style="margin:0">📄 ${kidLabel(k)} — ${monthName(CUR.y, CUR.m)}</h3>
-        <button class="small gray" id="ficheClose">Fermer</button>
+        <div style="display:flex; gap:8px">
+          <button class="small" id="fichePdf">🖨️ Export PDF</button>
+          <button class="small gray" id="ficheClose">Fermer</button>
+        </div>
       </div>
       <p class="muted small" style="margin:4px 0 12px">
         ${[k.grade, k.school].filter(Boolean).join(' · ')}${(k.days || []).length
@@ -1491,6 +1497,9 @@ async function viewChildren() {
       </div>` : ''}`;
     fiche.classList.remove('hidden');
     document.getElementById('ficheClose').onclick = () => fiche.classList.add('hidden');
+    // Export PDF : accessible aussi aux employées, c'est une simple lecture.
+    document.getElementById('fichePdf').onclick = () =>
+      exportFichePDF(k, c, absences).catch((e) => toast('Export impossible : ' + e.message, 'error'));
     // Effacement définitif — administration uniquement, avec double confirmation.
     const delBtn = document.getElementById('ficheDel');
     if (delBtn) delBtn.onclick = async () => {
@@ -1717,6 +1726,57 @@ async function viewStats() {
   document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, chartMonthly)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
 }
 
+/* ---------------- Export PDF de la fiche d'un enfant ---------------- */
+// Reprend exactement ce que la fiche affiche à l'écran : le bilan du mois et
+// le détail des absences. Utile pour un dossier ou un entretien avec la famille.
+async function exportFichePDF(k, c, absences) {
+  const titre = `Fiche de présence — ${kidLabel(k)}`;
+  const sousTitre = monthName(CUR.y, CUR.m);
+  const encodes = c.present + c.absent + c.unjustified;
+  const infos = [
+    ['Année scolaire suivie', k.grade || '—'],
+    ['Implantation', k.school || '—'],
+    ['Date de naissance', k.birthdate ? k.birthdate.split('-').reverse().join('/') : '—'],
+    ['Jours habituels', (k.days || []).length
+      ? (k.days || []).slice().sort().map((w) => DOW[w]).join(' ') : '—'],
+  ];
+  const bilan = [
+    ['Présences', String(c.present)],
+    ['Absences justifiées', String(c.absent)],
+    ['Absences injustifiées', String(c.unjustified)],
+    ['Jours encodés', String(encodes)],
+    ['Jours attendus (jours habituels)', String(c.attendus)],
+  ];
+  const detail = absences.length
+    ? absences.map((a) => [`${DOW[a.dow]} ${a.jour}/${pad(CUR.m)}`,
+        a.st === 'unjustified' ? 'Absence injustifiée' : 'Absence justifiée'])
+    : [['—', 'Aucune absence ce mois-ci']];
+
+  if (!(await assurerPdf())) {           // repli impression, comme les autres exports
+    const w = window.open('', '_blank');
+    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const tab = (t, l) => `<h3>${t}</h3><table border=1 cellpadding=5 style="border-collapse:collapse">`
+      + l.map((r) => '<tr>' + r.map((c2) => `<td>${echapper(c2)}</td>`).join('') + '</tr>').join('') + '</table>';
+    w.document.write(`<img src="assets/logo.svg" style="height:60px">
+      <h2>${echapper(titre)} — ${echapper(sousTitre)}</h2>
+      ${tab('Fiche', infos)}${tab('Bilan du mois', bilan)}${tab('Détail des absences', detail)}
+      <button onclick="print()">Imprimer</button>`);
+    w.document.close(); return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let y = await pdfHeader(doc, titre, sousTitre);
+  const bloc = (head, body) => {
+    doc.autoTable({ startY: y, head: [head], body: lignesPdf(body),
+      styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] } });
+    y = doc.lastAutoTable.finalY + 8;
+  };
+  bloc(["Fiche de l'enfant", ''], infos);
+  bloc(['Bilan du mois', 'Nombre'], bilan);
+  bloc(['Détail des absences', 'Motif'], detail);
+  doc.save(`fiche_${(kidLabel(k) || 'enfant').replace(/[^\w-]+/g, '-')}_${CUR.y}-${pad(CUR.m)}.pdf`);
+}
+
 /* ---------------- Export PDF des statistiques de l'année scolaire ----------------
  * Le PDF doit contenir TOUT ce que l'onglet Statistiques affiche : c'est lui
  * qui part dans le dossier d'agrément, et il ne doit rien laisser à retrouver
@@ -1840,16 +1900,19 @@ async function viewEmployees() {
   const nbAdmins = profs.filter((p) => p.role === 'admin' && p.active).length;
   const rows = profs.map((p) => {
     const isLastAdmin = p.role === 'admin' && nbAdmins <= 1;
-    // « Archiver » est réversible : il ne doit pas porter la couleur d'alerte,
-    // sinon on le confond avec la suppression définitive juste à côté.
+    /* Actions en ICÔNES. Avec des libellés, cette colonne occupait trois lignes
+     * par utilisateur : le tableau devenait illisible. Chaque icône porte son
+     * intitulé en infobulle et en aria-label, et une légende sous le tableau
+     * les rappelle. */
     const activeBtn = p.role === 'employee'
-      ? (p.active ? `<button class="small gray" data-arch="${p.id}" title="Retirer de la liste en conservant l'historique">📥 Archiver</button>`
-                  : `<button class="small green" data-react="${p.id}">Réactiver</button>`)
+      ? (p.active
+          ? `<button class="rowbtn" data-arch="${p.id}" title="Archiver — retire de la liste en conservant l'historique" aria-label="Archiver ${echapper(p.full_name)}">📥</button>`
+          : `<button class="rowbtn ok" data-react="${p.id}" title="Réactiver ce compte" aria-label="Réactiver ${echapper(p.full_name)}">↩️</button>`)
       : '';
     // Suppression définitive. Interdite sur son propre compte (on se couperait
     // l'accès) et sur le dernier administrateur (plus personne pour gérer).
     const suppr = (p.id === ME.id || isLastAdmin) ? ''
-      : `<button class="small red" data-del="${p.id}" title="Supprimer définitivement ce compte et ses données">🗑️ Supprimer</button>`;
+      : `<button class="rowbtn danger" data-del="${p.id}" title="Supprimer définitivement ce compte et ses données" aria-label="Supprimer ${echapper(p.full_name)}">🗑️</button>`;
     // Sélecteur de rôle. On empêche de retirer le dernier administrateur (sinon
     // plus personne ne pourrait gérer les utilisateurs).
     const roleSel = `<select class="rolesel" data-role="${p.id}" ${isLastAdmin ? 'disabled title="Dernier administrateur"' : ''}>
@@ -1863,13 +1926,13 @@ async function viewEmployees() {
            aria-label="Solde de départ de ${echapper(p.full_name)}" /></td>`
       : '<td class="muted">—</td>';
     return `<tr>
-      <td class="nowrap">${echapper(p.full_name)} <button class="small gray" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${echapper(p.full_name)}">✏️</button></td>
-      <td class="nowrap">${p.email ? echapper(p.email) : '—'} <button class="small gray" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${echapper(p.full_name)}">✏️</button></td>
+      <td class="nowrap">${echapper(p.full_name)} <button class="rowbtn" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${echapper(p.full_name)}">✏️</button></td>
+      <td class="nowrap">${p.email ? echapper(p.email) : '—'} <button class="rowbtn" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${echapper(p.full_name)}">✏️</button></td>
       <td>${roleSel}</td>
       ${soldeCell}
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
       <td class="actions">
-        <button class="small" data-reset="${p.id}">✉️ Réinit. mot de passe</button>
+        <button class="rowbtn" data-reset="${p.id}" title="Envoyer un email de réinitialisation du mot de passe" aria-label="Réinitialiser le mot de passe de ${echapper(p.full_name)}">✉️</button>
         ${activeBtn}
         ${suppr}
       </td>
@@ -1945,8 +2008,9 @@ async function viewEmployees() {
       <p class="muted small">
         Le <strong>rôle</strong> se change directement dans la liste (le dernier administrateur ne peut pas être rétrogradé).
         « ✏️ » modifie le nom ou l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
-        Archiver conserve les données en lecture seule ; « 🗑️ Supprimer » efface
-        le compte et son historique <strong>définitivement</strong>.
+        <strong>Actions :</strong> ✏️ modifier · ✉️ envoyer un email de réinitialisation du mot de passe ·
+        📥 archiver (retire de la liste en conservant l'historique) · ↩️ réactiver ·
+        🗑️ <strong>supprimer définitivement</strong> le compte et son historique.
         ${isCloud() ? "L'email modifié sert de contact/réinitialisation." : ''}
       </p>
     </div>

@@ -363,11 +363,23 @@ button.addkid { padding:9px 16px; font-weight:700; }
 /* Jour antérieur à l'ouverture de l'accueil : case neutre, non cliquable. */
 .presbtn.pres-off { background:transparent; border:1px dashed var(--border); cursor:default; }
 
-/* Colonne « Actions » de la liste des utilisateurs.
-   Elle était en `nowrap` : au-delà de deux boutons, le troisième (Supprimer)
-   sortait de l'écran et devenait invisible sans défilement horizontal. */
-td.actions { white-space:normal; }
-td.actions > button { display:inline-flex; align-items:center; margin:2px 4px 2px 0; }
+/* Boutons d'action d'une ligne de tableau : une icône carrée, jamais de texte.
+   Avec des libellés, la colonne « Actions » occupait trois lignes par
+   utilisateur. L'intitulé reste accessible en infobulle et en aria-label, et
+   une légende sous le tableau rappelle le sens de chaque icône. */
+.rowbtn {
+  background:transparent; color:var(--text); box-shadow:none; border:1px solid transparent;
+  padding:0; width:34px; height:34px; min-height:0; border-radius:9px;
+  font-size:16px; line-height:1; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center; vertical-align:middle;
+}
+.rowbtn:hover { background:var(--paper-2); border-color:var(--border-strong); }
+.rowbtn:focus-visible { outline:2px solid var(--primary); outline-offset:1px; }
+.rowbtn.danger:hover { background:#fbe4e3; border-color:var(--red); }
+.rowbtn.ok:hover { background:#e3f3e8; border-color:var(--green); }
+/* Les actions tiennent sur une seule ligne, sans etirer la colonne. */
+td.actions { white-space:nowrap; }
+td.actions > .rowbtn { margin-right:2px; }
 /* Sélecteur de rôle : avec la typographie agrandie, « Administrateur » était
    coupé (« Admir »). On lui laisse la place de son libellé le plus long. */
 select.rolesel { min-width:165px; }
