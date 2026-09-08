@@ -1026,3 +1026,53 @@ test('feuille : un mois entamé sans horaire prévu se répare à l’ouverture 
   await expect(ligne.locator('[data-k="start_time"]')).toHaveValue('14:00');
   await expect(ligne.locator('[data-k="end_time"]')).toHaveValue('18:00');
 });
+
+/* Les écouteurs temps réel étaient bornés à l'ANNÉE CIVILE alors que l'année
+ * scolaire va d'août à juillet : la moitié de chaque année n'était jamais
+ * suivie, et l'écran de l'administration affichait des chiffres périmés.
+ * Ce test parle à un faux Firestore qui enregistre les requêtes : c'est le seul
+ * moyen de vérifier une borne sans toucher à la vraie base. */
+test('temps réel : les écouteurs suivent l’année scolaire, pas l’année civile', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    let anneeEnBase = 2026;
+    const poses = [];
+    const rappels = {};
+    const query = (col) => ({
+      col, wheres: [],
+      where(f, op, v) { const q = query(col); q.wheres = this.wheres.concat([[f, op, v]]); return q; },
+      onSnapshot(opts, cb) { poses.push({ col, wheres: this.wheres }); rappels[col] = cb; return () => {}; },
+    });
+    const db = {
+      collection: (c) => Object.assign(query(c), {
+        doc: (id) => ({ get: async () => ({ exists: true, id,
+          data: () => (id === 'app' ? { annee_scolaire: anneeEnBase } : { role: 'admin', active: true }) }) }),
+      }),
+    };
+    let authCb = null;
+    const auth = { currentUser: { uid: 'u1' }, setPersistence: async () => {},
+                   onAuthStateChanged: (f) => { authCb = f; return () => {}; } };
+    const store = new FirebaseStore({ auth: () => auth, firestore: () => db });
+    store.onChange(() => {});
+    authCb({ uid: 'u1' });
+    await new Promise((r) => setTimeout(r, 60));
+    const bornes = (col) => {
+      const p = [...poses].reverse().find((x) => x.col === col);
+      return p.wheres.map((w) => w.join(' ')).join(' | ');
+    };
+    const avant = { day_entries: bornes('day_entries'), kid_attendance: bornes('kid_attendance') };
+
+    // L'administration ouvre l'année suivante : les écouteurs doivent suivre.
+    anneeEnBase = 2027;
+    rappels.settings({ metadata: { hasPendingWrites: false }, docChanges: () => [],
+      docs: [{ id: 'app', data: () => ({ annee_scolaire: 2027 }) }] });
+    await new Promise((r) => setTimeout(r, 80));
+    return { avant, apres: { day_entries: bornes('day_entries'), kid_attendance: bornes('kid_attendance') } };
+  });
+
+  expect(res.avant.day_entries).toBe('entry_date >= 2026-08-01 | entry_date <= 2027-07-31');
+  expect(res.avant.kid_attendance).toBe('entry_date >= 2026-08-01 | entry_date <= 2027-07-31');
+  // Une nouvelle année ouverte repose les écouteurs sur la bonne période.
+  expect(res.apres.day_entries).toBe('entry_date >= 2027-08-01 | entry_date <= 2028-07-31');
+  expect(res.apres.kid_attendance).toBe('entry_date >= 2027-08-01 | entry_date <= 2028-07-31');
+});
