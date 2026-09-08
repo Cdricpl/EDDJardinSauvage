@@ -782,19 +782,37 @@ async function viewSheet() {
   const [month, entries, tpl, editableProf] = await Promise.all([
     STORE.getMonth(empId, CUR.y, CUR.m),
     STORE.entriesForMonth(empId, CUR.y, CUR.m),
-    ME.role === 'admin' ? STORE.getTemplate(empId) : Promise.resolve({}),
+    STORE.getTemplate(empId),   // lu aussi par l'employée : il sert au pré-remplissage
     currentEmpProfile(empId),
   ]);
 
-  // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
-  // (Les mois validés ne sont jamais touchés.) Garde anti-réentrance.
-  // Verrou : on ne tente le pré-remplissage qu'UNE fois par mois, par employée et
-  // par session. Indispensable : sinon un échec d'écriture (règle serveur, quota,
-  // réseau coupé) laisserait le mois vide, et le `render()` de fin relancerait
-  // aussitôt viewSheet → pré-remplissage → render()… en boucle, jusqu'à figer
-  // l'appareil. Le pré-encodage des présences enfants a la même protection.
+  /* Pré-remplissage automatique du mois à partir de l'horaire type.
+   *
+   * Deux conditions ont été assouplies, parce que ensemble elles produisaient un
+   * mois définitivement bancal (mesuré) :
+   *   - il était réservé à l'ADMINISTRATION : une employée qui ouvrait le mois
+   *     neuf avant elle ne voyait aucun horaire prévu ;
+   *   - il exigeait un mois totalement VIDE : dès qu'elle encodait un seul jour,
+   *     le mois cessait d'être vide et n'était plus JAMAIS pré-rempli, même
+   *     quand l'administration l'ouvrait ensuite. Résultat à l'écran :
+   *     « +4h00 d'écart non justifié » sur une journée parfaitement normale
+   *     (l'horaire prévu valant zéro), et tout le mois à ressaisir à la main.
+   *
+   * Désormais : il suffit qu'AUCUN jour du mois n'ait d'horaire prévu, et
+   * l'employée peut le déclencher sur SA propre feuille. Elle ne décide rien :
+   * on recopie l'horaire type, que seule l'administration peut définir. Un mois
+   * où l'administration a déjà posé des horaires n'est jamais retouché, et les
+   * jours déjà modifiés gardent leur horaire réel (voir applyTemplate).
+   *
+   * Verrou : on ne tente le pré-remplissage qu'UNE fois par mois, par employée et
+   * par session. Indispensable : sinon un échec d'écriture (règle serveur, quota,
+   * réseau coupé) laisserait le mois vide, et le `render()` de fin relancerait
+   * aussitôt viewSheet → pré-remplissage → render()… en boucle, jusqu'à figer
+   * l'appareil. Le pré-encodage des présences enfants a la même protection. */
   const sheetKey = `${empId}|${CUR.y}-${pad(CUR.m)}`;
-  if (ME.role === 'admin' && month.status === 'open' && !anneeClose() && entries.length === 0 && templateHasSlots(tpl)
+  const aucunHorairePrevu = entries.every((e) => !plannedMinutes(e));
+  const peutPreremplir = ME.role === 'admin' || (empId === ME.id && editableProf.active);
+  if (peutPreremplir && month.status === 'open' && !anneeClose() && aucunHorairePrevu && templateHasSlots(tpl)
       && !APPLYING && !PREFILLED_SHEETS.has(sheetKey)) {
     PREFILLED_SHEETS.add(sheetKey);   // marqué comme tenté AVANT l'écriture (anti-boucle)
     APPLYING = true;

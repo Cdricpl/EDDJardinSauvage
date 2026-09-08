@@ -974,3 +974,55 @@ test('feuille : sur un écran d’ordinateur, la grille tient sans défilement',
   await expect(page.locator('#app table')).toBeVisible();
   expect(await page.evaluate(() => Math.round(document.querySelector('.container').getBoundingClientRect().width))).toBe(1060);
 });
+
+/* Le pré-remplissage était réservé à l'administration ET exigeait un mois vide.
+ * Mesuré : si l'employée ouvrait le mois neuf en premier et encodait un seul
+ * jour, le mois n'était plus vide et ne serait JAMAIS pré-rempli — elle voyait
+ * « +4h00 d'écart non justifié » sur une journée normale. */
+test('feuille : un mois neuf ouvert par l’employée est pré-rempli', async ({ page }) => {
+  await page.goto('/index.html');
+  await expect(page.locator('#loginBtn')).toBeVisible();
+  await page.locator('#email').fill('flora@ecole.be');
+  await page.locator('#pwd').fill('flora123');
+  await page.locator('#loginBtn').click();
+  await expect(page.locator('#sheetTable')).toBeVisible();
+
+  // Mois suivant : aucun jour n'y a encore été encodé.
+  await page.locator('#nextM').click();
+  await expect(page.locator('#tPlanned')).toBeVisible();
+  const prevus = await page.evaluate(() => [...document.querySelectorAll('#sheetTable tbody tr')]
+    .filter((r) => r.querySelector('[data-k="planned_start"]').value).length);
+  expect(prevus, 'les jours de l’horaire type doivent être pré-remplis').toBeGreaterThan(15);
+  // Et donc aucun écart fantôme.
+  await expect(page.locator('#warnBanner')).toBeHidden();
+
+  // L'écart se calcule bien par rapport à l'horaire prévu ainsi posé.
+  const row = await firstWorkedRow(page);
+  await pickTime(row.locator('[data-k="end_time"]'), '17:00');
+  await expect(row.locator('.c-delta')).toHaveText('-1h00');
+});
+
+test('feuille : un mois entamé sans horaire prévu se répare à l’ouverture suivante', async ({ page }) => {
+  await loginAdmin(page);
+  // On recrée l'état hérité : un jour encodé dans un mois sans horaire prévu.
+  await page.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('ecole_db'));
+    const d = new Date(); const y = d.getFullYear(), m = d.getMonth() + 2;   // mois suivant
+    const date = `${y}-${String(m).padStart(2, '0')}-15`;
+    db.entries.push({ id: 'legacy', employee_id: 'u-flora', entry_date: date,
+      planned_start: '', planned_end: '', planned_minutes: 0,
+      start_time: '14:00', end_time: '18:00', worked_minutes: 240, worked_touched: true, justification: '' });
+    localStorage.setItem('ecole_db', JSON.stringify(db));
+  });
+  await page.locator('#empSel').selectOption({ label: 'Employée 1' });
+  await page.locator('#nextM').click();
+  await expect(page.locator('#tPlanned')).toBeVisible();
+
+  const prevus = await page.evaluate(() => [...document.querySelectorAll('#sheetTable tbody tr')]
+    .filter((r) => r.querySelector('[data-k="planned_start"]').value).length);
+  expect(prevus, 'le mois doit être pré-rempli malgré le jour déjà encodé').toBeGreaterThan(15);
+  // Les heures déjà encodées sont conservées.
+  const ligne = page.locator('#sheetTable tbody tr').filter({ has: page.locator('[data-date$="-15"]') });
+  await expect(ligne.locator('[data-k="start_time"]')).toHaveValue('14:00');
+  await expect(ligne.locator('[data-k="end_time"]')).toHaveValue('18:00');
+});
