@@ -145,6 +145,10 @@ th { background:#f2ead9; color:#6b5f4c; font-weight:700; font-size:14px; letter-
 .grid input.cell.wide { width:100%; min-width:120px; text-align:left; }
 .grid select.cell { border:none; padding:6px; background:transparent; }
 .grid select.cell.time { width:84px; }
+/* Colonne « Journée » : assez large pour « Maladie », et mise en evidence des
+   qu'un motif est pose, pour qu'une ligne a 0 h se repère d'un coup d'oeil. */
+.grid select.cell.jtype { width:92px; }
+.grid select.cell.jtype.jtype-on { background:#f7efe0; color:var(--ink); font-weight:700; }
 /* Temps de midi : colonne etroite, elle reste discrete car rarement utilisee. */
 .grid select.cell.brk { width:92px; font-size:14.5px; color:var(--muted); }
 .grid select.cell.brk:not(.brk-on) { opacity:.75; }

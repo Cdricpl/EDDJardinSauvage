@@ -365,6 +365,16 @@ test('enfants : rien n’est encodable avant le premier jour d’accueil', async
   await page.locator('.navbtn[data-v="children"]').click();
   await expect(page.locator('table.attend')).toBeVisible();
 
+  /* Se placer explicitement sur AOÛT 2026. Sans cela le test dépendait de la
+   * date du jour : dès que l'horloge est passée en septembre, la grille
+   * affichait un mois entièrement encodable et l'assertion tombait. */
+  const prevM = page.locator('#prevM');
+  for (let i = 0; i < 60; i++) {
+    if (await prevM.isDisabled()) break;
+    await prevM.click();
+  }
+  await expect(page.locator('.toolbar strong')).toContainText('août 2026');
+
   // Août 2026 : aucun accueil du 1er au 23 inclus. Ces cases sont neutralisées
   // (ce ne sont pas des boutons), donc rien ne peut y être coché ni pré-encodé.
   const ligne = page.locator('table.attend tbody tr').first();
@@ -830,4 +840,109 @@ test('restauration Firebase : le solde de départ revient, mais jamais les droit
   const enfant = ecrites.find((e) => e.col === 'kids').data;
   expect(enfant.grade).toBe('5e');
   expect(enfant.days).toEqual([1, 2]);
+});
+
+/* ================================================================
+ * Journée entière récupérée, en congé ou de maladie.
+ *
+ * Avant l'ajout de la colonne « Journée », une journée entière récupérée était
+ * INENCODABLE : effacer les deux heures réelles la faisait compter comme
+ * entièrement prestée, et mettre la même heure au début et à la fin était
+ * refusé. Ces tests verrouillent le comportement attendu.
+ * ================================================================ */
+
+// Le menu de la colonne « Journée » de la première ligne réellement travaillée.
+async function jourTypeSelect(page) {
+  return (await firstWorkedRow(page)).locator('[data-k="jour_type"]');
+}
+
+test('feuille : « Récup. » met la journée à 0 h et fait baisser le solde', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#tWorked')).toBeVisible();
+
+  const row = await firstWorkedRow(page);
+  const prevu = await row.locator('[data-k="planned_start"]').inputValue();
+  expect(prevu, 'la ligne testée doit avoir un horaire prévu').not.toBe('');
+  const presteAvant = await row.locator('.c-worked').textContent();
+
+  await row.locator('[data-k="jour_type"]').selectOption('recup');
+
+  // La journée ne compte plus aucune heure, et l'écart devient négatif.
+  await expect(row.locator('.c-worked')).toHaveText('—');
+  await expect(row.locator('.c-delta')).toHaveClass(/neg/);
+  const ecart = await row.locator('.c-delta').textContent();
+  expect(ecart, 'l’écart doit être négatif').toMatch(/^-/);
+  expect(presteAvant, 'la journée était bien prestée avant').not.toBe('—');
+
+  // L'horaire réel n'a plus de sens : il est grisé.
+  await expect(row.locator('[data-k="start_time"]')).toBeDisabled();
+  await expect(row.locator('[data-k="end_time"]')).toBeDisabled();
+});
+
+test('feuille : « Congé » compte comme presté, le solde ne bouge pas', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#tWorked')).toBeVisible();
+
+  const row = await firstWorkedRow(page);
+  const cumuleAvant = await page.locator('#tClosing').textContent();
+
+  await row.locator('[data-k="jour_type"]').selectOption('conge');
+
+  await expect(row.locator('.c-delta')).toHaveText('—');
+  await expect(page.locator('#tClosing')).toHaveText(cumuleAvant || '');
+});
+
+test('feuille : revenir à « — » rétablit l’horaire prévu', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#tWorked')).toBeVisible();
+
+  const row = await firstWorkedRow(page);
+  const debutPrevu = await row.locator('[data-k="planned_start"]').inputValue();
+  const presteAvant = await row.locator('.c-worked').textContent();
+
+  await row.locator('[data-k="jour_type"]').selectOption('recup');
+  await expect(row.locator('.c-worked')).toHaveText('—');
+
+  await row.locator('[data-k="jour_type"]').selectOption('');
+  await expect(row.locator('[data-k="start_time"]')).toBeEnabled();
+  await expect(row.locator('[data-k="start_time"]')).toHaveValue(debutPrevu);
+  await expect(row.locator('.c-worked')).toHaveText(presteAvant || '');
+});
+
+test('feuille : une journée typée n’exige pas de justification écrite', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#tWorked')).toBeVisible();
+
+  const row = await firstWorkedRow(page);
+  await row.locator('[data-k="jour_type"]').selectOption('recup');
+
+  // L'écart est pourtant non nul : c'est le motif qui tient lieu d'explication.
+  await expect(row.locator('.c-delta')).toHaveClass(/neg/);
+  await expect(row.locator('.c-justif input')).not.toHaveClass(/err/);
+  await expect(page.locator('#warnBanner')).toBeHidden();
+});
+
+test('feuille : le motif de journée survit à un rechargement', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#tWorked')).toBeVisible();
+
+  const row = await firstWorkedRow(page);
+  const date = await row.locator('[data-k="jour_type"]').getAttribute('data-date');
+  await row.locator('[data-k="jour_type"]').selectOption('maladie');
+  await expect(row.locator('.c-delta')).toHaveText('—');
+
+  // Rechargement complet : le champ doit avoir été réellement enregistré.
+  // (C'est ce test qui attrape un oubli dans la liste blanche du store.)
+  // La session est conservée : on revient directement sur la feuille.
+  await page.reload();
+  await expect(page.locator('#sheetTable')).toBeVisible();
+
+  const sel = page.locator(`[data-k="jour_type"][data-date="${date}"]`);
+  await expect(sel).toHaveValue('maladie');
+  await expect(page.locator(`[data-k="start_time"][data-date="${date}"]`)).toBeDisabled();
 });

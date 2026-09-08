@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-12';
+const APP_VERSION = 'v2026.09.08-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -255,12 +255,37 @@ function grossWorked(e) {
   return e.worked_minutes || 0;
 }
 // Heures PRESTÉES effectives : les heures encodées, moins le temps de midi.
-function effectiveWorked(e) { return Math.max(0, grossWorked(e) - breakMinutes(e)); }
+/* Journées non ordinaires. « Récupération » consomme des heures du solde ;
+ * « Congé » et « Maladie » comptent comme prestées, le solde ne bouge pas. */
+const JOUR_TYPES = { recup: 'Récupération', conge: 'Congé', maladie: 'Maladie' };
+const JOUR_COURTS = { recup: 'Récup.', conge: 'Congé', maladie: 'Maladie' };
+const estJourType = (e) => !!(e && JOUR_TYPES[e.jour_type]);
+
+/* Le type de journée l'emporte sur les heures encodées : une journée récupérée
+ * vaut 0 h quoi qu'il y ait dans les menus, un congé vaut la durée prévue.
+ * Avant, une journée entière récupérée était INENCODABLE : effacer les deux
+ * heures la faisait compter comme entièrement prestée. */
+function effectiveWorked(e) {
+  if (e.jour_type === 'recup') return 0;
+  if (e.jour_type === 'conge' || e.jour_type === 'maladie') return plannedMinutes(e);
+  return Math.max(0, grossWorked(e) - breakMinutes(e));
+}
 /* Écart qui doit être JUSTIFIÉ par écrit : celui qui subsiste une fois le temps
  * de midi mis de côté. Une pause encodée explique déjà l'écart qu'elle crée —
  * demander en plus une phrase serait redondant. Seule une différence entre
  * l'horaire prévu et l'horaire réellement encodé appelle une explication. */
-function deltaAJustifier(e) { return grossWorked(e) - plannedMinutes(e); }
+function deltaAJustifier(e) {
+  // Une journée typée porte déjà sa raison : ne pas réclamer en plus une phrase.
+  if (estJourType(e)) return 0;
+  return grossWorked(e) - plannedMinutes(e);
+}
+// Menu du type de journée, dans la colonne « Journée ».
+function jourTypeSelect(date, value, disabled) {
+  const v = JOUR_TYPES[value] ? value : '';
+  const opts = ['', 'recup', 'conge', 'maladie']
+    .map((k) => `<option value="${k}"${k === v ? ' selected' : ''}>${k ? JOUR_COURTS[k] : '—'}</option>`).join('');
+  return `<select class="cell jtype${v ? ' jtype-on' : ''}" data-k="jour_type" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts}</select>`;
+}
 function fmtHM(min) {
   const sign = min < 0 ? '-' : '';
   min = Math.abs(Math.round(min));
@@ -797,6 +822,7 @@ async function viewSheet() {
     const worked = effectiveWorked(e);
     const delta = worked - planned;
     const modified = !!e.worked_touched;
+    const typeJour = estJourType(e);          // récupération, congé ou maladie
     const needJustif = deltaAJustifier(e) !== 0 && !e.justification;
     if (needJustif) warnings++;
     // Valeurs réelles affichées : par défaut = prévu (pré-remplissage) si non modifié.
@@ -808,11 +834,12 @@ async function viewSheet() {
       <td>${DOW[dow]}</td>
       <td class="grp-plan">${timeSelect('planned_start', date, e.planned_start || '', !canEditPlanned)}</td>
       <td class="grp-plan">${timeSelect('planned_end', date, e.planned_end || '', !canEditPlanned)}</td>
-      <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked)}</td>
-      <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked)}</td>
-      <td class="grp-real">${breakSelect(date, e.break_minutes, !canEditWorked)}</td>
+      <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked || typeJour)}</td>
+      <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked || typeJour)}</td>
+      <td class="grp-real">${breakSelect(date, e.break_minutes, !canEditWorked || typeJour)}</td>
       <td class="nowrap c-worked"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
       <td class="c-delta ${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
+      <td class="c-jtype">${jourTypeSelect(date, e.jour_type, !canEditWorked)}</td>
       <td class="c-justif"><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${echapper(e.justification)}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
     </tr>`;
   }
@@ -843,7 +870,9 @@ async function viewSheet() {
               <th rowspan="2">Date</th><th rowspan="2">Jour</th>
               <th colspan="2" class="grp-plan-h">Horaire prévu (admin)</th>
               <th colspan="3" class="grp-real-h">Horaire réel</th>
-              <th rowspan="2">Presté</th><th rowspan="2">Écart</th><th rowspan="2">Justification</th>
+              <th rowspan="2">Presté</th><th rowspan="2">Écart</th>
+              <th rowspan="2" title="Journée entière récupérée, en congé ou de maladie">Journée</th>
+              <th rowspan="2">Justification</th>
             </tr>
             <tr>
               <th class="grp-plan-h">Début</th><th class="grp-plan-h">Fin</th>
@@ -866,7 +895,11 @@ async function viewSheet() {
         <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employée)</span>
         <span class="legend"><span class="dot">●</span> jour modifié</span>
         <span class="legend"><span class="pos">▲ vert = heures supplémentaires</span> / <span class="neg">▼ rouge = heures récupérées</span></span><br>
-        Heures par tranches de 15 min. Enregistrement automatique.
+        Heures par tranches de 15 min. Enregistrement automatique.<br>
+        Colonne <strong>Journée</strong> : pour une journée <strong>entière</strong> non prestée.
+        <strong>Récup.</strong> compte 0 h et fait baisser le solde d'autant ;
+        <strong>Congé</strong> et <strong>Maladie</strong> comptent comme prestées, le solde ne bouge pas.
+        Pour une récupération de quelques heures seulement, raccourcissez simplement l'horaire réel.
       </p>
     </div>`;
   wireToolbar();
@@ -895,6 +928,24 @@ async function viewSheet() {
     ec.className = 'c-delta ' + (delta > 0 ? 'pos' : delta < 0 ? 'neg' : '');
     const jinp = tr.querySelector('.c-justif input');
     if (jinp) { jinp.classList.toggle('err', needJustif); jinp.placeholder = needJustif ? 'Justification requise' : ''; }
+    /* Journée typée : l'horaire réel est sans objet, on le grise. Il faut aussi
+     * remettre les menus à ce que contient la base — l'utilisatrice vient
+     * peut-être d'effacer un type, auquel cas le prévu réapparaît. */
+    const typeJour = estJourType(e);
+    const jsel = tr.querySelector('.c-jtype select');
+    if (jsel) { jsel.value = e.jour_type || ''; jsel.classList.toggle('jtype-on', typeJour); }
+    const modifiable = !!(jsel && !jsel.disabled);
+    tr.querySelectorAll('[data-k="start_time"], [data-k="end_time"], [data-k="break_minutes"]')
+      .forEach((el) => { el.disabled = !modifiable || typeJour; });
+    if (!typeJour) {
+      setTimeValue(tr.querySelector('[data-k="start_time"]'), e.start_time || e.planned_start || '');
+      setTimeValue(tr.querySelector('[data-k="end_time"]'), e.end_time || e.planned_end || '');
+    } else {
+      setTimeValue(tr.querySelector('[data-k="start_time"]'), '');
+      setTimeValue(tr.querySelector('[data-k="end_time"]'), '');
+    }
+    const bsel = tr.querySelector('[data-k="break_minutes"]');
+    if (bsel) { bsel.value = String(breakMinutes(e)); bsel.classList.toggle('brk-on', breakMinutes(e) > 0); }
   }
   function refreshTotals() {
     let P = 0, W = 0, warn = 0;
@@ -966,6 +1017,26 @@ async function viewSheet() {
         patch.start_time = start; patch.end_time = end;
         patch.worked_touched = true;
         patch.worked_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
+      }
+    } else if (k === 'jour_type') {
+      /* Journée entière récupérée, en congé ou de maladie. L'horaire réel n'a
+       * plus de sens : on l'efface, et `worked_touched` protège la journée du
+       * pré-remplissage automatique. Le calcul se fait dans effectiveWorked,
+       * qui court-circuite les heures d'après le type. */
+      const t = JOUR_TYPES[el.value] ? el.value : '';
+      patch.jour_type = t;
+      if (t) {
+        patch.start_time = ''; patch.end_time = '';
+        patch.break_minutes = 0;
+        patch.worked_touched = true;
+        patch.worked_minutes = (t === 'recup') ? 0 : plannedMinutes(prev);
+      } else {
+        // Retour à une journée ordinaire : l'horaire réel redevient le prévu,
+        // exactement comme un jour jamais modifié.
+        patch.start_time = prev.planned_start || '';
+        patch.end_time = prev.planned_end || '';
+        patch.worked_touched = false;
+        patch.worked_minutes = plannedMinutes(prev);
       }
     } else if (k === 'break_minutes') {
       // Temps de midi : simple déduction des heures prestées, l'horaire encodé
@@ -2394,7 +2465,9 @@ async function exportSheetPDF(empId) {
       e.planned_start || '—', e.planned_end || '—',
       e.start_time || '—', e.end_time || '—',
       breakMinutes(e) ? fmtBreak(breakMinutes(e)) : '—',   // sinon l'écart semble inexpliqué
-      fmtHM(worked), fmtHM(worked - planned), e.justification || '']);
+      fmtHM(worked), fmtHM(worked - planned),
+      // Sans le motif, un ecart de -3h30 resterait inexplique sur le document.
+      [JOUR_TYPES[e.jour_type], e.justification].filter(Boolean).join(' — ')]);
   }
 
   if (!(await assurerPdf())) { // repli impression
