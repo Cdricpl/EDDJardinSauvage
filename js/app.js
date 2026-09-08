@@ -427,6 +427,26 @@ async function openingMinutes(empId, annee) {
   if (annee === MIN_YM.y) return Number(p.opening_minutes) || 0;
   return Number((p.soldes || {})[String(annee)]) || 0;
 }
+/* Recalcule ce que le solde reporté DEVRAIT valoir au 1er août d'une année,
+ * d'après les prestations réellement encodées. Le report enregistré, lui, est
+ * figé au moment où l'année a été ouverte : c'est voulu (une valeur stable et
+ * vérifiable), mais une correction apportée ensuite à une année close ne
+ * remonte pas — d'où le bouton « Recalculer » de l'onglet Utilisateurs.
+ * On repart du solde de départ et on ré-additionne année par année : corriger
+ * seulement la dernière laisserait un écart ancien figé dans tous les reports. */
+async function soldeRecalcule(empId, annee) {
+  const prof = (await STORE.listProfiles()).find((x) => x.id === empId);
+  if (!prof) return 0;
+  let solde = Number(prof.opening_minutes) || 0;          // au 1er août 2026
+  if (annee <= MIN_YM.y) return solde;
+  const all = await STORE.entriesForEmployee(empId);
+  const fin = finAnnee(annee - 1);                        // tout ce qui précède l'année visée
+  all.forEach((e) => {
+    if (e.entry_date < MIN_ISO || e.entry_date > fin) return;
+    solde += effectiveWorked(e) - plannedMinutes(e);
+  });
+  return solde;
+}
 async function monthSummary(empId, y, m) {
   const annee = anneeScolaireDe(y, m);
   // Début de l'année scolaire du mois demandé : le cumul repart de là, sur le
@@ -2069,6 +2089,18 @@ async function viewEmployees() {
     p: x, cloture: (await monthSummary(x.id, ANNEE + 1, 7)).closing,
   })));
 
+  /* Le solde reporté est FIGÉ à l'ouverture de l'année, comme convenu : il ne
+   * bouge pas tout seul. Mais l'administration peut encore corriger une année
+   * close, et cette correction ne remonte pas. On compare donc ce qui est
+   * enregistré à ce que les prestations donnent aujourd'hui — sans quoi
+   * personne ne saurait qu'il faut cliquer sur « Recalculer ». */
+  const reports = ANNEE > MIN_YM.y ? await Promise.all(emps.map(async (x) => ({
+    p: x,
+    enregistre: await openingMinutes(x.id, ANNEE),
+    recalcule: await soldeRecalcule(x.id, ANNEE),
+  }))) : [];
+  const aCorriger = reports.filter((r) => r.enregistre !== r.recalcule);
+
   /* Ce qui a déjà été encodé dans l'année ouverte. On l'annonce avant de
    * proposer de la refermer : refermer ne supprime rien, mais il faut le dire
    * plutôt que de le laisser deviner. */
@@ -2103,6 +2135,20 @@ async function viewEmployees() {
         et ajouterez les nouveaux. L'année ${libelleAnnee(ANNEE)} passe alors en lecture seule pour les employées ;
         vous pourrez encore la corriger.
       </p>
+      ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:14px;gap:12px;flex-wrap:wrap;align-items:center">
+        <p class="muted small" style="margin:0;flex:1;min-width:240px">
+          Le <strong>solde reporté au 1<sup>er</sup> août ${ANNEE}</strong> a été figé à l'ouverture de l'année :
+          il ne bouge pas tout seul. Si vous corrigez une année close, remettez-le à jour ici.
+        </p>
+        <button class="small" id="recalcSoldes">🔄 Recalculer les soldes reportés</button>
+      </div>
+      ${aCorriger.length ? `<div class="msg error" style="margin-top:8px">
+        ⚠️ ${aCorriger.length === 1 ? 'Un solde reporté ne correspond plus' : `${aCorriger.length} soldes reportés ne correspondent plus`}
+        aux prestations encodées :
+        <ul style="margin:6px 0 0 18px">${aCorriger.map((r) =>
+          `<li>${echapper(r.p.full_name)} : figé à <strong>${fmtDelta(r.enregistre)}</strong>,
+           recalculé à <strong>${fmtDelta(r.recalcule)}</strong></li>`).join('')}</ul>
+      </div>` : ''}` : ''}
       ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:16px;gap:12px;flex-wrap:wrap;align-items:center">
         <p class="muted small" style="margin:0;flex:1;min-width:220px">
           <strong>Ouverte par erreur ?</strong> Vous pouvez refermer ${libelleAnnee(ANNEE)} et revenir à
@@ -2200,6 +2246,34 @@ async function viewEmployees() {
       console.error('[nouvelle-annee]', e);
       nouvelle.disabled = false;
       toast("Ouverture impossible : " + e.message, 'error');
+    }
+  };
+
+  /* Recalcul des soldes reportés — administration seule (tout cet onglet l'est).
+   * On réécrit TOUTES les années depuis la première : corriger seulement la
+   * dernière laisserait un écart ancien figé dans les reports intermédiaires,
+   * qu'on voit encore en consultant une année passée. */
+  const recalc = document.getElementById('recalcSoldes');
+  if (recalc) recalc.onclick = async () => {
+    if (!aCorriger.length) { toast('Les soldes reportés sont déjà à jour.'); return; }
+    const detail = aCorriger.map((r) =>
+      `  · ${r.p.full_name} : ${fmtDelta(r.enregistre)} → ${fmtDelta(r.recalcule)}`).join('\n');
+    if (!confirm(
+      `Recalculer les soldes reportés au 1er août ${ANNEE} ?\n\n${detail}\n\n`
+      + `Aucune prestation n'est modifiée : seul le report de début d'année est remis à jour.`)) return;
+    recalc.disabled = true;
+    try {
+      for (const { p } of aCorriger) {
+        for (let a = MIN_YM.y + 1; a <= ANNEE; a++) {
+          await STORE.setSoldeAnnee(p.id, a, await soldeRecalcule(p.id, a));
+        }
+      }
+      toast('Soldes reportés recalculés');
+      render();
+    } catch (e) {
+      console.error('[recalcul-soldes]', e);
+      recalc.disabled = false;
+      toast('Recalcul impossible : ' + e.message, 'error');
     }
   };
 

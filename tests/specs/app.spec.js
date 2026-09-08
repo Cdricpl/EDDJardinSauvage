@@ -1204,3 +1204,45 @@ test('démarrage : l’application s’ouvre sur l’année réellement ouverte'
   expect(res.ANNEE_VUE).toBe(2027);
   expect(res.mois).toBe('août 2027');
 });
+
+/* Le solde reporté est figé à l'ouverture de l'année — c'est le principe retenu.
+ * Mais l'administration peut encore corriger une année close, et la correction
+ * ne remonte pas : mesuré à l'audit, deux heures disparaissaient en silence.
+ * Elle est désormais signalée, et un bouton la reporte. */
+test('années : une correction dans l’année close est signalée et reportable', async ({ page }) => {
+  page.on('dialog', (d) => d.accept());
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+  await expect(page.locator('#nouvelleAnnee')).toBeVisible();
+
+  // Ouverture de l'année suivante : les soldes de fin deviennent les reports.
+  await page.locator('#nouvelleAnnee').click();
+  await expect(page.locator('#app h2').first()).toContainText('2027-2028');
+  await expect(page.locator('#app .msg.error')).toHaveCount(0);   // rien à signaler
+
+  // Correction d'un jour dans l'année refermée.
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await page.locator('#anneeSel').selectOption('2026');
+  await expect(page.locator('#tClosing')).toBeVisible();
+  await page.locator('#nextM').click();
+  const row = await firstWorkedRow(page);
+  const avant = await page.locator('#tClosing').textContent();
+  await pickTime(row.locator('[data-k="end_time"]'), '20:00');
+  await expect(page.locator('#tClosing')).not.toHaveText(avant);
+
+  // Le report de l'année ouverte n'a pas bougé (voulu), mais c'est annoncé.
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const avert = page.locator('#app .msg.error');
+  await expect(avert).toHaveCount(1);
+  await expect(avert).toContainText('ne correspond plus');
+  await expect(avert).toContainText('recalculé à');
+
+  // Le bouton remet le report à jour.
+  await page.locator('#recalcSoldes').click();
+  await expect(page.locator('#app .msg.error')).toHaveCount(0);
+  // On revient sur l'année ouverte (la consultation était restée sur l'année close).
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await page.locator('#anneeSel').selectOption('2027');
+  await expect(page.locator('.toolbar strong').first()).toHaveText(/août 2027/i);
+  await expect(page.locator('#tCarry')).toHaveText('1h45');
+});
