@@ -521,7 +521,14 @@ class FirebaseStore {
     try {
       await this.auth.signInWithEmailAndPassword((email || '').trim(), password);
     } catch (e) { throw new Error(this._authMsg(e)); }
-    return this.getCurrentUser();
+    try {
+      return await this.getCurrentUser();
+    } catch (e) {
+      // Compte authentifié mais sans fiche : on le déconnecte tout de suite,
+      // sinon il resterait connecté à un programme qui ne lui montre rien.
+      if (e && e.code === 'non-autorise') { try { await this.auth.signOut(); } catch {} }
+      throw e;
+    }
   }
   _authMsg(e) {
     const c = (e && e.code) || '';
@@ -541,17 +548,17 @@ class FirebaseStore {
     if (!user) return null;
     const snap = await this.db.collection('profiles').doc(user.uid).get();
     if (!snap.exists) {
-      // Compte créé directement dans la console Firebase : on initialise son profil.
-      // TOUJOURS en 'employee' — le passage en admin se fait dans la console
-      // (les règles Firestore interdisent de s'auto-promouvoir).
-      const prof = {
-        full_name: user.displayName || user.email, email: user.email,
-        role: 'employee', active: true,
-        created_at: new Date().toISOString(),
-      };
-      await this.db.collection('profiles').doc(user.uid).set(prof);
-      this._profilesCache = null;
-      return (this._profile = { id: user.uid, ...prof });
+      /* Un compte authentifié SANS fiche n'est pas un membre de l'équipe.
+       * L'application créait ici la fiche elle-même, en « employee » active —
+       * or l'inscription Firebase est ouverte (c'est par elle que l'onglet
+       * Utilisateurs crée les comptes) et la configuration du projet est
+       * publique : n'importe qui pouvait donc se fabriquer un accès et lire les
+       * fiches des enfants. Les comptes se créent désormais uniquement depuis
+       * l'onglet Utilisateurs, qui écrit la fiche au nom de l'administration. */
+      const e = new Error("Ce compte n'est pas autorisé à utiliser le programme. "
+        + "Demandez à l'administration de vous créer un accès.");
+      e.code = 'non-autorise';
+      throw e;
     }
     return (this._profile = { id: user.uid, ...snap.data() });
   }

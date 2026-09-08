@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.08-2';
+const APP_VERSION = 'v2026.09.08-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -570,7 +570,14 @@ async function boot() {
     render();
   }, 800));
 
-  ME = await STORE.getCurrentUser();
+  try {
+    ME = await STORE.getCurrentUser();
+  } catch (e) {
+    // Compte authentifié mais sans fiche dans l'équipe : on le dit, on ne
+    // laisse pas une erreur de permission brute à l'écran.
+    if (e && e.code === 'non-autorise') { try { await STORE.signOut(); } catch {} return showNonAutorise(e.message); }
+    throw e;
+  }
   if (ME) await afterLogin(); else renderLogin();
 }
 
@@ -773,6 +780,28 @@ function showFatal(msg) {
   if (visible) { document.getElementById('app').innerHTML = contenu; return; }
   const login = document.getElementById('login');
   if (login) { login.style.display = 'flex'; login.innerHTML = `<div class="login-card">${contenu}</div>`; }
+}
+
+/* Écran dédié pour un compte authentifié qui n'appartient pas à l'équipe.
+ * Ce n'est ni une panne ni une erreur de mot de passe : il n'y a rien à
+ * réessayer, il faut que l'administration crée l'accès. */
+function showNonAutorise(msg) {
+  const shell = document.getElementById('appShell');
+  if (shell) shell.style.display = 'none';
+  const login = document.getElementById('login');
+  if (!login) return;
+  login.style.display = 'flex';
+  login.innerHTML = `
+    <div class="card login-card">
+      <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
+      <h1>Accès non autorisé</h1>
+      <div class="msg error" style="margin-top:14px">${echapper(msg || "Ce compte n'est pas autorisé à utiliser le programme.")}</div>
+      <p class="muted small">Les accès sont créés par l'administration : ${ADMINS_CONTACT}.</p>
+      <button class="big" id="retourConnexion">Retour à la connexion</button>
+      <p class="muted small" style="margin-top:14px">${APP_VERSION}</p>
+    </div>`;
+  const b = document.getElementById('retourConnexion');
+  if (b) b.onclick = () => location.reload();
 }
 
 /* Écran dédié quand l'application ne peut pas joindre le serveur au démarrage.

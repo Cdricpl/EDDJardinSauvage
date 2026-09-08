@@ -4,6 +4,12 @@ rules_version = '2';
 // Regles de securite Firestore - EDD Jardin Sauvage
 // ----------------------------------------------------------------------------
 // Equivalent des regles RLS utilisees cote Supabase :
+//   - LIRE quoi que ce soit exige d'etre MEMBRE (avoir une fiche dans profiles,
+//     active, ou etre admin) : etre simplement authentifie ne suffit plus.
+//     L'inscription Firebase est ouverte (elle doit l'etre : c'est par elle que
+//     l'application cree les comptes), et la configuration du projet est
+//     publique. Sans cette regle, n'importe qui pouvait creer un compte et lire
+//     les noms, dates de naissance et ecoles des enfants.
 //   - les PRESTATIONS ne sont lisibles que par leur employee ou par l'admin
 //   - une employee n'ecrit que SES jours, et seulement si le mois est ouvert
 //   - les ENFANTS sont visibles et ajoutables par l'equipe ; renommage et
@@ -24,6 +30,15 @@ service cloud.firestore {
     function myProfile() { return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data; }
     function isAdmin()   { return signedIn() && myProfile().role == 'admin'; }
     function isActive()  { return signedIn() && myProfile().active == true; }
+    /* MEMBRE de l'equipe : un compte authentifie NE SUFFIT PAS, il faut une fiche
+     * dans profiles. `exists` d'abord : sur un compte sans fiche, `myProfile()`
+     * echouerait au lieu de repondre non. L'administration reste membre meme si
+     * sa fiche n'etait pas marquee active (on ne se coupe pas l'acces). */
+    function membre() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/profiles/$(request.auth.uid))
+        && (myProfile().active == true || myProfile().role == 'admin');
+    }
 
     // "AAAA-MM-JJ" -> "AAAA-MM" (identifiant du document mois)
     function ym(d) { return d.split('-')[0] + '-' + d.split('-')[1]; }
@@ -37,28 +52,32 @@ service cloud.firestore {
     // Regle metier : le systeme demarre en aout 2026.
     function validDate(d) { return d is string && d.size() == 10 && d >= '2026-08-01'; }
 
-    // ---- PROFILS : lisibles par les comptes connectes ; ecriture admin ----
+    // ---- PROFILS : sa propre fiche, et celles de l'equipe si on en est ----
     match /profiles/{uid} {
-      allow read:  if signedIn();
+      // Sa PROPRE fiche d'abord : l'application a besoin de la lire pour
+      // reconnaitre un compte sans fiche et le dire clairement, au lieu de
+      // laisser une erreur de permission a l'ecran. Ce test vient en premier :
+      // il ne depend d'aucune lecture, donc il repond meme sans fiche.
+      allow read:  if (signedIn() && uid == request.auth.uid) || membre();
       allow write: if isAdmin();
-      // Exception : un compte cree dans la console Firebase peut initialiser SON
-      // profil, uniquement en 'employee'. Le passage en admin se fait dans la
-      // console Firebase : personne ne peut donc s'auto-promouvoir.
-      allow create: if signedIn() && uid == request.auth.uid
-                    && request.resource.data.role == 'employee'
-                    && request.resource.data.active == true;
+      /* L'AUTO-CREATION DE FICHE A ETE RETIREE. Elle permettait a tout compte
+       * authentifie de s'ecrire une fiche "active", et donc d'annuler la
+       * regle `membre()` ci-dessus. Les comptes se creent depuis l'onglet
+       * Utilisateurs, qui ecrit la fiche au nom de l'administration.
+       * Consequence a connaitre : un compte cree DIRECTEMENT dans la console
+       * Firebase ne pourra pas se connecter tant que sa fiche n'existe pas. */
     }
 
-    // ---- MOIS : lecture pour tous ; seul l'admin valide ou rouvre ----
+    // ---- MOIS : lecture par l'equipe ; seul l'admin valide ou rouvre ----
     match /months/{id} {
-      allow read:  if signedIn();
+      allow read:  if membre();
       allow write: if isAdmin();
     }
 
     // ---- PRESTATIONS : confidentialite RH ----
     match /day_entries/{id} {
       allow read: if isAdmin()
-                  || (signedIn() && resource.data.employee_id == request.auth.uid);
+                  || (membre() && resource.data.employee_id == request.auth.uid);
       allow write: if isAdmin()
                    || (isActive()
                        && request.resource.data.employee_id == request.auth.uid
@@ -66,22 +85,22 @@ service cloud.firestore {
                        && monthOpen(request.auth.uid, request.resource.data.entry_date));
     }
 
-    // ---- HORAIRE TYPE : lecture pour tous ; ecriture admin ----
+    // ---- HORAIRE TYPE : lecture par l'equipe ; ecriture admin ----
     match /schedule_templates/{empId} {
-      allow read:  if signedIn();
+      allow read:  if membre();
       allow write: if isAdmin();
     }
 
     // ---- ENFANTS : l'equipe voit et ajoute ; l'admin seul renomme ou retire ----
     match /kids/{id} {
-      allow read:   if signedIn();
+      allow read:   if membre();
       allow create: if isActive();
       allow update, delete: if isAdmin();
     }
 
     // ---- PRESENCES : encodage quotidien par l'equipe ----
     match /kid_attendance/{id} {
-      allow read:  if signedIn();
+      allow read:  if membre();
       allow write: if isActive();
     }
 
@@ -90,7 +109,7 @@ service cloud.firestore {
     // remise a "present" au chargement suivant. Ecrit par l'equipe, comme les
     // presences : c'est le meme geste d'encodage.
     match /kid_prefill/{id} {
-      allow read:  if signedIn();
+      allow read:  if membre();
       allow write: if isActive();
     }
 
@@ -99,7 +118,7 @@ service cloud.firestore {
     // modifiable par la seule administration : ouvrir une nouvelle annee
     // scolaire fige l'annee precedente pour les employees.
     match /settings/{id} {
-      allow read:  if signedIn();
+      allow read:  if membre();
       allow write: if isAdmin();
     }
 

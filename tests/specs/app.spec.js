@@ -1246,3 +1246,40 @@ test('années : une correction dans l’année close est signalée et reportable
   await expect(page.locator('.toolbar strong').first()).toHaveText(/août 2027/i);
   await expect(page.locator('#tCarry')).toHaveText('1h45');
 });
+
+/* L'inscription Firebase est ouverte (c'est par elle que l'onglet Utilisateurs
+ * crée les comptes) et la configuration du projet est publique : l'application
+ * créait alors elle-même une fiche « employée active » pour tout compte
+ * authentifié sans fiche — n'importe qui pouvait donc se fabriquer un accès aux
+ * données des enfants. Elle refuse désormais, et le dit. */
+test('accès : un compte authentifié sans fiche est refusé, pas provisionné', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const journal = [];
+    const db = { collection: (c) => ({ doc: (id) => ({
+      get: async () => { journal.push('lecture ' + c + '/' + id); return { exists: false, id, data: () => ({}) }; },
+      set: async () => { journal.push('ECRITURE ' + c + '/' + id); },
+    }) }) };
+    const auth = { currentUser: { uid: 'inconnu', email: 'inconnu@example.com' },
+      setPersistence: async () => {}, onAuthStateChanged: () => () => {},
+      signOut: async () => { journal.push('signOut'); } };
+    const store = new FirebaseStore({ auth: () => auth, firestore: () => db });
+    let erreur = null;
+    try { await store.getCurrentUser(); } catch (e) { erreur = { code: e.code, message: e.message }; }
+    return { journal, erreur };
+  });
+
+  expect(res.erreur && res.erreur.code).toBe('non-autorise');
+  expect(res.erreur.message).toContain("n'est pas autorisé");
+  // Le point essentiel : AUCUNE fiche n'est écrite.
+  expect(res.journal.filter((l) => l.startsWith('ECRITURE'))).toHaveLength(0);
+
+  // Et l'écran correspondant est explicite, sans jargon de permission.
+  const ecran = await page.evaluate(() => {
+    showNonAutorise("Ce compte n'est pas autorisé à utiliser le programme.");
+    return { titre: document.querySelector('#login h1').textContent,
+             shell: document.getElementById('appShell').style.display };
+  });
+  expect(ecran.titre).toBe('Accès non autorisé');
+  expect(ecran.shell).toBe('none');
+});
