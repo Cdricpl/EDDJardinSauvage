@@ -858,7 +858,7 @@ async function viewSheet() {
       <td class="grp-plan">${timeSelect('planned_end', date, e.planned_end || '', !canEditPlanned)}</td>
       <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked || typeJour)}</td>
       <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked || typeJour)}</td>
-      <td class="grp-real">${breakSelect(date, e.break_minutes, !canEditWorked || typeJour)}</td>
+      <td class="grp-real">${breakSelect(date, typeJour ? 0 : e.break_minutes, !canEditWorked || typeJour)}</td>
       <td class="nowrap c-worked"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
       <td class="c-delta ${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
       <td class="c-jtype">${jourTypeSelect(date, e.jour_type, !canEditWorked)}</td>
@@ -966,8 +966,11 @@ async function viewSheet() {
       setTimeValue(tr.querySelector('[data-k="start_time"]'), '');
       setTimeValue(tr.querySelector('[data-k="end_time"]'), '');
     }
+    /* Journée typée : le temps de midi est masqué (« — ») mais conservé en base ;
+     * il réapparaît tel quel si l'on revient à une journée ordinaire. */
     const bsel = tr.querySelector('[data-k="break_minutes"]');
-    if (bsel) { bsel.value = String(breakMinutes(e)); bsel.classList.toggle('brk-on', breakMinutes(e) > 0); }
+    const midi = typeJour ? 0 : breakMinutes(e);
+    if (bsel) { bsel.value = String(midi); bsel.classList.toggle('brk-on', midi > 0); }
   }
   function refreshTotals() {
     let P = 0, W = 0, warn = 0;
@@ -1049,7 +1052,10 @@ async function viewSheet() {
       patch.jour_type = t;
       if (t) {
         patch.start_time = ''; patch.end_time = '';
-        patch.break_minutes = 0;
+        /* Le temps de midi n'est PAS effacé : il est simplement sans objet tant
+         * qu'un motif est posé (`effectiveWorked` ne le regarde pas), et masqué
+         * à l'écran comme les heures réelles. L'effacer faisait perdre la saisie :
+         * en revenant à « — », la journée repartait avec 30 minutes de trop. */
         patch.worked_touched = true;
         patch.worked_minutes = (t === 'recup') ? 0 : plannedMinutes(prev);
       } else {
@@ -2356,15 +2362,18 @@ async function viewEmployees() {
       const nameById = {}; (data.profiles || []).forEach((p) => (nameById[p.id] = p.full_name));
       // Sans la colonne « Temps de midi », une ligne « 14:00 → 18:00, presté 195 »
       // était incompréhensible : les 45 minutes déduites n'apparaissaient nulle part.
+      /* La colonne « Motif » est indispensable depuis les journées entières :
+       * sans elle, une journée récupérée apparaît à 0 minute sans explication. */
       const rows = [['Employée', 'Date', 'Prévu début', 'Prévu fin', 'Réel début', 'Réel fin',
-        'Temps de midi (min)', 'Presté (min)', 'Écart (min)', 'Justification']];
+        'Temps de midi (min)', 'Presté (min)', 'Écart (min)', 'Motif', 'Justification']];
       (data.day_entries || [])
         .slice().sort((a, b) => (a.entry_date + a.employee_id).localeCompare(b.entry_date + b.employee_id))
         .forEach((e) => {
           const p = plannedMinutes(e), w = effectiveWorked(e);
           rows.push([nameById[e.employee_id] || e.employee_id, e.entry_date,
             e.planned_start || '', e.planned_end || '', e.start_time || '', e.end_time || '',
-            breakMinutes(e), w, w - p, e.justification || '']);
+            estJourType(e) ? 0 : breakMinutes(e), w, w - p,
+            JOUR_TYPES[e.jour_type] || '', e.justification || '']);
         });
       downloadFile(`prestations_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
       toast('CSV prestations téléchargé');
@@ -2486,7 +2495,7 @@ async function exportSheetPDF(empId) {
     body.push([`${pad(d)}/${pad(CUR.m)}`,
       e.planned_start || '—', e.planned_end || '—',
       e.start_time || '—', e.end_time || '—',
-      breakMinutes(e) ? fmtBreak(breakMinutes(e)) : '—',   // sinon l'écart semble inexpliqué
+      (!estJourType(e) && breakMinutes(e)) ? fmtBreak(breakMinutes(e)) : '—',   // sinon l'écart semble inexpliqué
       fmtHM(worked), fmtHM(worked - planned),
       // Sans le motif, un ecart de -3h30 resterait inexplique sur le document.
       [JOUR_TYPES[e.jour_type], e.justification].filter(Boolean).join(' — ')]);

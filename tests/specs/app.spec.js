@@ -1076,3 +1076,44 @@ test('temps réel : les écouteurs suivent l’année scolaire, pas l’année c
   expect(res.apres.day_entries).toBe('entry_date >= 2027-08-01 | entry_date <= 2028-07-31');
   expect(res.apres.kid_attendance).toBe('entry_date >= 2027-08-01 | entry_date <= 2028-07-31');
 });
+
+/* Poser un motif de journée effaçait le temps de midi : en revenant à « — », la
+ * journée repartait avec 30 minutes de trop au crédit de l'employée. */
+test('feuille : le temps de midi survit à un aller-retour de motif', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#tWorked')).toBeVisible();
+  const row = await firstWorkedRow(page);
+
+  await row.locator('[data-k="break_minutes"]').selectOption('30');
+  await expect(row.locator('.c-worked')).toHaveText('3h30');
+
+  // Motif posé : le temps de midi est masqué (sans objet), mais pas perdu.
+  await row.locator('[data-k="jour_type"]').selectOption('recup');
+  await expect(row.locator('.c-worked')).toHaveText('—');
+  await expect(row.locator('[data-k="break_minutes"]')).toHaveValue('0');
+  await expect(row.locator('[data-k="break_minutes"]')).toBeDisabled();
+
+  // Retour à une journée ordinaire : il revient tel quel.
+  await row.locator('[data-k="jour_type"]').selectOption('');
+  await expect(row.locator('[data-k="break_minutes"]')).toHaveValue('30');
+  await expect(row.locator('.c-worked')).toHaveText('3h30');
+});
+
+test('exports : le CSV des prestations porte le motif de la journée', async ({ page }) => {
+  await loginAdmin(page);
+  const row = await firstWorkedRow(page);
+  await row.locator('[data-k="jour_type"]').selectOption('recup');
+  await expect(row.locator('.c-worked')).toHaveText('—');
+
+  await page.locator('.navbtn[data-v="employees"]').click();
+  await expect(page.locator('#expCsvPresta')).toBeVisible();
+  const dl = page.waitForEvent('download');
+  await page.locator('#expCsvPresta').click();
+  const flux = await (await dl).createReadStream();
+  let csv = ''; for await (const c of flux) csv += c;
+
+  expect(csv.split('\r\n')[0]).toContain('Motif');
+  // Sans cette colonne, une journée récupérée apparaissait à 0 minute, inexpliquée.
+  expect(csv).toContain('Récupération');
+});
