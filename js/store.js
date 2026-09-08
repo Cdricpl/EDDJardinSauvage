@@ -708,12 +708,26 @@ class FirebaseStore {
     if (i >= 0) list[i] = { ...list[i], ...entry }; else list.push({ ...entry });
   }
   async upsertEntry(entry) {
+    const id = this._entryId(entry.employee_id, entry.entry_date);
     const data = { ...entry, updated_at: new Date().toISOString() };
-    await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date))
-      .set(data, { merge: true });
-    // Relit la version fusionnee pour renvoyer l'etat complet.
-    const s = await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date)).get();
-    const saved = { id: s.id, ...s.data() };
+    const ref = this.db.collection('day_entries').doc(id);
+    await ref.set(data, { merge: true });
+    /* La version fusionnee etait RELUE au serveur juste apres l'ecriture, pour
+     * renvoyer l'etat complet de la journee : deux allers-retours l'un apres
+     * l'autre a chaque cellule modifiee, alors que l'ecran attend la reponse
+     * pour se mettre a jour. Or les prestations sont des champs plats : la
+     * fusion se refait a l'identique en local, a partir de la journee deja en
+     * cache. On ne relit le serveur que si elle n'y est pas (premiere ouverture,
+     * cache vide) — le resultat est le meme, l'attente est deux fois plus courte. */
+    const cache = this._entriesCache[entry.employee_id];
+    const connue = cache && cache.find((e) => e.entry_date === entry.entry_date);
+    let saved;
+    if (connue) {
+      saved = { ...connue, ...data, id };
+    } else {
+      const s = await ref.get();
+      saved = { id: s.id, ...s.data() };
+    }
     this._mergeCache(saved);
     this._oublier('prestationsPeriode:');
     return saved;

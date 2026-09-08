@@ -1117,3 +1117,51 @@ test('exports : le CSV des prestations porte le motif de la journée', async ({ 
   // Sans cette colonne, une journée récupérée apparaissait à 0 minute, inexpliquée.
   expect(csv).toContain('Récupération');
 });
+
+/* Chaque cellule enregistrée faisait DEUX allers-retours l'un après l'autre :
+ * l'écriture, puis une relecture de la journée fusionnée. Le faux Firestore
+ * ci-dessous compte les appels et vérifie que la fusion refaite en local donne
+ * exactement le même document que celui du serveur. */
+test('enregistrement : une cellule ne fait qu’un aller-retour', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const base = {};          // documents « côté serveur »
+    const appels = { set: 0, get: 0 };
+    const docRef = (col, id) => ({
+      async set(data, opts) {
+        appels.set++;
+        base[id] = (opts && opts.merge) ? { ...(base[id] || {}), ...data } : { ...data };
+      },
+      async get() { appels.get++; return { id, exists: !!base[id], data: () => ({ ...base[id] }) }; },
+    });
+    const db = { collection: (c) => ({ doc: (id) => docRef(c, id) }) };
+    const store = new FirebaseStore({
+      auth: () => ({ setPersistence: async () => {}, onAuthStateChanged: () => () => {} }),
+      firestore: () => db,
+    });
+
+    // Journée déjà connue (cas courant : la feuille du mois est affichée).
+    store._entriesCache['e1'] = [{ id: 'e1_2026-09-01', employee_id: 'e1', entry_date: '2026-09-01',
+      planned_start: '14:00', planned_end: '18:00', planned_minutes: 240,
+      start_time: '14:00', end_time: '18:00', worked_minutes: 240, break_minutes: 30, justification: 'x' }];
+    base['e1_2026-09-01'] = { ...store._entriesCache['e1'][0] };
+    const rendu = await store.upsertEntry({ employee_id: 'e1', entry_date: '2026-09-01', jour_type: 'recup',
+      start_time: '', end_time: '', worked_touched: true, worked_minutes: 0 });
+    const connue = { set: appels.set, get: appels.get };
+
+    // Le document rendu doit être IDENTIQUE à ce que le serveur a réellement enregistré.
+    const serveur = { id: 'e1_2026-09-01', ...base['e1_2026-09-01'] };
+    const identique = JSON.stringify(Object.entries(rendu).sort()) === JSON.stringify(Object.entries(serveur).sort());
+
+    // Journée inconnue du cache : la relecture reste le filet de sécurité.
+    appels.set = 0; appels.get = 0;
+    await store.upsertEntry({ employee_id: 'e2', entry_date: '2026-09-02', justification: 'y' });
+    return { connue, identique, inconnue: { set: appels.set, get: appels.get }, motif: rendu.jour_type, midi: rendu.break_minutes };
+  });
+
+  expect(res.connue).toEqual({ set: 1, get: 0 });      // un seul aller-retour
+  expect(res.identique, 'la fusion locale doit donner le document du serveur').toBe(true);
+  expect(res.motif).toBe('recup');
+  expect(res.midi).toBe(30);                            // les champs non touchés sont conservés
+  expect(res.inconnue).toEqual({ set: 1, get: 1 });     // repli quand la journée n'est pas en cache
+});
