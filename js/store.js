@@ -273,12 +273,12 @@ class DemoStore {
       e = { id: Util.uuid(), employee_id: entry.employee_id, entry_date: entry.entry_date,
             planned_start: '', planned_end: '', planned_minutes: 0, worked_minutes: 0,
             start_time: '', end_time: '', worked_touched: false, justification: '',
-            break_minutes: 0 };
+            break_minutes: 0, jour_type: '' };
       db.entries.push(e);
     }
     // Liste blanche : tout champ oublié ici serait silencieusement perdu.
     ['planned_start', 'planned_end', 'planned_minutes', 'worked_minutes', 'start_time',
-     'end_time', 'worked_touched', 'justification', 'break_minutes'].forEach(k => {
+     'end_time', 'worked_touched', 'justification', 'break_minutes', 'jour_type'].forEach(k => {
       if (entry[k] !== undefined) e[k] = entry[k];
     });
     return e;
