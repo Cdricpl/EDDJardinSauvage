@@ -523,7 +523,13 @@ async function installerRaccourci() {
 async function boot() {
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
-  await chargerAnnee();
+  /* L'année scolaire ouverte n'est PAS lue ici : les règles Firestore refusent
+   * toute lecture à un visiteur non identifié, et la session n'est restaurée
+   * qu'au `getCurrentUser()` plus bas. Lue trop tôt, la lecture échouait
+   * (« Missing or insufficient permissions » dans la console), l'erreur était
+   * avalée, et l'année retombait sur sa valeur par défaut : l'application
+   * s'ouvrait sur la première année, close, quelle que soit l'année réellement
+   * ouverte. Elle est donc lue dans `afterLogin`, une fois connectée. */
   const vEl = document.getElementById('appVersion');
   if (vEl) vEl.textContent = APP_VERSION;
   document.getElementById('modeBadge').textContent = MODE === 'firebase' ? '🔥 Firebase' : '🧪 Démo (local)';
@@ -549,6 +555,7 @@ async function boot() {
 }
 
 async function afterLogin() {
+  await chargerAnnee();   // en premier : le mois affiché et les droits en dépendent
   if (ME.role === 'employee') SEL_EMP = ME.id;
   else {
     const profs = await STORE.listProfiles();

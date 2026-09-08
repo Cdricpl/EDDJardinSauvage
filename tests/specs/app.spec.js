@@ -1165,3 +1165,42 @@ test('enregistrement : une cellule ne fait qu’un aller-retour', async ({ page 
   expect(res.midi).toBe(30);                            // les champs non touchés sont conservés
   expect(res.inconnue).toEqual({ set: 1, get: 1 });     // repli quand la journée n'est pas en cache
 });
+
+/* L'année scolaire ouverte était lue AVANT l'authentification : les règles
+ * Firestore refusent toute lecture à un visiteur non identifié, l'erreur était
+ * avalée (« [annee] Missing or insufficient permissions » dans la console) et
+ * l'application s'ouvrait sur la première année — close — quelle que soit
+ * l'année réellement ouverte. Le faux magasin ci-dessous reproduit ce refus. */
+test('démarrage : l’application s’ouvre sur l’année réellement ouverte', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const journal = [];
+    let connectee = false;
+    const vrai = new DemoStore();
+    const faux = Object.create(Object.getPrototypeOf(vrai));
+    Object.assign(faux, vrai);
+    faux.getReglages = async () => {
+      journal.push(connectee ? 'reglages(connectée)' : 'reglages(AVANT connexion)');
+      if (!connectee) throw new Error('Missing or insufficient permissions');
+      return { annee_scolaire: 2027 };
+    };
+    faux.getCurrentUser = async () => {
+      journal.push('getCurrentUser');
+      connectee = true;
+      return { id: 'u-admin', full_name: 'Admin', role: 'admin', active: true };
+    };
+    createStore = async () => ({ store: faux, mode: 'demo' });
+    ME = null;
+    await boot();
+    await new Promise((r) => setTimeout(r, 300));
+    const t = document.querySelector('.toolbar strong');
+    return { journal, ANNEE, ANNEE_VUE, mois: t ? t.textContent.trim() : '' };
+  });
+
+  // La lecture ne doit jamais précéder l'authentification.
+  expect(res.journal[0]).toBe('getCurrentUser');
+  expect(res.journal).not.toContain('reglages(AVANT connexion)');
+  expect(res.ANNEE).toBe(2027);
+  expect(res.ANNEE_VUE).toBe(2027);
+  expect(res.mois).toBe('août 2027');
+});
