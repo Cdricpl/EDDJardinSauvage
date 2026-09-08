@@ -946,3 +946,31 @@ test('feuille : le motif de journée survit à un rechargement', async ({ page }
   await expect(sel).toHaveValue('maladie');
   await expect(page.locator(`[data-k="start_time"][data-date="${date}"]`)).toBeDisabled();
 });
+
+/* Usage réel : le programme sert surtout sur ORDINATEUR. Avec la largeur de
+ * lecture (1060 px), la feuille et ses 11 colonnes débordaient de 40 px sur tous
+ * les écrans testés — il fallait la faire défiler pour lire la justification,
+ * pendant qu'il restait jusqu'à 860 px d'écran inutilisés. */
+test('feuille : sur un écran d’ordinateur, la grille tient sans défilement', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#sheetTable')).toBeVisible();
+
+  const m = await page.evaluate(() => {
+    const tbl = document.getElementById('sheetTable');
+    const just = document.querySelector('.c-justif input');
+    return {
+      debordement: tbl.scrollWidth - tbl.closest('.table-wrap').clientWidth,
+      justification: Math.round(just.getBoundingClientRect().width),
+    };
+  });
+  expect(m.debordement, 'la feuille ne doit plus défiler horizontalement').toBeLessThanOrEqual(0);
+  // Le champ de justification n'est plus écrasé à sa largeur minimale (131 px).
+  expect(m.justification).toBeGreaterThan(200);
+
+  // Les onglets de lecture gardent la largeur de lecture, eux.
+  await page.locator('.navbtn[data-v="recap"]').click();
+  await expect(page.locator('#app table')).toBeVisible();
+  expect(await page.evaluate(() => Math.round(document.querySelector('.container').getBoundingClientRect().width))).toBe(1060);
+});

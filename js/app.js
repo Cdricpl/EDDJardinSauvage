@@ -711,8 +711,12 @@ async function render() {
   const appEl = document.getElementById('app');
   if (appEl) {
     appEl.onchange = null; appEl.onclick = null;
-    // Seul l'onglet Enfants s'élargit : il doit afficher les 31 jours du mois.
-    appEl.classList.toggle('wide', VIEW === 'children');
+    /* Deux onglets s'élargissent : Enfants (31 colonnes de jours) et la Feuille
+     * du mois. Mesuré sur ordinateur : avec la largeur de lecture habituelle
+     * (1060 px), la feuille et ses 11 colonnes débordaient de 40 px — il fallait
+     * la faire défiler pour lire la justification, écrasée à 131 px, alors qu'il
+     * restait jusqu'à 860 px d'écran inutilisés de part et d'autre. */
+    appEl.classList.toggle('wide', VIEW === 'children' || VIEW === 'sheet');
   }
   wireLazyTimes();
   const bar = document.getElementById('loadbar');

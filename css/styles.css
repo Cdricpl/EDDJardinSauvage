@@ -86,8 +86,10 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
 
 /* ---------- Conteneur & cartes ---------- */
 .container { max-width:1060px; margin:24px auto; padding:0 16px; }
-/* L'onglet Enfants a besoin de plus de large : 31 colonnes de jours + la
-   colonne des noms ne tiennent pas dans la largeur de lecture habituelle. */
+/* Deux onglets ont besoin de plus large que la largeur de lecture : l'onglet
+   Enfants (31 colonnes de jours + la colonne des noms) et la feuille du mois
+   (11 colonnes depuis l'ajout de « Journée »). Sur ordinateur, l'écran est
+   large : le plafond de lecture faisait défiler la grille pour rien. */
 .container.wide { max-width:1440px; }
 .card {
   background:var(--card); border:1px solid var(--border); border-radius:16px;
