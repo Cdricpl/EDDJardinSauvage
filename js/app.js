@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.08-3';
+const APP_VERSION = 'v2026.09.09-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -354,8 +354,14 @@ async function backupJSON() {
  * restent en place et prennent le relais si le téléchargement échoue —
  * typiquement hors ligne : le comportement est alors exactement celui d'avant.
  * ================================================================ */
+/* Versions FIGÉES à l'unité près. `chart.js@4` suivait toutes les versions 4.x à
+ * venir : le graphique des statistiques pouvait se casser un matin sans qu'aucun
+ * déploiement n'ait eu lieu ici, donc sans que le numéro de version affiché le
+ * laisse deviner. 4.5.1 est la version que le CDN servait déjà (relevée dans le
+ * navigateur avec `Chart.version`) : rien ne change aujourd'hui, on empêche
+ * seulement le changement de demain. La forme de l'adresse est inchangée. */
 const CDN = {
-  chart:     'https://cdn.jsdelivr.net/npm/chart.js@4',
+  chart:     'https://cdn.jsdelivr.net/npm/chart.js@4.5.1',
   jspdf:     'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
   autotable: 'https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js',
 };
