@@ -1296,3 +1296,68 @@ test('bibliothèques externes : les versions du CDN sont figées à l’unité p
   }
   expect(urls.some((u) => u.includes('chart.js@4.5.1'))).toBe(true);
 });
+
+/* Le pré-remplissage écrit le mois entier : un mois à venir s'affichait
+ * « Total presté 88h00 » alors que rien n'avait été travaillé. Les totaux
+ * restent ceux du mois complet (sinon l'écart, donc le solde, serait faux) ;
+ * une mention dit ce qui est réellement presté à ce jour. */
+test('feuille : un mois à venir annonce ce qui est réellement presté', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('#empSel').selectOption({ label: 'Employée 1' });
+  const mention = page.locator('#app p:has-text("Jours à venir compris")');
+
+  // Mois suivant : entièrement à venir.
+  await page.locator('#nextM').click();
+  await expect(page.locator('#tPlanned')).toBeVisible();
+  await expect(mention).toHaveCount(1);
+  await expect(mention).toContainText('0h00');
+  // Les totaux du mois complet, eux, ne bougent pas.
+  await expect(page.locator('#tWorked')).toHaveText(await page.locator('#tPlanned').textContent());
+  await expect(page.locator('#tDelta')).toHaveText('—');
+
+  // Un mois passé n'affiche rien de plus.
+  await page.locator('#prevM').click();
+  await page.locator('#prevM').click();
+  await expect(page.locator('.toolbar strong').first()).toHaveText(/août 2026/i);
+  await expect(mention).toHaveCount(0);
+});
+
+/* L'écran de connexion n'était pas un formulaire et son champ mot de passe était
+ * retiré du DOM juste après la connexion : aucun gestionnaire de mots de passe
+ * ne voyait passer une connexion, et il fallait retaper son mot de passe à
+ * chaque fois — plusieurs fois par jour, la déconnexion automatique tombant au
+ * bout de 15 minutes. (La fenêtre « Enregistrer le mot de passe ? » est une
+ * décision du navigateur, invisible d'un test : on vérifie la structure.) */
+test('connexion : un vrai formulaire, que le navigateur peut retenir', async ({ page }) => {
+  await page.goto('/index.html');
+  await expect(page.locator('#loginForm')).toBeVisible();
+  // Les deux champs sont DANS le formulaire, avec leurs attributs d'autocomplétion.
+  await expect(page.locator('#loginForm #email')).toHaveAttribute('autocomplete', 'username');
+  await expect(page.locator('#loginForm #pwd')).toHaveAttribute('autocomplete', 'current-password');
+  await expect(page.locator('#loginForm #loginBtn')).toHaveAttribute('type', 'submit');
+
+  // Entrée depuis le champ email suffit (avant, seul le champ mot de passe réagissait).
+  await page.locator('#email').press('Enter');
+  await expect(page.locator('#appShell')).toBeVisible();
+
+  // Et le champ n'est plus arraché du DOM après la connexion.
+  await expect(page.locator('#login')).toBeHidden();
+  await expect(page.locator('#loginForm #pwd')).toHaveCount(1);
+});
+
+/* `assets/icon.svg` n'était référencé nulle part (les icônes servies sont
+ * icon-192.png et icon-512.png) : supprimé. Ce test empêche qu'un fichier
+ * fantôme revienne s'installer sans être utilisé. */
+test('ressources : aucune icône fantôme dans le manifeste ni dans le service worker', async ({ page }) => {
+  const manifeste = await (await page.request.get('/manifest.webmanifest')).text();
+  const sw = await (await page.request.get('/sw.js')).text();
+  const html = await (await page.request.get('/index.html')).text();
+  for (const [nom, contenu] of [['manifeste', manifeste], ['service worker', sw], ['index.html', html]]) {
+    expect(contenu, `${nom} référence assets/icon.svg, qui n'existe plus`).not.toContain('icon.svg');
+  }
+  // Et les icônes réellement annoncées répondent bien.
+  for (const f of ['assets/icon-192.png', 'assets/icon-512.png', 'assets/logo.svg']) {
+    expect((await page.request.get('/' + f)).status(), f).toBe(200);
+  }
+  expect((await page.request.get('/assets/icon.svg')).status()).toBe(404);
+});

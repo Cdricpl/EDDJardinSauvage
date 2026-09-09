@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.09-1';
+const APP_VERSION = 'v2026.09.09-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -462,14 +462,24 @@ async function monthSummary(empId, y, m) {
   const all = await STORE.entriesForEmployee(empId);
   const firstOfMonth = `${y}-${pad(m)}-01`;
   let planned = 0, worked = 0, carryIn = await openingMinutes(empId, annee);
+  /* Le pré-remplissage écrit le MOIS ENTIER, jours à venir compris : les totaux
+   * annoncent donc un mois complet dès son premier jour. L'écart, lui, reste
+   * juste (prévu et presté montent ensemble), et c'est lui qui fait le solde —
+   * on ne touche donc pas au calcul. On compte seulement, à côté, ce qui est
+   * réellement presté à ce jour, pour pouvoir le dire sous les totaux. */
+  const auj = todayISO();
+  let workedToDate = 0, aVenir = false;
   all.forEach((e) => {
     const w = effectiveWorked(e), p = plannedMinutes(e);
     if (e.entry_date < depart) return;
     if (e.entry_date < firstOfMonth) carryIn += (w - p);
-    else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) { planned += p; worked += w; }
+    else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) {
+      planned += p; worked += w;
+      if (e.entry_date <= auj) workedToDate += w; else if (p || w) aVenir = true;
+    }
   });
   const delta = worked - planned;
-  return { planned, worked, delta, carryIn, closing: carryIn + delta };
+  return { planned, worked, delta, carryIn, closing: carryIn + delta, workedToDate, aVenir };
 }
 
 /* ================================================================
@@ -597,9 +607,14 @@ async function afterLogin() {
   }
   VIEW = 'sheet';
   document.body.dataset.role = ME.role;   // thème couleur : admin=bleu, employée=vert
+  /* On MASQUE l'ecran de connexion sans le vider. Il etait auparavant efface du
+   * DOM aussitot apres la connexion, pour empecher le telephone de proposer
+   * d'enregistrer le mot de passe en boucle — mais cela empechait aussi le
+   * navigateur de l'ordinateur de le proposer une seule fois, au bon moment.
+   * Avec un vrai formulaire, la proposition arrive a la soumission et n'a plus
+   * de raison de se repeter. */
   const loginEl = document.getElementById('login');
   loginEl.style.display = 'none';
-  loginEl.innerHTML = '';   // retire le champ mot de passe du DOM (sinon le mobile propose de l'enregistrer en boucle)
   document.getElementById('appShell').style.display = 'block';
   document.getElementById('meName').textContent = ME.full_name + (ME.role === 'admin' ? ' (Admin)' : '');
   // Bouton de sauvegarde rapide dans l'entête (accessible partout) — admin uniquement.
@@ -625,12 +640,19 @@ function renderLogin() {
       <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
       <h1>EDD Jardin Sauvage</h1>
       <p class="muted">Gestion des horaires, prestations et présences</p>
-      <label for="email">Email</label>
-      <input id="email" type="email" autocomplete="username" value="${MODE === 'demo' ? 'admin@ecole.be' : ''}" placeholder="votre email" />
-      <label for="pwd">Mot de passe</label>
-      <input id="pwd" type="password" autocomplete="current-password" value="${MODE === 'demo' ? 'admin123' : ''}" placeholder="votre mot de passe" />
-      <div id="loginMsg"></div>
-      <button class="big" id="loginBtn">Se connecter</button>
+      <!-- Un vrai formulaire, avec un bouton « submit » : c'est ce que les
+           gestionnaires de mots de passe des navigateurs attendent pour proposer
+           d'enregistrer l'identifiant. Sans lui, il fallait retaper son mot de
+           passe a chaque connexion — plusieurs fois par jour, la deconnexion
+           automatique tombant au bout de 15 minutes. -->
+      <form id="loginForm">
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username" value="${MODE === 'demo' ? 'admin@ecole.be' : ''}" placeholder="votre email" />
+        <label for="pwd">Mot de passe</label>
+        <input id="pwd" type="password" autocomplete="current-password" value="${MODE === 'demo' ? 'admin123' : ''}" placeholder="votre mot de passe" />
+        <div id="loginMsg"></div>
+        <button class="big" id="loginBtn" type="submit">Se connecter</button>
+      </form>
       <p class="center" style="margin-top:10px"><a href="#" id="forgotLink" class="muted small">Mot de passe oublié ?</a></p>
       ${MODE === 'demo' ? `<p class="muted small" style="margin-top:6px">
         Mode démo — comptes de test :<br>
@@ -653,8 +675,9 @@ function renderLogin() {
       await afterLogin();
     } catch (e) { loginMsg(e.message); }
   };
-  document.getElementById('loginBtn').onclick = go;
-  document.getElementById('pwd').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  /* `submit` et non plus `onclick` : la touche Entree fonctionne depuis les deux
+   * champs, et le navigateur voit passer une vraie connexion. */
+  document.getElementById('loginForm').onsubmit = (e) => { e.preventDefault(); go(); };
   document.getElementById('forgotLink').onclick = async (e) => {
     e.preventDefault();
     const email = document.getElementById('email').value.trim();
@@ -974,6 +997,11 @@ async function viewSheet() {
         <div class="stat"><div class="num" id="tCarry">${fmtHM(sum.carryIn)}</div><div class="lbl">Solde reporté</div></div>
         <div class="stat"><div class="num ${sum.closing >= 0 ? 'pos' : 'neg'}" id="tClosing">${fmtHM(sum.closing)}</div><div class="lbl">Solde cumulé</div></div>
       </div>
+      ${sum.aVenir ? `<p class="muted small" style="margin-top:10px">
+        ⏳ <strong>Jours à venir compris</strong> dans les totaux ci-dessus : ils sont comptés à
+        l'horaire prévu tant qu'ils n'ont pas eu lieu. Réellement presté au ${new Date().toLocaleDateString('fr-FR')} :
+        <strong>${fmtHM(sum.workedToDate)}</strong>.
+      </p>` : ''}
       <p class="muted small">
         <span class="legend"><span class="sw grp-plan-h"></span> Horaire prévu (défini par l'admin)</span>
         <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employée)</span>
