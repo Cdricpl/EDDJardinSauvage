@@ -946,3 +946,340 @@ test('feuille : le motif de journée survit à un rechargement', async ({ page }
   await expect(sel).toHaveValue('maladie');
   await expect(page.locator(`[data-k="start_time"][data-date="${date}"]`)).toBeDisabled();
 });
+
+/* Usage réel : le programme sert surtout sur ORDINATEUR. Avec la largeur de
+ * lecture (1060 px), la feuille et ses 11 colonnes débordaient de 40 px sur tous
+ * les écrans testés — il fallait la faire défiler pour lire la justification,
+ * pendant qu'il restait jusqu'à 860 px d'écran inutilisés. */
+test('feuille : sur un écran d’ordinateur, la grille tient sans défilement', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#sheetTable')).toBeVisible();
+
+  const m = await page.evaluate(() => {
+    const tbl = document.getElementById('sheetTable');
+    const just = document.querySelector('.c-justif input');
+    return {
+      debordement: tbl.scrollWidth - tbl.closest('.table-wrap').clientWidth,
+      justification: Math.round(just.getBoundingClientRect().width),
+    };
+  });
+  expect(m.debordement, 'la feuille ne doit plus défiler horizontalement').toBeLessThanOrEqual(0);
+  // Le champ de justification n'est plus écrasé à sa largeur minimale (131 px).
+  expect(m.justification).toBeGreaterThan(200);
+
+  // Les onglets de lecture gardent la largeur de lecture, eux.
+  await page.locator('.navbtn[data-v="recap"]').click();
+  await expect(page.locator('#app table')).toBeVisible();
+  expect(await page.evaluate(() => Math.round(document.querySelector('.container').getBoundingClientRect().width))).toBe(1060);
+});
+
+/* Le pré-remplissage était réservé à l'administration ET exigeait un mois vide.
+ * Mesuré : si l'employée ouvrait le mois neuf en premier et encodait un seul
+ * jour, le mois n'était plus vide et ne serait JAMAIS pré-rempli — elle voyait
+ * « +4h00 d'écart non justifié » sur une journée normale. */
+test('feuille : un mois neuf ouvert par l’employée est pré-rempli', async ({ page }) => {
+  await page.goto('/index.html');
+  await expect(page.locator('#loginBtn')).toBeVisible();
+  await page.locator('#email').fill('flora@ecole.be');
+  await page.locator('#pwd').fill('flora123');
+  await page.locator('#loginBtn').click();
+  await expect(page.locator('#sheetTable')).toBeVisible();
+
+  // Mois suivant : aucun jour n'y a encore été encodé.
+  await page.locator('#nextM').click();
+  await expect(page.locator('#tPlanned')).toBeVisible();
+  const prevus = await page.evaluate(() => [...document.querySelectorAll('#sheetTable tbody tr')]
+    .filter((r) => r.querySelector('[data-k="planned_start"]').value).length);
+  expect(prevus, 'les jours de l’horaire type doivent être pré-remplis').toBeGreaterThan(15);
+  // Et donc aucun écart fantôme.
+  await expect(page.locator('#warnBanner')).toBeHidden();
+
+  // L'écart se calcule bien par rapport à l'horaire prévu ainsi posé.
+  const row = await firstWorkedRow(page);
+  await pickTime(row.locator('[data-k="end_time"]'), '17:00');
+  await expect(row.locator('.c-delta')).toHaveText('-1h00');
+});
+
+test('feuille : un mois entamé sans horaire prévu se répare à l’ouverture suivante', async ({ page }) => {
+  await loginAdmin(page);
+  // On recrée l'état hérité : un jour encodé dans un mois sans horaire prévu.
+  await page.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('ecole_db'));
+    const d = new Date(); const y = d.getFullYear(), m = d.getMonth() + 2;   // mois suivant
+    const date = `${y}-${String(m).padStart(2, '0')}-15`;
+    db.entries.push({ id: 'legacy', employee_id: 'u-flora', entry_date: date,
+      planned_start: '', planned_end: '', planned_minutes: 0,
+      start_time: '14:00', end_time: '18:00', worked_minutes: 240, worked_touched: true, justification: '' });
+    localStorage.setItem('ecole_db', JSON.stringify(db));
+  });
+  await page.locator('#empSel').selectOption({ label: 'Employée 1' });
+  await page.locator('#nextM').click();
+  await expect(page.locator('#tPlanned')).toBeVisible();
+
+  const prevus = await page.evaluate(() => [...document.querySelectorAll('#sheetTable tbody tr')]
+    .filter((r) => r.querySelector('[data-k="planned_start"]').value).length);
+  expect(prevus, 'le mois doit être pré-rempli malgré le jour déjà encodé').toBeGreaterThan(15);
+  // Les heures déjà encodées sont conservées.
+  const ligne = page.locator('#sheetTable tbody tr').filter({ has: page.locator('[data-date$="-15"]') });
+  await expect(ligne.locator('[data-k="start_time"]')).toHaveValue('14:00');
+  await expect(ligne.locator('[data-k="end_time"]')).toHaveValue('18:00');
+});
+
+/* Les écouteurs temps réel étaient bornés à l'ANNÉE CIVILE alors que l'année
+ * scolaire va d'août à juillet : la moitié de chaque année n'était jamais
+ * suivie, et l'écran de l'administration affichait des chiffres périmés.
+ * Ce test parle à un faux Firestore qui enregistre les requêtes : c'est le seul
+ * moyen de vérifier une borne sans toucher à la vraie base. */
+test('temps réel : les écouteurs suivent l’année scolaire, pas l’année civile', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    let anneeEnBase = 2026;
+    const poses = [];
+    const rappels = {};
+    const query = (col) => ({
+      col, wheres: [],
+      where(f, op, v) { const q = query(col); q.wheres = this.wheres.concat([[f, op, v]]); return q; },
+      onSnapshot(opts, cb) { poses.push({ col, wheres: this.wheres }); rappels[col] = cb; return () => {}; },
+    });
+    const db = {
+      collection: (c) => Object.assign(query(c), {
+        doc: (id) => ({ get: async () => ({ exists: true, id,
+          data: () => (id === 'app' ? { annee_scolaire: anneeEnBase } : { role: 'admin', active: true }) }) }),
+      }),
+    };
+    let authCb = null;
+    const auth = { currentUser: { uid: 'u1' }, setPersistence: async () => {},
+                   onAuthStateChanged: (f) => { authCb = f; return () => {}; } };
+    const store = new FirebaseStore({ auth: () => auth, firestore: () => db });
+    store.onChange(() => {});
+    authCb({ uid: 'u1' });
+    await new Promise((r) => setTimeout(r, 60));
+    const bornes = (col) => {
+      const p = [...poses].reverse().find((x) => x.col === col);
+      return p.wheres.map((w) => w.join(' ')).join(' | ');
+    };
+    const avant = { day_entries: bornes('day_entries'), kid_attendance: bornes('kid_attendance') };
+
+    // L'administration ouvre l'année suivante : les écouteurs doivent suivre.
+    anneeEnBase = 2027;
+    rappels.settings({ metadata: { hasPendingWrites: false }, docChanges: () => [],
+      docs: [{ id: 'app', data: () => ({ annee_scolaire: 2027 }) }] });
+    await new Promise((r) => setTimeout(r, 80));
+    return { avant, apres: { day_entries: bornes('day_entries'), kid_attendance: bornes('kid_attendance') } };
+  });
+
+  expect(res.avant.day_entries).toBe('entry_date >= 2026-08-01 | entry_date <= 2027-07-31');
+  expect(res.avant.kid_attendance).toBe('entry_date >= 2026-08-01 | entry_date <= 2027-07-31');
+  // Une nouvelle année ouverte repose les écouteurs sur la bonne période.
+  expect(res.apres.day_entries).toBe('entry_date >= 2027-08-01 | entry_date <= 2028-07-31');
+  expect(res.apres.kid_attendance).toBe('entry_date >= 2027-08-01 | entry_date <= 2028-07-31');
+});
+
+/* Poser un motif de journée effaçait le temps de midi : en revenant à « — », la
+ * journée repartait avec 30 minutes de trop au crédit de l'employée. */
+test('feuille : le temps de midi survit à un aller-retour de motif', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#tWorked')).toBeVisible();
+  const row = await firstWorkedRow(page);
+
+  await row.locator('[data-k="break_minutes"]').selectOption('30');
+  await expect(row.locator('.c-worked')).toHaveText('3h30');
+
+  // Motif posé : le temps de midi est masqué (sans objet), mais pas perdu.
+  await row.locator('[data-k="jour_type"]').selectOption('recup');
+  await expect(row.locator('.c-worked')).toHaveText('—');
+  await expect(row.locator('[data-k="break_minutes"]')).toHaveValue('0');
+  await expect(row.locator('[data-k="break_minutes"]')).toBeDisabled();
+
+  // Retour à une journée ordinaire : il revient tel quel.
+  await row.locator('[data-k="jour_type"]').selectOption('');
+  await expect(row.locator('[data-k="break_minutes"]')).toHaveValue('30');
+  await expect(row.locator('.c-worked')).toHaveText('3h30');
+});
+
+test('exports : le CSV des prestations porte le motif de la journée', async ({ page }) => {
+  await loginAdmin(page);
+  const row = await firstWorkedRow(page);
+  await row.locator('[data-k="jour_type"]').selectOption('recup');
+  await expect(row.locator('.c-worked')).toHaveText('—');
+
+  await page.locator('.navbtn[data-v="employees"]').click();
+  await expect(page.locator('#expCsvPresta')).toBeVisible();
+  const dl = page.waitForEvent('download');
+  await page.locator('#expCsvPresta').click();
+  const flux = await (await dl).createReadStream();
+  let csv = ''; for await (const c of flux) csv += c;
+
+  expect(csv.split('\r\n')[0]).toContain('Motif');
+  // Sans cette colonne, une journée récupérée apparaissait à 0 minute, inexpliquée.
+  expect(csv).toContain('Récupération');
+});
+
+/* Chaque cellule enregistrée faisait DEUX allers-retours l'un après l'autre :
+ * l'écriture, puis une relecture de la journée fusionnée. Le faux Firestore
+ * ci-dessous compte les appels et vérifie que la fusion refaite en local donne
+ * exactement le même document que celui du serveur. */
+test('enregistrement : une cellule ne fait qu’un aller-retour', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const base = {};          // documents « côté serveur »
+    const appels = { set: 0, get: 0 };
+    const docRef = (col, id) => ({
+      async set(data, opts) {
+        appels.set++;
+        base[id] = (opts && opts.merge) ? { ...(base[id] || {}), ...data } : { ...data };
+      },
+      async get() { appels.get++; return { id, exists: !!base[id], data: () => ({ ...base[id] }) }; },
+    });
+    const db = { collection: (c) => ({ doc: (id) => docRef(c, id) }) };
+    const store = new FirebaseStore({
+      auth: () => ({ setPersistence: async () => {}, onAuthStateChanged: () => () => {} }),
+      firestore: () => db,
+    });
+
+    // Journée déjà connue (cas courant : la feuille du mois est affichée).
+    store._entriesCache['e1'] = [{ id: 'e1_2026-09-01', employee_id: 'e1', entry_date: '2026-09-01',
+      planned_start: '14:00', planned_end: '18:00', planned_minutes: 240,
+      start_time: '14:00', end_time: '18:00', worked_minutes: 240, break_minutes: 30, justification: 'x' }];
+    base['e1_2026-09-01'] = { ...store._entriesCache['e1'][0] };
+    const rendu = await store.upsertEntry({ employee_id: 'e1', entry_date: '2026-09-01', jour_type: 'recup',
+      start_time: '', end_time: '', worked_touched: true, worked_minutes: 0 });
+    const connue = { set: appels.set, get: appels.get };
+
+    // Le document rendu doit être IDENTIQUE à ce que le serveur a réellement enregistré.
+    const serveur = { id: 'e1_2026-09-01', ...base['e1_2026-09-01'] };
+    const identique = JSON.stringify(Object.entries(rendu).sort()) === JSON.stringify(Object.entries(serveur).sort());
+
+    // Journée inconnue du cache : la relecture reste le filet de sécurité.
+    appels.set = 0; appels.get = 0;
+    await store.upsertEntry({ employee_id: 'e2', entry_date: '2026-09-02', justification: 'y' });
+    return { connue, identique, inconnue: { set: appels.set, get: appels.get }, motif: rendu.jour_type, midi: rendu.break_minutes };
+  });
+
+  expect(res.connue).toEqual({ set: 1, get: 0 });      // un seul aller-retour
+  expect(res.identique, 'la fusion locale doit donner le document du serveur').toBe(true);
+  expect(res.motif).toBe('recup');
+  expect(res.midi).toBe(30);                            // les champs non touchés sont conservés
+  expect(res.inconnue).toEqual({ set: 1, get: 1 });     // repli quand la journée n'est pas en cache
+});
+
+/* L'année scolaire ouverte était lue AVANT l'authentification : les règles
+ * Firestore refusent toute lecture à un visiteur non identifié, l'erreur était
+ * avalée (« [annee] Missing or insufficient permissions » dans la console) et
+ * l'application s'ouvrait sur la première année — close — quelle que soit
+ * l'année réellement ouverte. Le faux magasin ci-dessous reproduit ce refus. */
+test('démarrage : l’application s’ouvre sur l’année réellement ouverte', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const journal = [];
+    let connectee = false;
+    const vrai = new DemoStore();
+    const faux = Object.create(Object.getPrototypeOf(vrai));
+    Object.assign(faux, vrai);
+    faux.getReglages = async () => {
+      journal.push(connectee ? 'reglages(connectée)' : 'reglages(AVANT connexion)');
+      if (!connectee) throw new Error('Missing or insufficient permissions');
+      return { annee_scolaire: 2027 };
+    };
+    faux.getCurrentUser = async () => {
+      journal.push('getCurrentUser');
+      connectee = true;
+      return { id: 'u-admin', full_name: 'Admin', role: 'admin', active: true };
+    };
+    createStore = async () => ({ store: faux, mode: 'demo' });
+    ME = null;
+    await boot();
+    await new Promise((r) => setTimeout(r, 300));
+    const t = document.querySelector('.toolbar strong');
+    return { journal, ANNEE, ANNEE_VUE, mois: t ? t.textContent.trim() : '' };
+  });
+
+  // La lecture ne doit jamais précéder l'authentification.
+  expect(res.journal[0]).toBe('getCurrentUser');
+  expect(res.journal).not.toContain('reglages(AVANT connexion)');
+  expect(res.ANNEE).toBe(2027);
+  expect(res.ANNEE_VUE).toBe(2027);
+  expect(res.mois).toBe('août 2027');
+});
+
+/* Le solde reporté est figé à l'ouverture de l'année — c'est le principe retenu.
+ * Mais l'administration peut encore corriger une année close, et la correction
+ * ne remonte pas : mesuré à l'audit, deux heures disparaissaient en silence.
+ * Elle est désormais signalée, et un bouton la reporte. */
+test('années : une correction dans l’année close est signalée et reportable', async ({ page }) => {
+  page.on('dialog', (d) => d.accept());
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+  await expect(page.locator('#nouvelleAnnee')).toBeVisible();
+
+  // Ouverture de l'année suivante : les soldes de fin deviennent les reports.
+  await page.locator('#nouvelleAnnee').click();
+  await expect(page.locator('#app h2').first()).toContainText('2027-2028');
+  await expect(page.locator('#app .msg.error')).toHaveCount(0);   // rien à signaler
+
+  // Correction d'un jour dans l'année refermée.
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await page.locator('#anneeSel').selectOption('2026');
+  await expect(page.locator('#tClosing')).toBeVisible();
+  await page.locator('#nextM').click();
+  const row = await firstWorkedRow(page);
+  const avant = await page.locator('#tClosing').textContent();
+  await pickTime(row.locator('[data-k="end_time"]'), '20:00');
+  await expect(page.locator('#tClosing')).not.toHaveText(avant);
+
+  // Le report de l'année ouverte n'a pas bougé (voulu), mais c'est annoncé.
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const avert = page.locator('#app .msg.error');
+  await expect(avert).toHaveCount(1);
+  await expect(avert).toContainText('ne correspond plus');
+  await expect(avert).toContainText('recalculé à');
+
+  // Le bouton remet le report à jour.
+  await page.locator('#recalcSoldes').click();
+  await expect(page.locator('#app .msg.error')).toHaveCount(0);
+  // On revient sur l'année ouverte (la consultation était restée sur l'année close).
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await page.locator('#anneeSel').selectOption('2027');
+  await expect(page.locator('.toolbar strong').first()).toHaveText(/août 2027/i);
+  await expect(page.locator('#tCarry')).toHaveText('1h45');
+});
+
+/* L'inscription Firebase est ouverte (c'est par elle que l'onglet Utilisateurs
+ * crée les comptes) et la configuration du projet est publique : l'application
+ * créait alors elle-même une fiche « employée active » pour tout compte
+ * authentifié sans fiche — n'importe qui pouvait donc se fabriquer un accès aux
+ * données des enfants. Elle refuse désormais, et le dit. */
+test('accès : un compte authentifié sans fiche est refusé, pas provisionné', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const journal = [];
+    const db = { collection: (c) => ({ doc: (id) => ({
+      get: async () => { journal.push('lecture ' + c + '/' + id); return { exists: false, id, data: () => ({}) }; },
+      set: async () => { journal.push('ECRITURE ' + c + '/' + id); },
+    }) }) };
+    const auth = { currentUser: { uid: 'inconnu', email: 'inconnu@example.com' },
+      setPersistence: async () => {}, onAuthStateChanged: () => () => {},
+      signOut: async () => { journal.push('signOut'); } };
+    const store = new FirebaseStore({ auth: () => auth, firestore: () => db });
+    let erreur = null;
+    try { await store.getCurrentUser(); } catch (e) { erreur = { code: e.code, message: e.message }; }
+    return { journal, erreur };
+  });
+
+  expect(res.erreur && res.erreur.code).toBe('non-autorise');
+  expect(res.erreur.message).toContain("n'est pas autorisé");
+  // Le point essentiel : AUCUNE fiche n'est écrite.
+  expect(res.journal.filter((l) => l.startsWith('ECRITURE'))).toHaveLength(0);
+
+  // Et l'écran correspondant est explicite, sans jargon de permission.
+  const ecran = await page.evaluate(() => {
+    showNonAutorise("Ce compte n'est pas autorisé à utiliser le programme.");
+    return { titre: document.querySelector('#login h1').textContent,
+             shell: document.getElementById('appShell').style.display };
+  });
+  expect(ecran.titre).toBe('Accès non autorisé');
+  expect(ecran.shell).toBe('none');
+});

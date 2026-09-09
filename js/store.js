@@ -521,7 +521,14 @@ class FirebaseStore {
     try {
       await this.auth.signInWithEmailAndPassword((email || '').trim(), password);
     } catch (e) { throw new Error(this._authMsg(e)); }
-    return this.getCurrentUser();
+    try {
+      return await this.getCurrentUser();
+    } catch (e) {
+      // Compte authentifié mais sans fiche : on le déconnecte tout de suite,
+      // sinon il resterait connecté à un programme qui ne lui montre rien.
+      if (e && e.code === 'non-autorise') { try { await this.auth.signOut(); } catch {} }
+      throw e;
+    }
   }
   _authMsg(e) {
     const c = (e && e.code) || '';
@@ -541,17 +548,17 @@ class FirebaseStore {
     if (!user) return null;
     const snap = await this.db.collection('profiles').doc(user.uid).get();
     if (!snap.exists) {
-      // Compte créé directement dans la console Firebase : on initialise son profil.
-      // TOUJOURS en 'employee' — le passage en admin se fait dans la console
-      // (les règles Firestore interdisent de s'auto-promouvoir).
-      const prof = {
-        full_name: user.displayName || user.email, email: user.email,
-        role: 'employee', active: true,
-        created_at: new Date().toISOString(),
-      };
-      await this.db.collection('profiles').doc(user.uid).set(prof);
-      this._profilesCache = null;
-      return (this._profile = { id: user.uid, ...prof });
+      /* Un compte authentifié SANS fiche n'est pas un membre de l'équipe.
+       * L'application créait ici la fiche elle-même, en « employee » active —
+       * or l'inscription Firebase est ouverte (c'est par elle que l'onglet
+       * Utilisateurs crée les comptes) et la configuration du projet est
+       * publique : n'importe qui pouvait donc se fabriquer un accès et lire les
+       * fiches des enfants. Les comptes se créent désormais uniquement depuis
+       * l'onglet Utilisateurs, qui écrit la fiche au nom de l'administration. */
+      const e = new Error("Ce compte n'est pas autorisé à utiliser le programme. "
+        + "Demandez à l'administration de vous créer un accès.");
+      e.code = 'non-autorise';
+      throw e;
     }
     return (this._profile = { id: user.uid, ...snap.data() });
   }
@@ -708,12 +715,26 @@ class FirebaseStore {
     if (i >= 0) list[i] = { ...list[i], ...entry }; else list.push({ ...entry });
   }
   async upsertEntry(entry) {
+    const id = this._entryId(entry.employee_id, entry.entry_date);
     const data = { ...entry, updated_at: new Date().toISOString() };
-    await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date))
-      .set(data, { merge: true });
-    // Relit la version fusionnee pour renvoyer l'etat complet.
-    const s = await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date)).get();
-    const saved = { id: s.id, ...s.data() };
+    const ref = this.db.collection('day_entries').doc(id);
+    await ref.set(data, { merge: true });
+    /* La version fusionnee etait RELUE au serveur juste apres l'ecriture, pour
+     * renvoyer l'etat complet de la journee : deux allers-retours l'un apres
+     * l'autre a chaque cellule modifiee, alors que l'ecran attend la reponse
+     * pour se mettre a jour. Or les prestations sont des champs plats : la
+     * fusion se refait a l'identique en local, a partir de la journee deja en
+     * cache. On ne relit le serveur que si elle n'y est pas (premiere ouverture,
+     * cache vide) — le resultat est le meme, l'attente est deux fois plus courte. */
+    const cache = this._entriesCache[entry.employee_id];
+    const connue = cache && cache.find((e) => e.entry_date === entry.entry_date);
+    let saved;
+    if (connue) {
+      saved = { ...connue, ...data, id };
+    } else {
+      const s = await ref.get();
+      saved = { id: s.id, ...s.data() };
+    }
     this._mergeCache(saved);
     this._oublier('prestationsPeriode:');
     return saved;
@@ -988,17 +1009,28 @@ class FirebaseStore {
    * puisqu'on ne modifie pas une année clôturée à plusieurs en même temps. */
   onChange(cb) {
     let detacher = [];
+    let anneeReglage = null;   // valeur brute d'annee_scolaire au moment de poser
     const poser = async (user) => {
       detacher.forEach((f) => { try { f(); } catch {} });
       detacher = [];
       if (!user) return;                                  // déconnectée : rien à écouter
       const prof = await this.getCurrentUser().catch(() => null);
       const estAdmin = !!(prof && prof.role === 'admin');
-      const y = new Date().getFullYear();
-      const anneeEnCours = (col) => col.where('entry_date', '>=', `${y}-01-01`).where('entry_date', '<=', `${y}-12-31`);
+      /* Borne : l'ANNÉE SCOLAIRE ouverte (1er août → 31 juillet), et non l'année
+       * civile. Avec l'ancienne borne `AAAA-01-01 → AAAA-12-31`, la moitié de
+       * chaque année scolaire n'était jamais écoutée : en septembre, rien de ce
+       * qui serait encodé entre janvier et juillet suivants ne déclenchait de
+       * rafraîchissement, et après le 1er janvier c'était l'inverse pour
+       * août-décembre. L'écran de l'administration affichait alors des chiffres
+       * périmés jusqu'au rechargement de la page. */
+      const reglages = await this.getReglages().catch(() => ({}));
+      anneeReglage = Number(reglages.annee_scolaire) || 0;
+      const a = Math.max(anneeReglage, 2026);             // même défaut que chargerAnnee()
+      const anneeScolaire = (col) => col
+        .where('entry_date', '>=', `${a}-08-01`).where('entry_date', '<=', `${a + 1}-07-31`);
       const BORNE = {
-        day_entries: (col) => (estAdmin ? anneeEnCours(col) : col.where('employee_id', '==', user.uid)),
-        kid_attendance: anneeEnCours,
+        day_entries: (col) => (estAdmin ? anneeScolaire(col) : col.where('employee_id', '==', user.uid)),
+        kid_attendance: anneeScolaire,
       };
       ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
         const base = this.db.collection(c);
@@ -1028,7 +1060,15 @@ class FirebaseStore {
             if (c === 'kid_attendance') this._oublier('presences:', 'presencesPeriode:');
             if (c === 'kid_prefill') this._oublier('preremplissage:');
             if (c === 'schedule_templates') this._oublier('horaire:');
-            if (c === 'settings') this._oublier('reglages');
+            if (c === 'settings') {
+              this._oublier('reglages');
+              /* L'administration vient peut-être d'ouvrir (ou de refermer) une
+               * année : les écouteurs ci-dessus sont bornés à l'ancienne, il faut
+               * les reposer, sans quoi la nouvelle année ne serait pas suivie. */
+              const doc = snap.docs.find((d) => d.id === 'app');
+              const a = Number((doc && doc.data().annee_scolaire) || 0);
+              if (a !== anneeReglage) { poser(user); return cb(); }
+            }
             cb();
           },
           (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));

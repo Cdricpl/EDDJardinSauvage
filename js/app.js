@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.08-1';
+const APP_VERSION = 'v2026.09.08-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -427,6 +427,26 @@ async function openingMinutes(empId, annee) {
   if (annee === MIN_YM.y) return Number(p.opening_minutes) || 0;
   return Number((p.soldes || {})[String(annee)]) || 0;
 }
+/* Recalcule ce que le solde reporté DEVRAIT valoir au 1er août d'une année,
+ * d'après les prestations réellement encodées. Le report enregistré, lui, est
+ * figé au moment où l'année a été ouverte : c'est voulu (une valeur stable et
+ * vérifiable), mais une correction apportée ensuite à une année close ne
+ * remonte pas — d'où le bouton « Recalculer » de l'onglet Utilisateurs.
+ * On repart du solde de départ et on ré-additionne année par année : corriger
+ * seulement la dernière laisserait un écart ancien figé dans tous les reports. */
+async function soldeRecalcule(empId, annee) {
+  const prof = (await STORE.listProfiles()).find((x) => x.id === empId);
+  if (!prof) return 0;
+  let solde = Number(prof.opening_minutes) || 0;          // au 1er août 2026
+  if (annee <= MIN_YM.y) return solde;
+  const all = await STORE.entriesForEmployee(empId);
+  const fin = finAnnee(annee - 1);                        // tout ce qui précède l'année visée
+  all.forEach((e) => {
+    if (e.entry_date < MIN_ISO || e.entry_date > fin) return;
+    solde += effectiveWorked(e) - plannedMinutes(e);
+  });
+  return solde;
+}
 async function monthSummary(empId, y, m) {
   const annee = anneeScolaireDe(y, m);
   // Début de l'année scolaire du mois demandé : le cumul repart de là, sur le
@@ -523,7 +543,13 @@ async function installerRaccourci() {
 async function boot() {
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
-  await chargerAnnee();
+  /* L'année scolaire ouverte n'est PAS lue ici : les règles Firestore refusent
+   * toute lecture à un visiteur non identifié, et la session n'est restaurée
+   * qu'au `getCurrentUser()` plus bas. Lue trop tôt, la lecture échouait
+   * (« Missing or insufficient permissions » dans la console), l'erreur était
+   * avalée, et l'année retombait sur sa valeur par défaut : l'application
+   * s'ouvrait sur la première année, close, quelle que soit l'année réellement
+   * ouverte. Elle est donc lue dans `afterLogin`, une fois connectée. */
   const vEl = document.getElementById('appVersion');
   if (vEl) vEl.textContent = APP_VERSION;
   document.getElementById('modeBadge').textContent = MODE === 'firebase' ? '🔥 Firebase' : '🧪 Démo (local)';
@@ -544,11 +570,19 @@ async function boot() {
     render();
   }, 800));
 
-  ME = await STORE.getCurrentUser();
+  try {
+    ME = await STORE.getCurrentUser();
+  } catch (e) {
+    // Compte authentifié mais sans fiche dans l'équipe : on le dit, on ne
+    // laisse pas une erreur de permission brute à l'écran.
+    if (e && e.code === 'non-autorise') { try { await STORE.signOut(); } catch {} return showNonAutorise(e.message); }
+    throw e;
+  }
   if (ME) await afterLogin(); else renderLogin();
 }
 
 async function afterLogin() {
+  await chargerAnnee();   // en premier : le mois affiché et les droits en dépendent
   if (ME.role === 'employee') SEL_EMP = ME.id;
   else {
     const profs = await STORE.listProfiles();
@@ -711,8 +745,12 @@ async function render() {
   const appEl = document.getElementById('app');
   if (appEl) {
     appEl.onchange = null; appEl.onclick = null;
-    // Seul l'onglet Enfants s'élargit : il doit afficher les 31 jours du mois.
-    appEl.classList.toggle('wide', VIEW === 'children');
+    /* Deux onglets s'élargissent : Enfants (31 colonnes de jours) et la Feuille
+     * du mois. Mesuré sur ordinateur : avec la largeur de lecture habituelle
+     * (1060 px), la feuille et ses 11 colonnes débordaient de 40 px — il fallait
+     * la faire défiler pour lire la justification, écrasée à 131 px, alors qu'il
+     * restait jusqu'à 860 px d'écran inutilisés de part et d'autre. */
+    appEl.classList.toggle('wide', VIEW === 'children' || VIEW === 'sheet');
   }
   wireLazyTimes();
   const bar = document.getElementById('loadbar');
@@ -742,6 +780,28 @@ function showFatal(msg) {
   if (visible) { document.getElementById('app').innerHTML = contenu; return; }
   const login = document.getElementById('login');
   if (login) { login.style.display = 'flex'; login.innerHTML = `<div class="login-card">${contenu}</div>`; }
+}
+
+/* Écran dédié pour un compte authentifié qui n'appartient pas à l'équipe.
+ * Ce n'est ni une panne ni une erreur de mot de passe : il n'y a rien à
+ * réessayer, il faut que l'administration crée l'accès. */
+function showNonAutorise(msg) {
+  const shell = document.getElementById('appShell');
+  if (shell) shell.style.display = 'none';
+  const login = document.getElementById('login');
+  if (!login) return;
+  login.style.display = 'flex';
+  login.innerHTML = `
+    <div class="card login-card">
+      <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
+      <h1>Accès non autorisé</h1>
+      <div class="msg error" style="margin-top:14px">${echapper(msg || "Ce compte n'est pas autorisé à utiliser le programme.")}</div>
+      <p class="muted small">Les accès sont créés par l'administration : ${ADMINS_CONTACT}.</p>
+      <button class="big" id="retourConnexion">Retour à la connexion</button>
+      <p class="muted small" style="margin-top:14px">${APP_VERSION}</p>
+    </div>`;
+  const b = document.getElementById('retourConnexion');
+  if (b) b.onclick = () => location.reload();
 }
 
 /* Écran dédié quand l'application ne peut pas joindre le serveur au démarrage.
@@ -778,19 +838,37 @@ async function viewSheet() {
   const [month, entries, tpl, editableProf] = await Promise.all([
     STORE.getMonth(empId, CUR.y, CUR.m),
     STORE.entriesForMonth(empId, CUR.y, CUR.m),
-    ME.role === 'admin' ? STORE.getTemplate(empId) : Promise.resolve({}),
+    STORE.getTemplate(empId),   // lu aussi par l'employée : il sert au pré-remplissage
     currentEmpProfile(empId),
   ]);
 
-  // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
-  // (Les mois validés ne sont jamais touchés.) Garde anti-réentrance.
-  // Verrou : on ne tente le pré-remplissage qu'UNE fois par mois, par employée et
-  // par session. Indispensable : sinon un échec d'écriture (règle serveur, quota,
-  // réseau coupé) laisserait le mois vide, et le `render()` de fin relancerait
-  // aussitôt viewSheet → pré-remplissage → render()… en boucle, jusqu'à figer
-  // l'appareil. Le pré-encodage des présences enfants a la même protection.
+  /* Pré-remplissage automatique du mois à partir de l'horaire type.
+   *
+   * Deux conditions ont été assouplies, parce que ensemble elles produisaient un
+   * mois définitivement bancal (mesuré) :
+   *   - il était réservé à l'ADMINISTRATION : une employée qui ouvrait le mois
+   *     neuf avant elle ne voyait aucun horaire prévu ;
+   *   - il exigeait un mois totalement VIDE : dès qu'elle encodait un seul jour,
+   *     le mois cessait d'être vide et n'était plus JAMAIS pré-rempli, même
+   *     quand l'administration l'ouvrait ensuite. Résultat à l'écran :
+   *     « +4h00 d'écart non justifié » sur une journée parfaitement normale
+   *     (l'horaire prévu valant zéro), et tout le mois à ressaisir à la main.
+   *
+   * Désormais : il suffit qu'AUCUN jour du mois n'ait d'horaire prévu, et
+   * l'employée peut le déclencher sur SA propre feuille. Elle ne décide rien :
+   * on recopie l'horaire type, que seule l'administration peut définir. Un mois
+   * où l'administration a déjà posé des horaires n'est jamais retouché, et les
+   * jours déjà modifiés gardent leur horaire réel (voir applyTemplate).
+   *
+   * Verrou : on ne tente le pré-remplissage qu'UNE fois par mois, par employée et
+   * par session. Indispensable : sinon un échec d'écriture (règle serveur, quota,
+   * réseau coupé) laisserait le mois vide, et le `render()` de fin relancerait
+   * aussitôt viewSheet → pré-remplissage → render()… en boucle, jusqu'à figer
+   * l'appareil. Le pré-encodage des présences enfants a la même protection. */
   const sheetKey = `${empId}|${CUR.y}-${pad(CUR.m)}`;
-  if (ME.role === 'admin' && month.status === 'open' && !anneeClose() && entries.length === 0 && templateHasSlots(tpl)
+  const aucunHorairePrevu = entries.every((e) => !plannedMinutes(e));
+  const peutPreremplir = ME.role === 'admin' || (empId === ME.id && editableProf.active);
+  if (peutPreremplir && month.status === 'open' && !anneeClose() && aucunHorairePrevu && templateHasSlots(tpl)
       && !APPLYING && !PREFILLED_SHEETS.has(sheetKey)) {
     PREFILLED_SHEETS.add(sheetKey);   // marqué comme tenté AVANT l'écriture (anti-boucle)
     APPLYING = true;
@@ -836,7 +914,7 @@ async function viewSheet() {
       <td class="grp-plan">${timeSelect('planned_end', date, e.planned_end || '', !canEditPlanned)}</td>
       <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked || typeJour)}</td>
       <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked || typeJour)}</td>
-      <td class="grp-real">${breakSelect(date, e.break_minutes, !canEditWorked || typeJour)}</td>
+      <td class="grp-real">${breakSelect(date, typeJour ? 0 : e.break_minutes, !canEditWorked || typeJour)}</td>
       <td class="nowrap c-worked"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
       <td class="c-delta ${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
       <td class="c-jtype">${jourTypeSelect(date, e.jour_type, !canEditWorked)}</td>
@@ -944,8 +1022,11 @@ async function viewSheet() {
       setTimeValue(tr.querySelector('[data-k="start_time"]'), '');
       setTimeValue(tr.querySelector('[data-k="end_time"]'), '');
     }
+    /* Journée typée : le temps de midi est masqué (« — ») mais conservé en base ;
+     * il réapparaît tel quel si l'on revient à une journée ordinaire. */
     const bsel = tr.querySelector('[data-k="break_minutes"]');
-    if (bsel) { bsel.value = String(breakMinutes(e)); bsel.classList.toggle('brk-on', breakMinutes(e) > 0); }
+    const midi = typeJour ? 0 : breakMinutes(e);
+    if (bsel) { bsel.value = String(midi); bsel.classList.toggle('brk-on', midi > 0); }
   }
   function refreshTotals() {
     let P = 0, W = 0, warn = 0;
@@ -1027,7 +1108,10 @@ async function viewSheet() {
       patch.jour_type = t;
       if (t) {
         patch.start_time = ''; patch.end_time = '';
-        patch.break_minutes = 0;
+        /* Le temps de midi n'est PAS effacé : il est simplement sans objet tant
+         * qu'un motif est posé (`effectiveWorked` ne le regarde pas), et masqué
+         * à l'écran comme les heures réelles. L'effacer faisait perdre la saisie :
+         * en revenant à « — », la journée repartait avec 30 minutes de trop. */
         patch.worked_touched = true;
         patch.worked_minutes = (t === 'recup') ? 0 : plannedMinutes(prev);
       } else {
@@ -2034,6 +2118,18 @@ async function viewEmployees() {
     p: x, cloture: (await monthSummary(x.id, ANNEE + 1, 7)).closing,
   })));
 
+  /* Le solde reporté est FIGÉ à l'ouverture de l'année, comme convenu : il ne
+   * bouge pas tout seul. Mais l'administration peut encore corriger une année
+   * close, et cette correction ne remonte pas. On compare donc ce qui est
+   * enregistré à ce que les prestations donnent aujourd'hui — sans quoi
+   * personne ne saurait qu'il faut cliquer sur « Recalculer ». */
+  const reports = ANNEE > MIN_YM.y ? await Promise.all(emps.map(async (x) => ({
+    p: x,
+    enregistre: await openingMinutes(x.id, ANNEE),
+    recalcule: await soldeRecalcule(x.id, ANNEE),
+  }))) : [];
+  const aCorriger = reports.filter((r) => r.enregistre !== r.recalcule);
+
   /* Ce qui a déjà été encodé dans l'année ouverte. On l'annonce avant de
    * proposer de la refermer : refermer ne supprime rien, mais il faut le dire
    * plutôt que de le laisser deviner. */
@@ -2068,6 +2164,20 @@ async function viewEmployees() {
         et ajouterez les nouveaux. L'année ${libelleAnnee(ANNEE)} passe alors en lecture seule pour les employées ;
         vous pourrez encore la corriger.
       </p>
+      ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:14px;gap:12px;flex-wrap:wrap;align-items:center">
+        <p class="muted small" style="margin:0;flex:1;min-width:240px">
+          Le <strong>solde reporté au 1<sup>er</sup> août ${ANNEE}</strong> a été figé à l'ouverture de l'année :
+          il ne bouge pas tout seul. Si vous corrigez une année close, remettez-le à jour ici.
+        </p>
+        <button class="small" id="recalcSoldes">🔄 Recalculer les soldes reportés</button>
+      </div>
+      ${aCorriger.length ? `<div class="msg error" style="margin-top:8px">
+        ⚠️ ${aCorriger.length === 1 ? 'Un solde reporté ne correspond plus' : `${aCorriger.length} soldes reportés ne correspondent plus`}
+        aux prestations encodées :
+        <ul style="margin:6px 0 0 18px">${aCorriger.map((r) =>
+          `<li>${echapper(r.p.full_name)} : figé à <strong>${fmtDelta(r.enregistre)}</strong>,
+           recalculé à <strong>${fmtDelta(r.recalcule)}</strong></li>`).join('')}</ul>
+      </div>` : ''}` : ''}
       ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:16px;gap:12px;flex-wrap:wrap;align-items:center">
         <p class="muted small" style="margin:0;flex:1;min-width:220px">
           <strong>Ouverte par erreur ?</strong> Vous pouvez refermer ${libelleAnnee(ANNEE)} et revenir à
@@ -2165,6 +2275,34 @@ async function viewEmployees() {
       console.error('[nouvelle-annee]', e);
       nouvelle.disabled = false;
       toast("Ouverture impossible : " + e.message, 'error');
+    }
+  };
+
+  /* Recalcul des soldes reportés — administration seule (tout cet onglet l'est).
+   * On réécrit TOUTES les années depuis la première : corriger seulement la
+   * dernière laisserait un écart ancien figé dans les reports intermédiaires,
+   * qu'on voit encore en consultant une année passée. */
+  const recalc = document.getElementById('recalcSoldes');
+  if (recalc) recalc.onclick = async () => {
+    if (!aCorriger.length) { toast('Les soldes reportés sont déjà à jour.'); return; }
+    const detail = aCorriger.map((r) =>
+      `  · ${r.p.full_name} : ${fmtDelta(r.enregistre)} → ${fmtDelta(r.recalcule)}`).join('\n');
+    if (!confirm(
+      `Recalculer les soldes reportés au 1er août ${ANNEE} ?\n\n${detail}\n\n`
+      + `Aucune prestation n'est modifiée : seul le report de début d'année est remis à jour.`)) return;
+    recalc.disabled = true;
+    try {
+      for (const { p } of aCorriger) {
+        for (let a = MIN_YM.y + 1; a <= ANNEE; a++) {
+          await STORE.setSoldeAnnee(p.id, a, await soldeRecalcule(p.id, a));
+        }
+      }
+      toast('Soldes reportés recalculés');
+      render();
+    } catch (e) {
+      console.error('[recalcul-soldes]', e);
+      recalc.disabled = false;
+      toast('Recalcul impossible : ' + e.message, 'error');
     }
   };
 
@@ -2334,15 +2472,18 @@ async function viewEmployees() {
       const nameById = {}; (data.profiles || []).forEach((p) => (nameById[p.id] = p.full_name));
       // Sans la colonne « Temps de midi », une ligne « 14:00 → 18:00, presté 195 »
       // était incompréhensible : les 45 minutes déduites n'apparaissaient nulle part.
+      /* La colonne « Motif » est indispensable depuis les journées entières :
+       * sans elle, une journée récupérée apparaît à 0 minute sans explication. */
       const rows = [['Employée', 'Date', 'Prévu début', 'Prévu fin', 'Réel début', 'Réel fin',
-        'Temps de midi (min)', 'Presté (min)', 'Écart (min)', 'Justification']];
+        'Temps de midi (min)', 'Presté (min)', 'Écart (min)', 'Motif', 'Justification']];
       (data.day_entries || [])
         .slice().sort((a, b) => (a.entry_date + a.employee_id).localeCompare(b.entry_date + b.employee_id))
         .forEach((e) => {
           const p = plannedMinutes(e), w = effectiveWorked(e);
           rows.push([nameById[e.employee_id] || e.employee_id, e.entry_date,
             e.planned_start || '', e.planned_end || '', e.start_time || '', e.end_time || '',
-            breakMinutes(e), w, w - p, e.justification || '']);
+            estJourType(e) ? 0 : breakMinutes(e), w, w - p,
+            JOUR_TYPES[e.jour_type] || '', e.justification || '']);
         });
       downloadFile(`prestations_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
       toast('CSV prestations téléchargé');
@@ -2464,7 +2605,7 @@ async function exportSheetPDF(empId) {
     body.push([`${pad(d)}/${pad(CUR.m)}`,
       e.planned_start || '—', e.planned_end || '—',
       e.start_time || '—', e.end_time || '—',
-      breakMinutes(e) ? fmtBreak(breakMinutes(e)) : '—',   // sinon l'écart semble inexpliqué
+      (!estJourType(e) && breakMinutes(e)) ? fmtBreak(breakMinutes(e)) : '—',   // sinon l'écart semble inexpliqué
       fmtHM(worked), fmtHM(worked - planned),
       // Sans le motif, un ecart de -3h30 resterait inexplique sur le document.
       [JOUR_TYPES[e.jour_type], e.justification].filter(Boolean).join(' — ')]);
