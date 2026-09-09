@@ -1296,3 +1296,28 @@ test('bibliothèques externes : les versions du CDN sont figées à l’unité p
   }
   expect(urls.some((u) => u.includes('chart.js@4.5.1'))).toBe(true);
 });
+
+/* Le pré-remplissage écrit le mois entier : un mois à venir s'affichait
+ * « Total presté 88h00 » alors que rien n'avait été travaillé. Les totaux
+ * restent ceux du mois complet (sinon l'écart, donc le solde, serait faux) ;
+ * une mention dit ce qui est réellement presté à ce jour. */
+test('feuille : un mois à venir annonce ce qui est réellement presté', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('#empSel').selectOption({ label: 'Employée 1' });
+  const mention = page.locator('#app p:has-text("Jours à venir compris")');
+
+  // Mois suivant : entièrement à venir.
+  await page.locator('#nextM').click();
+  await expect(page.locator('#tPlanned')).toBeVisible();
+  await expect(mention).toHaveCount(1);
+  await expect(mention).toContainText('0h00');
+  // Les totaux du mois complet, eux, ne bougent pas.
+  await expect(page.locator('#tWorked')).toHaveText(await page.locator('#tPlanned').textContent());
+  await expect(page.locator('#tDelta')).toHaveText('—');
+
+  // Un mois passé n'affiche rien de plus.
+  await page.locator('#prevM').click();
+  await page.locator('#prevM').click();
+  await expect(page.locator('.toolbar strong').first()).toHaveText(/août 2026/i);
+  await expect(mention).toHaveCount(0);
+});

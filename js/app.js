@@ -462,14 +462,24 @@ async function monthSummary(empId, y, m) {
   const all = await STORE.entriesForEmployee(empId);
   const firstOfMonth = `${y}-${pad(m)}-01`;
   let planned = 0, worked = 0, carryIn = await openingMinutes(empId, annee);
+  /* Le pré-remplissage écrit le MOIS ENTIER, jours à venir compris : les totaux
+   * annoncent donc un mois complet dès son premier jour. L'écart, lui, reste
+   * juste (prévu et presté montent ensemble), et c'est lui qui fait le solde —
+   * on ne touche donc pas au calcul. On compte seulement, à côté, ce qui est
+   * réellement presté à ce jour, pour pouvoir le dire sous les totaux. */
+  const auj = todayISO();
+  let workedToDate = 0, aVenir = false;
   all.forEach((e) => {
     const w = effectiveWorked(e), p = plannedMinutes(e);
     if (e.entry_date < depart) return;
     if (e.entry_date < firstOfMonth) carryIn += (w - p);
-    else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) { planned += p; worked += w; }
+    else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) {
+      planned += p; worked += w;
+      if (e.entry_date <= auj) workedToDate += w; else if (p || w) aVenir = true;
+    }
   });
   const delta = worked - planned;
-  return { planned, worked, delta, carryIn, closing: carryIn + delta };
+  return { planned, worked, delta, carryIn, closing: carryIn + delta, workedToDate, aVenir };
 }
 
 /* ================================================================
@@ -974,6 +984,11 @@ async function viewSheet() {
         <div class="stat"><div class="num" id="tCarry">${fmtHM(sum.carryIn)}</div><div class="lbl">Solde reporté</div></div>
         <div class="stat"><div class="num ${sum.closing >= 0 ? 'pos' : 'neg'}" id="tClosing">${fmtHM(sum.closing)}</div><div class="lbl">Solde cumulé</div></div>
       </div>
+      ${sum.aVenir ? `<p class="muted small" style="margin-top:10px">
+        ⏳ <strong>Jours à venir compris</strong> dans les totaux ci-dessus : ils sont comptés à
+        l'horaire prévu tant qu'ils n'ont pas eu lieu. Réellement presté au ${new Date().toLocaleDateString('fr-FR')} :
+        <strong>${fmtHM(sum.workedToDate)}</strong>.
+      </p>` : ''}
       <p class="muted small">
         <span class="legend"><span class="sw grp-plan-h"></span> Horaire prévu (défini par l'admin)</span>
         <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employée)</span>
