@@ -1344,3 +1344,20 @@ test('connexion : un vrai formulaire, que le navigateur peut retenir', async ({ 
   await expect(page.locator('#login')).toBeHidden();
   await expect(page.locator('#loginForm #pwd')).toHaveCount(1);
 });
+
+/* `assets/icon.svg` n'était référencé nulle part (les icônes servies sont
+ * icon-192.png et icon-512.png) : supprimé. Ce test empêche qu'un fichier
+ * fantôme revienne s'installer sans être utilisé. */
+test('ressources : aucune icône fantôme dans le manifeste ni dans le service worker', async ({ page }) => {
+  const manifeste = await (await page.request.get('/manifest.webmanifest')).text();
+  const sw = await (await page.request.get('/sw.js')).text();
+  const html = await (await page.request.get('/index.html')).text();
+  for (const [nom, contenu] of [['manifeste', manifeste], ['service worker', sw], ['index.html', html]]) {
+    expect(contenu, `${nom} référence assets/icon.svg, qui n'existe plus`).not.toContain('icon.svg');
+  }
+  // Et les icônes réellement annoncées répondent bien.
+  for (const f of ['assets/icon-192.png', 'assets/icon-512.png', 'assets/logo.svg']) {
+    expect((await page.request.get('/' + f)).status(), f).toBe(200);
+  }
+  expect((await page.request.get('/assets/icon.svg')).status()).toBe(404);
+});
