@@ -1321,3 +1321,26 @@ test('feuille : un mois à venir annonce ce qui est réellement presté', async 
   await expect(page.locator('.toolbar strong').first()).toHaveText(/août 2026/i);
   await expect(mention).toHaveCount(0);
 });
+
+/* L'écran de connexion n'était pas un formulaire et son champ mot de passe était
+ * retiré du DOM juste après la connexion : aucun gestionnaire de mots de passe
+ * ne voyait passer une connexion, et il fallait retaper son mot de passe à
+ * chaque fois — plusieurs fois par jour, la déconnexion automatique tombant au
+ * bout de 15 minutes. (La fenêtre « Enregistrer le mot de passe ? » est une
+ * décision du navigateur, invisible d'un test : on vérifie la structure.) */
+test('connexion : un vrai formulaire, que le navigateur peut retenir', async ({ page }) => {
+  await page.goto('/index.html');
+  await expect(page.locator('#loginForm')).toBeVisible();
+  // Les deux champs sont DANS le formulaire, avec leurs attributs d'autocomplétion.
+  await expect(page.locator('#loginForm #email')).toHaveAttribute('autocomplete', 'username');
+  await expect(page.locator('#loginForm #pwd')).toHaveAttribute('autocomplete', 'current-password');
+  await expect(page.locator('#loginForm #loginBtn')).toHaveAttribute('type', 'submit');
+
+  // Entrée depuis le champ email suffit (avant, seul le champ mot de passe réagissait).
+  await page.locator('#email').press('Enter');
+  await expect(page.locator('#appShell')).toBeVisible();
+
+  // Et le champ n'est plus arraché du DOM après la connexion.
+  await expect(page.locator('#login')).toBeHidden();
+  await expect(page.locator('#loginForm #pwd')).toHaveCount(1);
+});
