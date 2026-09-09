@@ -1283,3 +1283,16 @@ test('accès : un compte authentifié sans fiche est refusé, pas provisionné',
   expect(ecran.titre).toBe('Accès non autorisé');
   expect(ecran.shell).toBe('none');
 });
+
+/* `chart.js@4` suivait toutes les versions 4.x à venir : le graphique pouvait se
+ * casser sans aucun déploiement de notre côté. Toute adresse de CDN doit porter
+ * une version exacte — c'est ce que ce test empêche de perdre. */
+test('bibliothèques externes : les versions du CDN sont figées à l’unité près', async ({ page }) => {
+  const source = await (await page.request.get('/js/app.js')).text();
+  const urls = source.match(/https:\/\/cdn\.jsdelivr\.net\/npm\/[^']+/g) || [];
+  expect(urls.length).toBeGreaterThan(0);
+  for (const u of urls) {
+    expect(u, `version non figée : ${u}`).toMatch(/@\d+\.\d+\.\d+(\/|$)/);
+  }
+  expect(urls.some((u) => u.includes('chart.js@4.5.1'))).toBe(true);
+});
