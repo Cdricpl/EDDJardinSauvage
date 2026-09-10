@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.09-2';
+const APP_VERSION = 'v2026.09.10-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -1472,8 +1472,11 @@ async function viewChildren() {
     <span class="pres-leg"><span class="presbtn pres-nj" aria-hidden="true">!</span> Absence injustifiée</span>
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
-  app.innerHTML = `${await toolbar(false, ME.role === 'admin'
-      ? '<button id="kToggle" class="addkid">+ Ajouter un enfant</button>' : '')}
+  const actionsEnfants = ME.role === 'admin'
+    ? '<button class="small" id="listePdfBtn" title="Télécharger la liste des enfants et leurs jours habituels">🖨️ Liste PDF</button>'
+      + ' <button id="kToggle" class="addkid">+ Ajouter un enfant</button>'
+    : '';
+  app.innerHTML = `${await toolbar(false, actionsEnfants)}
     <div class="card">
       <h2 style="margin:0 0 4px">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
       ${ME.role === 'admin' ? `
@@ -1554,6 +1557,11 @@ async function viewChildren() {
         ME.role === 'admin' ? ' La moyenne annuelle est dans l\'onglet 📈 Statistiques.' : ''}</p>
     </div>`;
   wireToolbar();
+
+  // Liste imprimable des enfants (administration seule).
+  const listeBtn = document.getElementById('listePdfBtn');
+  if (listeBtn) listeBtn.onclick = () => avecBarre(() => exportListeEnfantsPDF(kids))
+    .catch((e) => toast('Export impossible : ' + e.message, 'error'));
 
   // Le formulaire d'ajout reste replié : la grille est ainsi lisible d'emblée.
   const addCard = document.getElementById('addKidCard');
@@ -1983,6 +1991,86 @@ async function exportFichePDF(k, c, absences) {
   bloc(['Bilan du mois', 'Nombre'], bilan);
   bloc(['Détail des absences', 'Motif'], detail);
   doc.save(`fiche_${(kidLabel(k) || 'enfant').replace(/[^\w-]+/g, '-')}_${CUR.y}-${pad(CUR.m)}.pdf`);
+}
+
+/* ---------------- Export PDF : liste des enfants et jours habituels ----------------
+ * Le document qu'on imprime pour l'afficher au local ou le glisser dans le
+ * dossier : qui est inscrit, dans quelle école, en quelle année, né quand, et
+ * quels jours on l'attend. Réservé à l'administration, comme les fiches.
+ * Seuls les enfants ACTIFS y figurent : ceux qui ont été retirés de la liste
+ * n'ont plus à être attendus. */
+async function exportListeEnfantsPDF(kids) {
+  const titre = 'Liste des enfants';
+  const sousTitre = `Au ${new Date().toLocaleDateString('fr-FR')} · ${kids.length} enfant${kids.length > 1 ? 's' : ''}`;
+  // Jours dans l'ordre de la semaine (lundi d'abord) : la liste interne
+  // commence au dimanche, ce qui se lit mal sur un document affiché au mur.
+  const joursDe = (k) => {
+    const d = k.days || [];
+    const l = WEEK_ORDER.filter((w) => d.includes(w)).map((w) => DOW[w]);
+    return l.length ? l.join(' ') : '—';
+  };
+  const corps = kids.map((k) => [
+    kidLabel(k),
+    k.grade || '—',
+    k.school || '—',
+    k.birthdate ? k.birthdate.split('-').reverse().join('/') : '—',
+    joursDe(k),
+  ]);
+  /* Combien d'enfants attendus chaque jour : c'est la question qu'on se pose en
+   * lisant cette liste, autant y répondre plutôt que de faire compter. */
+  const parJour = WEEK_ORDER
+    .map((w) => ({ w, n: kids.filter((k) => (k.days || []).includes(w)).length }))
+    .filter((x) => x.n > 0)
+    .map((x) => [DOW_FULL[x.w], String(x.n)]);
+  const entetes = ['Enfant', 'Année', 'École', 'Naissance', 'Jours habituels'];
+
+  if (!(await assurerPdf())) {           // repli impression, comme les autres exports
+    const w = window.open('', '_blank');
+    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const tab = (t, e, l) => `<h3>${echapper(t)}</h3><table border=1 cellpadding=5 style="border-collapse:collapse">`
+      + `<tr>${e.map((h) => `<th>${echapper(h)}</th>`).join('')}</tr>`
+      + l.map((r) => '<tr>' + r.map((c) => `<td>${echapper(c)}</td>`).join('') + '</tr>').join('') + '</table>';
+    w.document.write(`<img src="assets/logo.svg" style="height:60px">
+      <h2>${echapper(titre)} — ${echapper(sousTitre)}</h2>
+      ${tab('Enfants inscrits', entetes, corps)}
+      ${parJour.length ? tab('Effectif attendu par jour', ['Jour', 'Enfants attendus'], parJour) : ''}
+      <p>Seuls les enfants actifs figurent dans cette liste.</p>
+      <button onclick="print()">Imprimer</button>`);
+    w.document.close(); return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const BLEU = [59, 91, 219];
+  let y = await pdfHeader(doc, titre, sousTitre);
+  doc.autoTable({
+    startY: y,
+    head: [entetes],
+    body: lignesPdf(corps),
+    styles: { fontSize: 10 },
+    columnStyles: { 0: { cellWidth: 52 }, 1: { cellWidth: 18 }, 3: { cellWidth: 24 } },
+    headStyles: { fillColor: BLEU },
+  });
+  y = doc.lastAutoTable.finalY + 10;
+
+  if (parJour.length) {
+    // Saut de page si le second tableau ne tient plus.
+    if (y + 14 + parJour.length * 10 > doc.internal.pageSize.getHeight() - 18) { doc.addPage(); y = 20; }
+    doc.setFontSize(12); doc.setTextColor(0);
+    doc.text('Effectif attendu par jour', 14, y); y += 6;
+    doc.autoTable({
+      startY: y,
+      head: [['Jour', 'Enfants attendus']],
+      body: lignesPdf(parJour),
+      styles: { fontSize: 10 },
+      columnStyles: { 0: { cellWidth: 40 }, 1: { cellWidth: 34, halign: 'right' } },
+      headStyles: { fillColor: BLEU },
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+  doc.setFontSize(9); doc.setTextColor(110);
+  doc.text(pourPdf('Seuls les enfants actifs figurent dans cette liste.'), 14, y);
+  doc.save(`liste_enfants_${todayISO()}.pdf`);
 }
 
 /* ---------------- Export PDF des statistiques de l'année scolaire ----------------

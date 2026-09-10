@@ -1237,6 +1237,11 @@ test('années : une correction dans l’année close est signalée et reportable
   await expect(avert).toContainText('ne correspond plus');
   await expect(avert).toContainText('recalculé à');
 
+  /* La valeur attendue est LUE dans l'avertissement, jamais écrite en dur : les
+   * données de démonstration dépendent du jour où le test tourne. */
+  const attendu = ((await avert.innerText()).match(/recalculé à\s*([+-]?\d+h\d{2})/) || [])[1];
+  expect(attendu, 'la valeur recalculée doit être annoncée').toBeTruthy();
+
   // Le bouton remet le report à jour.
   await page.locator('#recalcSoldes').click();
   await expect(page.locator('#app .msg.error')).toHaveCount(0);
@@ -1244,7 +1249,7 @@ test('années : une correction dans l’année close est signalée et reportable
   await page.locator('.navbtn[data-v="sheet"]').click();
   await page.locator('#anneeSel').selectOption('2027');
   await expect(page.locator('.toolbar strong').first()).toHaveText(/août 2027/i);
-  await expect(page.locator('#tCarry')).toHaveText('1h45');
+  await expect(page.locator('#tCarry')).toHaveText(attendu.replace('+', ''));
 });
 
 /* L'inscription Firebase est ouverte (c'est par elle que l'onglet Utilisateurs
@@ -1360,4 +1365,61 @@ test('ressources : aucune icône fantôme dans le manifeste ni dans le service w
     expect((await page.request.get('/' + f)).status(), f).toBe(200);
   }
   expect((await page.request.get('/assets/icon.svg')).status()).toBe(404);
+});
+
+/* Liste imprimable des enfants et de leurs jours habituels — administration
+ * seule. Le document qu'on affiche au local ou qu'on glisse dans le dossier. */
+test('enfants : l’administration télécharge la liste et les jours habituels en PDF', async ({ page }) => {
+  await loginAdmin(page);
+  await page.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('ecole_db'));
+    db.kids = [
+      { id: 'a', first_name: 'Lucas', last_name: 'Martin', school: 'ARAHF', grade: '3e', birthdate: '2016-04-05', days: [1, 3, 5], active: true },
+      { id: 'b', first_name: 'Emma', last_name: 'Bernard', school: 'Saint-Remacle', grade: 'M2', birthdate: '2020-11-30', days: [2, 4], active: true },
+      { id: 'c', first_name: 'Noah', last_name: 'Dubois', school: '', grade: '', birthdate: '', days: [], active: true },
+      { id: 'd', first_name: 'Parti', last_name: 'Ancien', school: 'ARAHF', grade: '5e', birthdate: '2015-01-01', days: [1], active: false },
+    ];
+    localStorage.setItem('ecole_db', JSON.stringify(db));
+  });
+  await page.reload();
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('#listePdfBtn')).toBeVisible();
+
+  // jsPDF vient d'un CDN, coupé pendant les tests : on note ce qu'on lui demande.
+  await page.evaluate(() => {
+    window.__pdf = { tables: [], texts: [], saved: null };
+    class FauxDoc {
+      constructor() { this.internal = { pageSize: { getHeight: () => 297 } }; }
+      setFontSize() {} setTextColor() {} addImage() {} addPage() {}
+      text(t) { window.__pdf.texts.push(t); }
+      autoTable(o) {
+        window.__pdf.tables.push({ head: o.head[0], body: o.body });
+        this.lastAutoTable = { finalY: window.__pdf.tables.length * 40 };
+      }
+      save(n) { window.__pdf.saved = n; }
+    }
+    window.jspdf = { jsPDF: FauxDoc };
+  });
+  await page.locator('#listePdfBtn').click();
+  await expect.poll(async () => (await page.evaluate(() => window.__pdf)).saved).toBeTruthy();
+  const r = await page.evaluate(() => window.__pdf);
+
+  expect(r.saved).toMatch(/^liste_enfants_\d{4}-\d{2}-\d{2}\.pdf$/);
+  expect(r.tables[0].head).toEqual(['Enfant', 'Année', 'École', 'Naissance', 'Jours habituels']);
+  // Trois enfants actifs, par ordre alphabétique ; l'enfant retiré n'y est pas.
+  expect(r.tables[0].body.map((l) => l[0])).toEqual(['BERNARD Emma', 'DUBOIS Noah', 'MARTIN Lucas']);
+  expect(r.texts.join(' ')).toContain('3 enfants');
+  // Les jours sont écrits dans l'ordre de la semaine, lundi d'abord.
+  expect(r.tables[0].body[2][4]).toBe('Lun Mer Ven');
+  expect(r.tables[0].body[1][4]).toBe('-');          // aucun jour renseigné
+  // Et l'effectif attendu par jour est rappelé.
+  expect(r.tables[1].body).toEqual([['Lundi', '1'], ['Mardi', '1'], ['Mercredi', '1'], ['Jeudi', '1'], ['Vendredi', '1']]);
+  await expect(page.locator('#toast')).not.toContainText('impossible');
+});
+
+test('enfants : la liste PDF n’est pas proposée aux employées', async ({ page }) => {
+  await loginEmployee(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+  await expect(page.locator('#listePdfBtn')).toHaveCount(0);
 });
