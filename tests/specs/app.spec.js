@@ -28,8 +28,31 @@ async function loginAdmin(page) {
   await expect(page.locator('#appShell')).toBeVisible();
 }
 
+/* HORLOGE FIGÉE pour toute la suite.
+ * Les données de démonstration sont semées à partir d'« aujourd'hui » (voir
+ * `DemoStore._seed`) : un jour de plus chaque jour qui passe, donc des totaux
+ * qui bougent tout seuls. Deux tests verts la veille sont ainsi tombés le
+ * lendemain — l'un en août quand le mois affiché a changé, l'autre en septembre
+ * sur un solde comparé à une valeur écrite en dur. Ce n'est pas au calendrier
+ * de décider si la suite passe.
+ * Date choisie : un jeudi de la première année scolaire, dans le mois en cours
+ * au moment où toute la suite était verte. Le programme, lui, continue de
+ * tourner à l'heure réelle : seule la page de test voit cette date. */
+const AUJOURDHUI = new Date('2026-09-10T09:00:00');
+
 test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(AUJOURDHUI);
   await setupDemo(page);
+});
+
+/* Garde-fou : si l'horloge cesse d'être figée, ce test tombe tout de suite et
+ * dit pourquoi, au lieu de laisser un autre test échouer un matin au hasard. */
+test('tests : la page voit une date figée, pas celle du jour', async ({ page }) => {
+  await page.goto('/index.html');
+  expect(await page.evaluate(() => todayISO())).toBe('2026-09-10');
+  // Le mois affiché après connexion en découle.
+  await page.locator('#loginBtn').click();
+  await expect(page.locator('.toolbar strong').first()).toHaveText(/septembre 2026/i);
 });
 
 test('connexion admin puis navigation entre les 5 onglets sans écran blanc', async ({ page }) => {
