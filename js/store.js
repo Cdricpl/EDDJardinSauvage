@@ -739,6 +739,16 @@ class FirebaseStore {
     this._oublier('prestationsPeriode:');
     return saved;
   }
+  /* L'ECRITURE GROUPEE JETAIT TOUT LE CACHE de l'employee, et le render() qui
+   * suit relisait aussitot son historique COMPLET. Mesure sur un changement de
+   * mois reel : 106 Ko relus pour 100 fiches que le navigateur avait deja en
+   * memoire, soit 81 % du trafic du geste — et ce cout grandit d'environ 22
+   * fiches par mois ouvert. Les prestations sont des champs plats : la fusion
+   * se refait a l'identique en local, exactement comme pour une cellule seule
+   * (voir upsertEntry). Cache froid : _mergeCache ne fait rien et la lecture a
+   * lieu normalement au prochain acces.
+   * `prestationsPeriode:` reste invalide : ces vues d'administration ne sont pas
+   * fusionnables fiche par fiche, et la feuille mensuelle ne les relit pas. */
   async upsertEntries(entries) {
     if (!entries || !entries.length) return [];
     const now = new Date().toISOString();
@@ -746,7 +756,9 @@ class FirebaseStore {
       ref: this.db.collection('day_entries').doc(this._entryId(e.employee_id, e.entry_date)),
       data: { ...e, updated_at: now },
     })));
-    delete this._entriesCache[entries[0].employee_id];
+    entries.forEach((e) => this._mergeCache({
+      ...e, id: this._entryId(e.employee_id, e.entry_date), updated_at: now,
+    }));
     this._oublier('prestationsPeriode:');
     return entries;
   }

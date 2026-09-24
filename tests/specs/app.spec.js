@@ -1189,6 +1189,91 @@ test('enregistrement : une cellule ne fait qu’un aller-retour', async ({ page 
   expect(res.inconnue).toEqual({ set: 1, get: 1 });     // repli quand la journée n'est pas en cache
 });
 
+/* Même défaut, en pire, sur l'écriture GROUPÉE. Ouvrir un mois neuf déclenche le
+ * pré-remplissage : ~22 fiches écrites en un lot. Comme ce lot jetait tout le
+ * cache de l'employée, le render() qui suit relisait son historique COMPLET.
+ * Mesuré sur un changement de mois réel (capture réseau du 24/09/2026) :
+ * 106 Ko relus pour 100 fiches déjà en mémoire, 81 % du trafic du geste, et ça
+ * grossit de ~22 fiches par mois ouvert. Ce test compte les requêtes. */
+test('pré-remplissage : un mois écrit ne fait pas relire tout l’historique', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const base = {};                                   // documents « côté serveur »
+    const appels = { commit: 0, where: 0 };
+    const db = {
+      collection: (c) => ({
+        doc: (id) => ({ _col: c, _id: id }),
+        where: () => ({
+          async get() {
+            appels.where++;
+            return { docs: Object.entries(base).map(([id, d]) => ({ id, data: () => ({ ...d }) })) };
+          },
+        }),
+      }),
+      batch: () => ({
+        _ops: [],
+        set(ref, data) { this._ops.push([ref._id, data]); },
+        delete(ref) { this._ops.push([ref._id, null]); },
+        async commit() {
+          appels.commit++;
+          this._ops.forEach(([id, data]) => { base[id] = { ...(base[id] || {}), ...data }; });
+        },
+      }),
+    };
+    const store = new FirebaseStore({
+      auth: () => ({ setPersistence: async () => {}, onAuthStateChanged: () => () => {} }),
+      firestore: () => db,
+    });
+
+    /* La feuille du mois est affichée : l'historique de l'employée est en cache.
+     * Le 1er porte déjà une pause et une justification saisies à la main. */
+    const veille = { id: 'e1_2026-12-01', employee_id: 'e1', entry_date: '2026-12-01',
+      break_minutes: 30, justification: 'réunion', worked_touched: true };
+    store._entriesCache['e1'] = [veille];
+    base['e1_2026-12-01'] = { ...veille };
+    for (let i = 2; i <= 40; i++) {                    // + un historique volumineux
+      const d = `2026-11-${String(i).padStart(2, '0')}`;
+      store._entriesCache['e1'].push({ id: `e1_${d}`, employee_id: 'e1', entry_date: d });
+      base[`e1_${d}`] = { employee_id: 'e1', entry_date: d };
+    }
+
+    // Pré-remplissage : deux jours, dont celui déjà saisi.
+    await store.upsertEntries([
+      { employee_id: 'e1', entry_date: '2026-12-01', planned_start: '14:00', planned_end: '18:00', planned_minutes: 240 },
+      { employee_id: 'e1', entry_date: '2026-12-02', planned_start: '14:00', planned_end: '18:00', planned_minutes: 240 },
+    ]);
+
+    // Ce que fait le render() qui suit : relire le mois.
+    const apres = await store.entriesForMonth('e1', 2026, 12);
+    const commit = appels.commit;
+    const relectures = appels.where;
+
+    const jour1 = apres.find((e) => e.entry_date === '2026-12-01') || {};
+    const serveur = base['e1_2026-12-01'];
+    const identique = jour1.planned_minutes === serveur.planned_minutes
+      && jour1.break_minutes === serveur.break_minutes
+      && jour1.justification === serveur.justification;
+
+    // Cache froid : la lecture reste le filet de sécurité.
+    appels.where = 0;
+    await store.upsertEntries([{ employee_id: 'e2', entry_date: '2026-12-03' }]);
+    await store.entriesForEmployee('e2');
+
+    return { commit, relectures, identique, froid: appels.where,
+      nb: apres.length, midi: jour1.break_minutes, motif: jour1.justification,
+      prevu: jour1.planned_minutes };
+  });
+
+  expect(res.commit).toBe(1);                          // une seule écriture groupée
+  expect(res.relectures).toBe(0);                      // et AUCUNE relecture de l'historique
+  expect(res.nb).toBe(2);                              // les deux jours de décembre sont là
+  expect(res.prevu).toBe(240);                         // l'horaire prévu a bien été posé
+  expect(res.midi).toBe(30);                           // la pause saisie à la main survit
+  expect(res.motif).toBe('réunion');                   // la justification aussi
+  expect(res.identique, 'la fusion locale doit donner le document du serveur').toBe(true);
+  expect(res.froid).toBe(1);                           // employée inconnue : on lit une fois
+});
+
 /* L'année scolaire ouverte était lue AVANT l'authentification : les règles
  * Firestore refusent toute lecture à un visiteur non identifié, l'erreur était
  * avalée (« [annee] Missing or insufficient permissions » dans la console) et
