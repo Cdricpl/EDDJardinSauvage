@@ -1085,6 +1085,13 @@ test('temps réel : les écouteurs suivent l’année scolaire, pas l’année c
     };
     const avant = { day_entries: bornes('day_entries'), kid_attendance: bornes('kid_attendance') };
 
+    /* En production, un écouteur livre TOUJOURS un instantané initial avant le
+     * moindre changement. On le reproduit : sans lui, le test ne testerait pas
+     * le cas réel (cet instantané est désormais ignoré, voir onChange). */
+    rappels.settings({ metadata: { hasPendingWrites: false }, docChanges: () => [],
+      docs: [{ id: 'app', data: () => ({ annee_scolaire: 2026 }) }] });
+    await new Promise((r) => setTimeout(r, 20));
+
     // L'administration ouvre l'année suivante : les écouteurs doivent suivre.
     anneeEnBase = 2027;
     rappels.settings({ metadata: { hasPendingWrites: false }, docChanges: () => [],
@@ -1098,6 +1105,69 @@ test('temps réel : les écouteurs suivent l’année scolaire, pas l’année c
   // Une nouvelle année ouverte repose les écouteurs sur la bonne période.
   expect(res.apres.day_entries).toBe('entry_date >= 2027-08-01 | entry_date <= 2028-07-31');
   expect(res.apres.kid_attendance).toBe('entry_date >= 2027-08-01 | entry_date <= 2028-07-31');
+});
+
+/* Le premier instantané d'un écouteur n'est pas un changement : c'est ce que
+ * l'application vient de lire elle-même. Traité comme un changement, il vidait
+ * les caches que le premier rendu venait de remplir, et le re-rendu groupé
+ * relisait réglages, mois et horaire type. Mesure sur une capture réelle de
+ * démarrage : trois allers-retours pour rien à 2,9-3,2 s (un document chacun,
+ * tous déjà connus) et la vue redessinée ~800 ms après son apparition. */
+test('démarrage : le premier instantané des écouteurs ne relance pas de lecture', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    let annee = 2026;
+    let lectures = 0;
+    const rappels = {};
+    const query = (col) => ({
+      col,
+      where() { return query(col); },
+      onSnapshot(opts, cb) { rappels[col] = cb; return () => {}; },
+    });
+    const db = {
+      collection: (c) => Object.assign(query(c), {
+        doc: (id) => ({ get: async () => { lectures++; return { exists: true, id,
+          data: () => (id === 'app' ? { annee_scolaire: annee } : { role: 'admin', active: true }) }; } }),
+      }),
+    };
+    let authCb = null;
+    const auth = { currentUser: { uid: 'u1' }, setPersistence: async () => {},
+                   onAuthStateChanged: (f) => { authCb = f; return () => {}; } };
+    const store = new FirebaseStore({ auth: () => auth, firestore: () => db });
+    let rendus = 0;
+    store.onChange(() => { rendus++; });
+    authCb({ uid: 'u1' });
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Ce que le premier rendu a lu et mémorisé.
+    await store.getReglages();
+    const reference = lectures;
+
+    // Instantané INITIAL des écouteurs : rien ne doit bouger.
+    const instantane = (docs) => ({ metadata: { hasPendingWrites: false },
+      docChanges: () => docs.map((d) => ({ doc: d })), docs });
+    rappels.settings(instantane([{ id: 'app', data: () => ({ annee_scolaire: annee }) }]));
+    rappels.months(instantane([{ id: 'm1', data: () => ({}) }]));
+    rappels.schedule_templates(instantane([{ id: 't1', data: () => ({}) }]));
+    await new Promise((r) => setTimeout(r, 40));
+    await store.getReglages();                     // doit rester mémorisé
+    const apresInitial = { lectures: lectures - reference, rendus };
+
+    // Changement RÉEL ensuite : là, il faut oublier et redessiner.
+    annee = 2027;
+    rappels.months(instantane([{ id: 'm1', data: () => ({ status: 'validated' }) }]));
+    rappels.settings(instantane([{ id: 'app', data: () => ({ annee_scolaire: 2027 }) }]));
+    await new Promise((r) => setTimeout(r, 60));
+    const reglages = await store.getReglages();
+    return { apresInitial, rendusApres: rendus, annee: reglages.annee_scolaire };
+  });
+
+  // Le premier instantané ne relit rien et ne redessine pas.
+  expect(res.apresInitial.lectures).toBe(0);
+  expect(res.apresInitial.rendus).toBe(0);
+  // Un vrai changement, lui, est bien suivi.
+  expect(res.rendusApres).toBeGreaterThan(0);
+  expect(res.annee).toBe(2027);
 });
 
 /* Poser un motif de journée effaçait le temps de midi : en revenant à « — », la

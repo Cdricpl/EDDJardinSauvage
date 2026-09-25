@@ -1086,10 +1086,27 @@ class FirebaseStore {
       };
       ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
         const base = this.db.collection(c);
+        /* PREMIER INSTANTANÉ IGNORÉ. `onSnapshot` commence par livrer TOUT le
+         * contenu suivi : ce n'est pas un changement, c'est ce que l'application
+         * vient elle-même de lire. Le traiter comme un changement vidait les
+         * caches que le premier rendu venait de remplir, et le re-rendu groupé
+         * relisait aussitôt les réglages, le mois et l'horaire type.
+         * Mesure sur une capture réelle de démarrage : trois allers-retours pour
+         * rien à 2,9-3,2 s (un document chacun, tous déjà connus), et la vue
+         * entièrement redessinée ~800 ms après son apparition. Les changements
+         * SUIVANTS, eux, continuent d'être traités normalement.
+         * Contrepartie assumée : une modification faite par une collègue dans les
+         * quelques centaines de millisecondes qui séparent la pose de l'écouteur
+         * de l'arrivée de cet instantané n'est pas signalée — la lecture suivante
+         * la rapportera. */
+        let premier = true;
         const un = (BORNE[c] ? BORNE[c](base) : base).onSnapshot(
           { includeMetadataChanges: false },
           (snap) => {
             if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
+            /* Après le filtre ci-dessus : le drapeau ne doit être consommé que par
+             * le premier instantané VENU DU SERVEUR, jamais par un état local. */
+            if (premier) { premier = false; return; }
             if (c === 'day_entries') {
               /* Ne vider QUE les employées réellement concernées.
                * Vider tout le cache faisait relire l'historique COMPLET de chaque
