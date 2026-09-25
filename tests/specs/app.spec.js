@@ -95,6 +95,12 @@ async function pickTime(select, value) {
   await select.click();
   await select.selectOption(value);
 }
+/* Le menu « Midi » se remplit lui aussi au premier clic (25 choix, de 0 a 6 h) :
+ * au repos il ne contient que sa valeur, donc selectOption seul echouerait. */
+async function pickBreak(select, value) {
+  await select.click();
+  await select.selectOption(value);
+}
 
 test('feuille du mois : modifier l’horaire réel met à jour le total presté', async ({ page }) => {
   await loginAdmin(page);
@@ -202,11 +208,14 @@ test('performance : les menus d’heures se remplissent au clic (feuille allég�
   await page.locator('.navbtn[data-v="sheet"]').click();
   await expect(page.locator('#sheetTable')).toBeVisible();
 
-  // Au repos la feuille reste légère : sans ce remplissage différé elle
-  // contiendrait plusieurs milliers de balises <option> et deviendrait saccadée.
-  // Budget : ~140 heures repliées + ~280 pour la colonne « Midi » (9 choix/jour).
+  /* Au repos la feuille reste légère : sans ce remplissage différé elle
+   * contiendrait plusieurs milliers de balises <option> et deviendrait saccadée.
+   * Budget : ~140 heures repliées + ~35 « Midi » repliés + ~140 pour la colonne
+   * « Journée » (4 choix/jour, liste courte, posée d'emblée). Le menu « Midi »
+   * est passé de 9 à 25 choix (jusqu'à 6 h) : sans remplissage différé il ajoutait
+   * à lui seul ~500 balises. */
   const auRepos = await page.locator('#app option').count();
-  expect(auRepos).toBeLessThan(600);
+  expect(auRepos).toBeLessThan(400);
 
   // Mais un clic doit bien proposer TOUS les créneaux (6:00 → 21:00 au quart d'heure).
   const sel = (await firstWorkedRow(page)).locator('[data-k="end_time"]');
@@ -506,7 +515,7 @@ test('feuille : le temps de midi est déduit des heures prestées', async ({ pag
   const avantMois = await page.locator('#tWorked').innerText();
 
   // 30 minutes de pause de midi, non comptées dans la prestation.
-  await row.locator('[data-k="break_minutes"]').selectOption('30');
+  await pickBreak(row.locator('[data-k="break_minutes"]'), '30');
   await expect(row.locator('.c-worked')).not.toHaveText(avantJour);
   await expect(page.locator('#tWorked')).not.toHaveText(avantMois);
 
@@ -515,8 +524,39 @@ test('feuille : le temps de midi est déduit des heures prestées', async ({ pag
   await expect(row.locator('.c-delta')).toHaveText('-0h30');
 
   // Remise à zéro : on retrouve la durée d'origine.
-  await row.locator('[data-k="break_minutes"]').selectOption('0');
+  await pickBreak(row.locator('[data-k="break_minutes"]'), '0');
   await expect(row.locator('.c-worked')).toContainText(avantJour);
+});
+
+/* Le menu s'arrêtait à 2 h : une interruption longue en milieu de journée n'était
+ * pas encodable, sauf à trafiquer l'horaire réel — ce qui réclamait alors une
+ * justification écrite pour un écart parfaitement normal. */
+test('feuille : le temps de midi se choisit par quarts d’heure jusqu’à 6 h', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  const row = await firstWorkedRow(page);
+  const midi = row.locator('[data-k="break_minutes"]');
+
+  // Au repos le menu ne porte que sa valeur (feuille allégée), puis il se remplit.
+  await expect(midi.locator('option')).toHaveCount(1);
+  await midi.click();
+  // Des quarts d'heure, de 0 à 6 h, et rien d'autre.
+  const valeurs = await midi.locator('option').evaluateAll((o) => o.map((x) => Number(x.value)));
+  expect(valeurs.length).toBe(25);
+  expect(valeurs[0]).toBe(0);
+  expect(valeurs[valeurs.length - 1]).toBe(360);
+  expect(valeurs.every((v, i) => v === i * 15)).toBe(true);
+  await expect(midi.locator('option[value="360"]')).toHaveText('6h00');
+
+  /* Une pause plus longue que la journée ne fabrique pas d'heures négatives :
+   * la prestation tombe à zéro, affichée « — » comme toute journée sans heures. */
+  await pickBreak(midi, '360');
+  await expect(row.locator('.c-worked')).toHaveText('—');
+  await expect(row.locator('.c-delta')).toHaveText('-4h00');
+
+  // Et une valeur intermédiaire nouvelle reste une simple déduction.
+  await pickBreak(midi, '150');
+  await expect(row.locator('.c-worked')).toContainText('1h30');
 });
 
 test('enfants : trois états — présent, absence justifiée, absence injustifiée', async ({ page }) => {
@@ -665,7 +705,7 @@ test('feuille : le temps de midi n’exige aucune justification', async ({ page 
   const justif = row.locator('.c-justif input');
 
   // La pause creuse un écart… mais elle l'explique déjà d'elle-même.
-  await row.locator('[data-k="break_minutes"]').selectOption('45');
+  await pickBreak(row.locator('[data-k="break_minutes"]'), '45');
   await expect(row.locator('.c-delta')).toHaveText('-0h45');
   await expect(justif).toHaveAttribute('placeholder', '');
   await expect(justif).not.toHaveClass(/err/);
@@ -782,7 +822,7 @@ test('exports : le temps de midi et le statut des présences y figurent', async 
   await page.locator('.navbtn[data-v="sheet"]').click();
   const row = await firstWorkedRow(page);
   const jour = await row.locator('[data-k="start_time"]').getAttribute('data-date');
-  await row.locator('[data-k="break_minutes"]').selectOption('45');
+  await pickBreak(row.locator('[data-k="break_minutes"]'), '45');
   await expect(row.locator('.c-worked')).toContainText('3h15');
 
   // Une absence injustifiée.
@@ -1178,7 +1218,7 @@ test('feuille : le temps de midi survit à un aller-retour de motif', async ({ p
   await expect(page.locator('#tWorked')).toBeVisible();
   const row = await firstWorkedRow(page);
 
-  await row.locator('[data-k="break_minutes"]').selectOption('30');
+  await pickBreak(row.locator('[data-k="break_minutes"]'), '30');
   await expect(row.locator('.c-worked')).toHaveText('3h30');
 
   // Motif posé : le temps de midi est masqué (sans objet), mais pas perdu.
