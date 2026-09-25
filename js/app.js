@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.25-2';
+const APP_VERSION = 'v2026.09.25-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -598,10 +598,17 @@ async function boot() {
 }
 
 async function afterLogin() {
-  await chargerAnnee();   // en premier : le mois affiché et les droits en dépendent
-  if (ME.role === 'employee') SEL_EMP = ME.id;
-  else {
-    const profs = await STORE.listProfiles();
+  /* L'annee ouverte doit etre connue AVANT le premier rendu : le mois affiche et
+   * les droits en dependent. La liste des employees, elle, ne depend pas de
+   * l'annee — elle sert seulement a choisir la feuille ouverte par defaut. Les
+   * enchainer faisait payer deux allers-retours l'un apres l'autre au demarrage
+   * (~180 ms de trop, mesure sur une capture reelle) ; groupees, on n'en attend
+   * plus qu'un. */
+  if (ME.role === 'employee') {
+    await chargerAnnee();
+    SEL_EMP = ME.id;
+  } else {
+    const [, profs] = await Promise.all([chargerAnnee(), STORE.listProfiles()]);
     const firstEmp = profs.find((p) => p.role === 'employee' && p.active);
     SEL_EMP = firstEmp ? firstEmp.id : ME.id;
   }

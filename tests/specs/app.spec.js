@@ -1484,6 +1484,43 @@ test('démarrage : l’application s’ouvre sur l’année réellement ouverte'
   expect(res.mois).toBe('août 2027');
 });
 
+/* Les deux lectures du demarrage — l'annee ouverte et la liste des employees —
+ * s'enchainaient l'une apres l'autre, alors que la seconde ne depend pas de la
+ * premiere : deux attentes reseau la ou une suffit (~180 ms de trop, mesure sur
+ * une capture reelle de demarrage). Ce test verifie qu'elles partent ensemble. */
+test('démarrage : l’année et la liste des employées sont lues en parallèle', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const vrai = new DemoStore();
+    const faux = Object.create(Object.getPrototypeOf(vrai));
+    Object.assign(faux, vrai);
+    let reglagesRendus = false;
+    let profilsDemandesAvant = null;
+    faux.getReglages = async () => {
+      await new Promise((r) => setTimeout(r, 80));   // une lecture qui prend du temps
+      reglagesRendus = true;
+      return { annee_scolaire: 2026 };
+    };
+    faux.listProfiles = async () => {
+      // Demandee AVANT que l'annee soit revenue => les deux attentes se recouvrent.
+      if (profilsDemandesAvant === null) profilsDemandesAvant = !reglagesRendus;
+      return [{ id: 'u-admin', full_name: 'Admin', role: 'admin', active: true },
+              { id: 'e1', full_name: 'Employée', role: 'employee', active: true }];
+    };
+    faux.getCurrentUser = async () => ({ id: 'u-admin', full_name: 'Admin', role: 'admin', active: true });
+    createStore = async () => ({ store: faux, mode: 'demo' });
+    ME = null;
+    await boot();
+    await new Promise((r) => setTimeout(r, 300));
+    return { profilsDemandesAvant, selEmp: SEL_EMP, annee: ANNEE };
+  });
+
+  expect(res.profilsDemandesAvant, 'les deux lectures doivent se recouvrir').toBe(true);
+  // Et le resultat reste le meme : la feuille ouverte est celle d'une employee.
+  expect(res.selEmp).toBe('e1');
+  expect(res.annee).toBe(2026);
+});
+
 /* Le solde reporté est figé à l'ouverture de l'année — c'est le principe retenu.
  * Mais l'administration peut encore corriger une année close, et la correction
  * ne remonte pas : mesuré à l'audit, deux heures disparaissaient en silence.
