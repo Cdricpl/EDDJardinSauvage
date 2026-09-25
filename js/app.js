@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.10-1';
+const APP_VERSION = 'v2026.09.25-5';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -220,7 +220,9 @@ function wireLazyTimes() {
   app.dataset.lazyWired = '1';
   const hyd = (ev) => {
     const t = ev.target;
-    if (t && t.closest) hydrateTimeSelect(t.closest('select.time'));
+    if (!t || !t.closest) return;
+    hydrateTimeSelect(t.closest('select.time'));
+    hydrateBreakSelect(t.closest('select.brk'));
   };
   ['pointerdown', 'focusin', 'keydown'].forEach((e) => app.addEventListener(e, hyd, true));
 }
@@ -236,16 +238,34 @@ function plannedMinutes(e) {
 /* Temps de midi : pause NON comptée dans les prestations. En temps normal il
  * n'y en a pas ; certains jours seulement, l'employée prend une pause qui ne
  * doit pas être payée. On la déduit donc des heures prestées.
- * Choix limité aux quarts d'heure, jusqu'à 2 h, comme le reste de la feuille. */
-const BREAK_LIST = [0, 15, 30, 45, 60, 75, 90, 105, 120];
+ * Choix limité aux quarts d'heure, jusqu'à 6 h, comme le reste de la feuille :
+ * une interruption longue en milieu de journée doit pouvoir être encodée ici,
+ * sinon il ne reste qu'à trafiquer l'horaire réel — ce qui réclamerait alors une
+ * justification écrite pour un écart parfaitement normal. */
+const BREAK_LIST = (() => { const o = []; for (let m = 0; m <= 6 * 60; m += 15) o.push(m); return o; })();
 const breakMinutes = (e) => Math.max(0, Number(e && e.break_minutes) || 0);
 function fmtBreak(min) { return !min ? '—' : (min < 60 ? `${min} min` : fmtHM(min)); }
-function breakSelect(date, value, disabled) {
-  const v = Math.max(0, Number(value) || 0);
-  const opts = BREAK_LIST.concat(BREAK_LIST.includes(v) ? [] : [v])
+function breakOptionsHTML(v) {
+  return BREAK_LIST.concat(BREAK_LIST.includes(v) ? [] : [v])
     .sort((a, b) => a - b)
     .map((m) => `<option value="${m}"${m === v ? ' selected' : ''}>${fmtBreak(m)}</option>`).join('');
-  return `<select class="cell brk${v ? ' brk-on' : ''}" data-k="break_minutes" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts}</select>`;
+}
+/* Rempli à la demande, comme les menus d'heures (voir hydrateTimeSelect).
+ * En passant de 2 h à 6 h le menu est passé de 9 à 25 choix : posés d'emblée sur
+ * chaque jour du mois, cela ajoutait ~500 balises <option> à chaque affichage de
+ * la feuille — exactement ce que le remplissage différé des heures avait supprimé.
+ * Au repos le menu ne contient donc que sa valeur ; ses 25 choix arrivent au
+ * premier clic (ou à la tabulation). */
+function breakSelect(date, value, disabled) {
+  const v = Math.max(0, Number(value) || 0);
+  return `<select class="cell brk${v ? ' brk-on' : ''}" data-k="break_minutes" data-date="${date}" ${disabled ? 'disabled' : ''}><option value="${v}" selected>${fmtBreak(v)}</option></select>`;
+}
+function hydrateBreakSelect(sel) {
+  if (!sel || sel.dataset.full) return;
+  const v = Math.max(0, Number(sel.value) || 0);
+  sel.dataset.full = '1';
+  sel.innerHTML = breakOptionsHTML(v);
+  sel.value = String(v);
 }
 // Heures ENCODÉES, avant déduction du temps de midi.
 function grossWorked(e) {
@@ -431,7 +451,17 @@ async function openingMinutes(empId, annee) {
   // Première année : le solde saisi une fois par l'administration.
   // Années suivantes : le solde reporté au moment d'ouvrir l'année.
   if (annee === MIN_YM.y) return Number(p.opening_minutes) || 0;
-  return Number((p.soldes || {})[String(annee)]) || 0;
+  const report = (p.soldes || {})[String(annee)];
+  /* UN REPORT ABSENT N'EST PAS UN REPORT NUL. Les reports sont écrits au moment
+   * d'ouvrir l'année, pour les employées actives À CE MOMENT-LÀ. Une employée
+   * engagée (ou réactivée) ensuite n'en a donc aucun : son « solde de départ »,
+   * saisi par l'administration, était alors purement et simplement ignoré, et sa
+   * feuille annonçait un report de 0. Mesuré : 10 h de départ affichées 0h00.
+   * Faute de report enregistré, on repart du solde de départ — ce que fait déjà
+   * soldeRecalcule. Un report enregistré, même NUL, reste prioritaire : c'est la
+   * valeur figée voulue, et `Number(0) || 0` la rendrait indiscernable d'un trou. */
+  if (report == null) return Number(p.opening_minutes) || 0;
+  return Number(report) || 0;
 }
 /* Recalcule ce que le solde reporté DEVRAIT valoir au 1er août d'une année,
  * d'après les prestations réellement encodées. Le report enregistré, lui, est
@@ -598,10 +628,17 @@ async function boot() {
 }
 
 async function afterLogin() {
-  await chargerAnnee();   // en premier : le mois affiché et les droits en dépendent
-  if (ME.role === 'employee') SEL_EMP = ME.id;
-  else {
-    const profs = await STORE.listProfiles();
+  /* L'annee ouverte doit etre connue AVANT le premier rendu : le mois affiche et
+   * les droits en dependent. La liste des employees, elle, ne depend pas de
+   * l'annee — elle sert seulement a choisir la feuille ouverte par defaut. Les
+   * enchainer faisait payer deux allers-retours l'un apres l'autre au demarrage
+   * (~180 ms de trop, mesure sur une capture reelle) ; groupees, on n'en attend
+   * plus qu'un. */
+  if (ME.role === 'employee') {
+    await chargerAnnee();
+    SEL_EMP = ME.id;
+  } else {
+    const [, profs] = await Promise.all([chargerAnnee(), STORE.listProfiles()]);
     const firstEmp = profs.find((p) => p.role === 'employee' && p.active);
     SEL_EMP = firstEmp ? firstEmp.id : ME.id;
   }

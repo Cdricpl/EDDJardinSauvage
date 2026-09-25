@@ -503,6 +503,18 @@ class FirebaseStore {
       if (prefixes.some((p) => cle.startsWith(p))) this._memo.delete(cle);
     }
   }
+  /* PATCHE une lecture deja memorisee, au lieu de l'oublier. Oublier force une
+   * relecture complete au serveur ; or quand c'est NOUS qui venons d'ecrire, nous
+   * savons exactement ce que cette relecture contiendrait. Rien en cache : on ne
+   * fait rien, la prochaine lecture ira au serveur comme avant. La gestion
+   * d'erreur reprend celle de _cache : une lecture qui echoue quitte le cache. */
+  _patcherMemo(cle, muter) {
+    const connue = this._memo.get(cle);
+    if (!connue) return;
+    this._memo.set(cle, connue.then(
+      (liste) => { muter(liste); return liste; },
+      (e) => { this._memo.delete(cle); throw e; }));
+  }
   _entryId(emp, date) { return `${emp}_${date}`; }
   _monthId(emp, y, m) { return `${emp}_${Util.monthKey(y, m)}`; }
   _docs(snap) { return snap.docs.map((d) => ({ id: d.id, ...d.data() })); }
@@ -739,6 +751,16 @@ class FirebaseStore {
     this._oublier('prestationsPeriode:');
     return saved;
   }
+  /* L'ECRITURE GROUPEE JETAIT TOUT LE CACHE de l'employee, et le render() qui
+   * suit relisait aussitot son historique COMPLET. Mesure sur un changement de
+   * mois reel : 106 Ko relus pour 100 fiches que le navigateur avait deja en
+   * memoire, soit 81 % du trafic du geste — et ce cout grandit d'environ 22
+   * fiches par mois ouvert. Les prestations sont des champs plats : la fusion
+   * se refait a l'identique en local, exactement comme pour une cellule seule
+   * (voir upsertEntry). Cache froid : _mergeCache ne fait rien et la lecture a
+   * lieu normalement au prochain acces.
+   * `prestationsPeriode:` reste invalide : ces vues d'administration ne sont pas
+   * fusionnables fiche par fiche, et la feuille mensuelle ne les relit pas. */
   async upsertEntries(entries) {
     if (!entries || !entries.length) return [];
     const now = new Date().toISOString();
@@ -746,7 +768,9 @@ class FirebaseStore {
       ref: this.db.collection('day_entries').doc(this._entryId(e.employee_id, e.entry_date)),
       data: { ...e, updated_at: now },
     })));
-    delete this._entriesCache[entries[0].employee_id];
+    entries.forEach((e) => this._mergeCache({
+      ...e, id: this._entryId(e.employee_id, e.entry_date), updated_at: now,
+    }));
     this._oublier('prestationsPeriode:');
     return entries;
   }
@@ -824,12 +848,39 @@ class FirebaseStore {
       return this._docs(snap);
     });
   }
+  /* Repercute en local des presences ecrites (ou effacees), au lieu d'oublier le
+   * mois. Oublier faisait RELIRE le mois entier au serveur : mesure sur un
+   * changement de mois reel de l'onglet Enfants, 86 Ko relus pour ~150 presences
+   * que le navigateur venait lui-meme d'ecrire — 34 % du trafic du geste.
+   * Les presences sont des enregistrements complets (enfant, date, statut) :
+   * la liste memorisee se met a jour a l'identique sans aller-retour. */
+  _patcherPresences(list) {
+    const parMois = new Map();
+    list.forEach((p) => {
+      const mois = (p.entry_date || '').slice(0, 7);
+      if (!mois) return;
+      if (!parMois.has(mois)) parMois.set(mois, []);
+      parMois.get(mois).push(p);
+    });
+    parMois.forEach((presences, mois) => this._patcherMemo(`presences:${mois}`, (liste) => {
+      presences.forEach(({ kid_id, entry_date, status }) => {
+        const i = liste.findIndex((a) => a.kid_id === kid_id && a.entry_date === entry_date);
+        if (!status) { if (i >= 0) liste.splice(i, 1); return; }   // case effacee : le document est supprime
+        const doc = { id: `${kid_id}_${entry_date}`, kid_id, entry_date, status };
+        if (i >= 0) liste[i] = doc; else liste.push(doc);
+      });
+    }));
+  }
   // status : 'present' | 'absent' | null (efface l'enregistrement).
   async setKidAttendance(kid_id, entry_date, status) {
     const ref = this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`);
     if (!status) await ref.delete();
     else await ref.set({ kid_id, entry_date, status });
-    this._oublier('presences:', 'presencesPeriode:');
+    this._patcherPresences([{ kid_id, entry_date, status }]);
+    /* `presencesPeriode:` reste invalide : ces lectures servent aux statistiques
+     * et aux PDF d'agrement, sur des periodes quelconques, et la grille ne les
+     * relit pas — les patcher couterait plus que de les relire au besoin. */
+    this._oublier('presencesPeriode:');
   }
   async setKidAttendances(list) {
     if (!list || !list.length) return;
@@ -838,7 +889,8 @@ class FirebaseStore {
       data: status ? { kid_id, entry_date, status } : null, delete: !status,
     }));
     await this._commit(ops);
-    this._oublier('presences:', 'presencesPeriode:');
+    this._patcherPresences(list);
+    this._oublier('presencesPeriode:');
   }
   /* ---- Memoire du pre-encodage ----
    * Voir DemoStore : sans ce marqueur, une case effacee volontairement serait
@@ -1034,10 +1086,27 @@ class FirebaseStore {
       };
       ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
         const base = this.db.collection(c);
+        /* PREMIER INSTANTANÉ IGNORÉ. `onSnapshot` commence par livrer TOUT le
+         * contenu suivi : ce n'est pas un changement, c'est ce que l'application
+         * vient elle-même de lire. Le traiter comme un changement vidait les
+         * caches que le premier rendu venait de remplir, et le re-rendu groupé
+         * relisait aussitôt les réglages, le mois et l'horaire type.
+         * Mesure sur une capture réelle de démarrage : trois allers-retours pour
+         * rien à 2,9-3,2 s (un document chacun, tous déjà connus), et la vue
+         * entièrement redessinée ~800 ms après son apparition. Les changements
+         * SUIVANTS, eux, continuent d'être traités normalement.
+         * Contrepartie assumée : une modification faite par une collègue dans les
+         * quelques centaines de millisecondes qui séparent la pose de l'écouteur
+         * de l'arrivée de cet instantané n'est pas signalée — la lecture suivante
+         * la rapportera. */
+        let premier = true;
         const un = (BORNE[c] ? BORNE[c](base) : base).onSnapshot(
           { includeMetadataChanges: false },
           (snap) => {
             if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
+            /* Après le filtre ci-dessus : le drapeau ne doit être consommé que par
+             * le premier instantané VENU DU SERVEUR, jamais par un état local. */
+            if (premier) { premier = false; return; }
             if (c === 'day_entries') {
               /* Ne vider QUE les employées réellement concernées.
                * Vider tout le cache faisait relire l'historique COMPLET de chaque
