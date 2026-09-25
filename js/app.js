@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.25-3';
+const APP_VERSION = 'v2026.09.25-4';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -431,7 +431,17 @@ async function openingMinutes(empId, annee) {
   // Première année : le solde saisi une fois par l'administration.
   // Années suivantes : le solde reporté au moment d'ouvrir l'année.
   if (annee === MIN_YM.y) return Number(p.opening_minutes) || 0;
-  return Number((p.soldes || {})[String(annee)]) || 0;
+  const report = (p.soldes || {})[String(annee)];
+  /* UN REPORT ABSENT N'EST PAS UN REPORT NUL. Les reports sont écrits au moment
+   * d'ouvrir l'année, pour les employées actives À CE MOMENT-LÀ. Une employée
+   * engagée (ou réactivée) ensuite n'en a donc aucun : son « solde de départ »,
+   * saisi par l'administration, était alors purement et simplement ignoré, et sa
+   * feuille annonçait un report de 0. Mesuré : 10 h de départ affichées 0h00.
+   * Faute de report enregistré, on repart du solde de départ — ce que fait déjà
+   * soldeRecalcule. Un report enregistré, même NUL, reste prioritaire : c'est la
+   * valeur figée voulue, et `Number(0) || 0` la rendrait indiscernable d'un trou. */
+  if (report == null) return Number(p.opening_minutes) || 0;
+  return Number(report) || 0;
 }
 /* Recalcule ce que le solde reporté DEVRAIT valoir au 1er août d'une année,
  * d'après les prestations réellement encodées. Le report enregistré, lui, est

@@ -1521,6 +1521,42 @@ test('démarrage : l’année et la liste des employées sont lues en parallèle
   expect(res.annee).toBe(2026);
 });
 
+/* Les reports sont ecrits a l'ouverture de l'annee, pour les employees actives a
+ * ce moment-la. Une employee engagee (ou reactivee) ensuite n'en a aucun : son
+ * solde de depart etait ignore et sa feuille annoncait 0h00. Mesure faite lors de
+ * la revue des calculs : 10 h de depart affichees 0h00. */
+test('heures : le solde de départ sert de report quand aucun n’a été enregistré', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const profils = [
+      // Presente a l'ouverture : son report a bien ete ecrit, il fait foi.
+      { id: 'ancienne', role: 'employee', active: true, opening_minutes: 300, soldes: { 2027: 120 } },
+      // Engagee APRES l'ouverture : aucun report ecrit pour elle.
+      { id: 'nouvelle', role: 'employee', active: true, opening_minutes: 600, soldes: {} },
+      // Report enregistre a ZERO : une valeur figee, pas un trou.
+      { id: 'azero', role: 'employee', active: true, opening_minutes: 600, soldes: { 2027: 0 } },
+    ];
+    STORE = { listProfiles: async () => profils, entriesForEmployee: async () => [] };
+    ANNEE = 2027; ANNEE_VUE = 2027;
+    const lire = async (id) => ({
+      report: await openingMinutes(id, 2027),
+      affiche: (await monthSummary(id, 2027, 9)).carryIn,
+      premiereAnnee: await openingMinutes(id, 2026),
+    });
+    return { ancienne: await lire('ancienne'), nouvelle: await lire('nouvelle'), azero: await lire('azero') };
+  });
+
+  // Un report enregistre fait foi, y compris s'il vaut zero.
+  expect(res.ancienne.report).toBe(120);
+  expect(res.ancienne.affiche).toBe(120);
+  expect(res.azero.report).toBe(0);
+  // Aucun report enregistre : le solde de depart n'est plus perdu.
+  expect(res.nouvelle.report).toBe(600);
+  expect(res.nouvelle.affiche).toBe(600);
+  // La premiere annee reste reglee par le solde de depart, comme avant.
+  expect(res.ancienne.premiereAnnee).toBe(300);
+});
+
 /* Le solde reporté est figé à l'ouverture de l'année — c'est le principe retenu.
  * Mais l'administration peut encore corriger une année close, et la correction
  * ne remonte pas : mesuré à l'audit, deux heures disparaissaient en silence.
