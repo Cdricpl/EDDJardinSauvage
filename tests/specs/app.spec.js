@@ -1274,6 +1274,107 @@ test('pré-remplissage : un mois écrit ne fait pas relire tout l’historique',
   expect(res.froid).toBe(1);                           // employée inconnue : on lit une fois
 });
 
+/* Le meme defaut, sur les presences. Ouvrir un mois neuf de l'onglet Enfants
+ * pre-encode les jours habituels : ~160 presences ecrites d'un coup. Comme cette
+ * ecriture oubliait le mois, le render() qui suit le relisait entierement.
+ * Mesure sur un changement de mois reel (capture du 25/09/2026) : 86 Ko relus
+ * pour ~150 presences deja en memoire, 34 % du trafic du geste. */
+test('pré-encodage : un mois de présences écrit ne fait pas relire le mois', async ({ page }) => {
+  await page.goto('/index.html');
+  const res = await page.evaluate(async () => {
+    const base = {};                                   // documents « côté serveur »
+    const appels = { where: 0, commit: 0 };
+    const requete = (clauses) => ({
+      where: (champ, op, val) => requete([...clauses, [champ, op, val]]),
+      async get() {
+        appels.where++;
+        const garde = (d) => clauses.every(([champ, op, val]) =>
+          (op === '>=' ? d[champ] >= val : op === '<=' ? d[champ] <= val : d[champ] === val));
+        return { docs: Object.entries(base).filter(([, d]) => garde(d))
+          .map(([id, d]) => ({ id, data: () => ({ ...d }) })) };
+      },
+    });
+    const db = {
+      collection: (c) => ({
+        where: (champ, op, val) => requete([[champ, op, val]]),
+        doc: (id) => ({
+          _col: c, _id: id,
+          async set(data) { base[id] = { ...(base[id] || {}), ...data }; },
+          async delete() { delete base[id]; },
+        }),
+      }),
+      batch: () => ({
+        _ops: [],
+        set(ref, data) { this._ops.push([ref._id, data]); },
+        delete(ref) { this._ops.push([ref._id, null]); },
+        async commit() {
+          appels.commit++;
+          this._ops.forEach(([id, data]) => {
+            if (data === null) delete base[id]; else base[id] = { ...(base[id] || {}), ...data };
+          });
+        },
+      }),
+    };
+    const store = new FirebaseStore({
+      auth: () => ({ setPersistence: async () => {}, onAuthStateChanged: () => () => {} }),
+      firestore: () => db,
+    });
+
+    // Une absence déjà saisie en décembre, et un enregistrement de novembre qui
+    // ne doit jamais apparaître dans le mois de décembre.
+    base['k1_2026-12-01'] = { kid_id: 'k1', entry_date: '2026-12-01', status: 'absent' };
+    base['k1_2026-11-30'] = { kid_id: 'k1', entry_date: '2026-11-30', status: 'present' };
+
+    const avant = (await store.kidAttendanceForMonth(2026, 12)).length;   // 1re lecture : va au serveur
+    const lectureInitiale = appels.where;
+
+    // Pré-encodage : deux enfants, dont un jour déjà saisi (jamais écrasé côté app).
+    await store.setKidAttendances([
+      { kid_id: 'k1', entry_date: '2026-12-02', status: 'present' },
+      { kid_id: 'k2', entry_date: '2026-12-02', status: 'present' },
+      { kid_id: 'k2', entry_date: '2026-12-03', status: 'present' },
+    ]);
+
+    // Ce que fait le render() qui suit : relire le mois.
+    const apres = await store.kidAttendanceForMonth(2026, 12);
+    const relectures = appels.where - lectureInitiale;
+    /* La lecture memorisee rend la MEME liste a chaque appel : on releve sa
+     * taille ici, avant l'effacement plus bas qui la modifiera sur place. */
+    const nb = apres.length;
+
+    // La liste doit être celle du serveur, sans l'avoir relue.
+    const serveur = Object.values(base).filter((d) => d.entry_date.startsWith('2026-12'));
+    const memeNombre = apres.length === serveur.length;
+    const absenceIntacte = (apres.find((a) => a.entry_date === '2026-12-01') || {}).status === 'absent';
+    const novembreAbsent = !apres.some((a) => a.entry_date.startsWith('2026-11'));
+
+    // Case effacée (3e état du cycle) : l'enregistrement disparaît, sans relecture.
+    await store.setKidAttendance('k2', '2026-12-03', null);
+    const apresEffacement = await store.kidAttendanceForMonth(2026, 12);
+    const effacee = !apresEffacement.some((a) => a.kid_id === 'k2' && a.entry_date === '2026-12-03');
+    const relecturesTotales = appels.where - lectureInitiale;
+
+    // Mois jamais lu : la lecture a bien lieu.
+    appels.where = 0;
+    await store.setKidAttendances([{ kid_id: 'k1', entry_date: '2027-01-05', status: 'present' }]);
+    const janvier = (await store.kidAttendanceForMonth(2027, 1)).length;
+
+    return { avant, relectures, relecturesTotales, memeNombre, absenceIntacte, novembreAbsent,
+      effacee, nb, froid: appels.where, janvier, commit: appels.commit };
+  });
+
+  expect(res.avant).toBe(1);                           // le mois de départ : une seule absence
+  expect(res.relectures).toBe(0);                      // écriture groupée : AUCUNE relecture
+  expect(res.relecturesTotales).toBe(0);               // case effacée : aucune non plus
+  expect(res.nb).toBe(4);                              // 1 déjà là + 3 pré-encodées
+  expect(res.memeNombre, 'la liste locale doit valoir celle du serveur').toBe(true);
+  expect(res.absenceIntacte).toBe(true);               // une absence saisie n'est pas écrasée
+  expect(res.novembreAbsent).toBe(true);               // le mois voisin ne fuit pas
+  expect(res.effacee).toBe(true);                      // l'enregistrement effacé disparaît
+  expect(res.froid).toBe(1);                           // mois jamais lu : on lit une fois
+  expect(res.janvier).toBe(1);
+});
+
 /* L'année scolaire ouverte était lue AVANT l'authentification : les règles
  * Firestore refusent toute lecture à un visiteur non identifié, l'erreur était
  * avalée (« [annee] Missing or insufficient permissions » dans la console) et

@@ -503,6 +503,18 @@ class FirebaseStore {
       if (prefixes.some((p) => cle.startsWith(p))) this._memo.delete(cle);
     }
   }
+  /* PATCHE une lecture deja memorisee, au lieu de l'oublier. Oublier force une
+   * relecture complete au serveur ; or quand c'est NOUS qui venons d'ecrire, nous
+   * savons exactement ce que cette relecture contiendrait. Rien en cache : on ne
+   * fait rien, la prochaine lecture ira au serveur comme avant. La gestion
+   * d'erreur reprend celle de _cache : une lecture qui echoue quitte le cache. */
+  _patcherMemo(cle, muter) {
+    const connue = this._memo.get(cle);
+    if (!connue) return;
+    this._memo.set(cle, connue.then(
+      (liste) => { muter(liste); return liste; },
+      (e) => { this._memo.delete(cle); throw e; }));
+  }
   _entryId(emp, date) { return `${emp}_${date}`; }
   _monthId(emp, y, m) { return `${emp}_${Util.monthKey(y, m)}`; }
   _docs(snap) { return snap.docs.map((d) => ({ id: d.id, ...d.data() })); }
@@ -836,12 +848,39 @@ class FirebaseStore {
       return this._docs(snap);
     });
   }
+  /* Repercute en local des presences ecrites (ou effacees), au lieu d'oublier le
+   * mois. Oublier faisait RELIRE le mois entier au serveur : mesure sur un
+   * changement de mois reel de l'onglet Enfants, 86 Ko relus pour ~150 presences
+   * que le navigateur venait lui-meme d'ecrire — 34 % du trafic du geste.
+   * Les presences sont des enregistrements complets (enfant, date, statut) :
+   * la liste memorisee se met a jour a l'identique sans aller-retour. */
+  _patcherPresences(list) {
+    const parMois = new Map();
+    list.forEach((p) => {
+      const mois = (p.entry_date || '').slice(0, 7);
+      if (!mois) return;
+      if (!parMois.has(mois)) parMois.set(mois, []);
+      parMois.get(mois).push(p);
+    });
+    parMois.forEach((presences, mois) => this._patcherMemo(`presences:${mois}`, (liste) => {
+      presences.forEach(({ kid_id, entry_date, status }) => {
+        const i = liste.findIndex((a) => a.kid_id === kid_id && a.entry_date === entry_date);
+        if (!status) { if (i >= 0) liste.splice(i, 1); return; }   // case effacee : le document est supprime
+        const doc = { id: `${kid_id}_${entry_date}`, kid_id, entry_date, status };
+        if (i >= 0) liste[i] = doc; else liste.push(doc);
+      });
+    }));
+  }
   // status : 'present' | 'absent' | null (efface l'enregistrement).
   async setKidAttendance(kid_id, entry_date, status) {
     const ref = this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`);
     if (!status) await ref.delete();
     else await ref.set({ kid_id, entry_date, status });
-    this._oublier('presences:', 'presencesPeriode:');
+    this._patcherPresences([{ kid_id, entry_date, status }]);
+    /* `presencesPeriode:` reste invalide : ces lectures servent aux statistiques
+     * et aux PDF d'agrement, sur des periodes quelconques, et la grille ne les
+     * relit pas — les patcher couterait plus que de les relire au besoin. */
+    this._oublier('presencesPeriode:');
   }
   async setKidAttendances(list) {
     if (!list || !list.length) return;
@@ -850,7 +889,8 @@ class FirebaseStore {
       data: status ? { kid_id, entry_date, status } : null, delete: !status,
     }));
     await this._commit(ops);
-    this._oublier('presences:', 'presencesPeriode:');
+    this._patcherPresences(list);
+    this._oublier('presencesPeriode:');
   }
   /* ---- Memoire du pre-encodage ----
    * Voir DemoStore : sans ce marqueur, une case effacee volontairement serait
