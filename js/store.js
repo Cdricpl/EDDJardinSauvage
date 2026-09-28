@@ -57,6 +57,12 @@ class DemoStore {
       ],
       kidatt: [],       // présences : { kid_id, entry_date }
       kidprefill: [],   // mois déjà pré-encodés : { kid_id, month }
+      benevoles: [      // liste nominative des bénévoles (nom, contact, jours habituels)
+        { id: 'b1', first_name: 'Alice', last_name: 'Dupuis', email: '', phone: '', days: [2], active: true },
+        { id: 'b2', first_name: 'Marc', last_name: 'Simon', email: '', phone: '', days: [4], active: true },
+      ],
+      benatt: [],       // présences bénévoles : { benevole_id, entry_date, status }
+      benprefill: [],   // mois déjà pré-encodés : { benevole_id, month }
       settings: {},     // réglages partagés : { annee_scolaire }
       // Horaire type hebdomadaire par employée : slots[weekday] = {start,end} (0=Dim..6=Sam)
       templates: [
@@ -402,6 +408,92 @@ class DemoStore {
     this._save(db);
   }
 
+  /* ---- Bénévoles (liste nominative + présences) ----
+   * Même logique que les enfants (fiche + grille + pré-encodage des jours
+   * habituels), mais la fiche porte un email/téléphone de contact au lieu de
+   * l'école, et les présences ne comptent jamais dans les statistiques. */
+  async listBenevoles(includeArchived = false) {
+    return (this._db().benevoles || [])
+      .filter(b => includeArchived || b.active)
+      .sort((a, b) => (a.last_name + a.first_name).localeCompare(b.last_name + b.first_name));
+  }
+  async addBenevole(first_name, last_name, email, phone, days) {
+    const db = this._db();
+    const b = { id: Util.uuid(), first_name: (first_name || '').trim(), last_name: (last_name || '').trim(),
+      email: (email || '').trim(), phone: (phone || '').trim(),
+      days: Array.isArray(days) ? days : [], active: true };
+    if (!b.first_name) throw new Error('Le prénom est requis.');
+    db.benevoles = db.benevoles || []; db.benevoles.push(b); this._save(db); return b;
+  }
+  // Compte les présences d'un bénévole (pour annoncer ce qui sera perdu).
+  async countBenevoleData(id) {
+    return { benevole_attendance: (this._db().benatt || []).filter(a => a.benevole_id === id).length };
+  }
+  // Suppression DÉFINITIVE : la fiche et TOUTES ses présences.
+  async deleteBenevole(id) {
+    const db = this._db();
+    const n = await this.countBenevoleData(id);
+    db.benevoles = (db.benevoles || []).filter(b => b.id !== id);
+    db.benatt = (db.benatt || []).filter(a => a.benevole_id !== id);
+    db.benprefill = (db.benprefill || []).filter(x => x.benevole_id !== id);
+    this._save(db);
+    return n;
+  }
+  async setBenevoleInfo(id, info) {
+    const first = (info.first_name || '').trim();
+    if (!first) throw new Error('Le prénom est requis.');
+    const db = this._db();
+    const b = (db.benevoles || []).find(x => x.id === id);
+    if (b) { b.first_name = first; b.last_name = (info.last_name || '').trim();
+      b.email = (info.email || '').trim(); b.phone = (info.phone || '').trim();
+      if (Array.isArray(info.days)) b.days = info.days;
+      this._save(db); }
+  }
+  async setBenevoleActive(id, active) {
+    const db = this._db();
+    const b = (db.benevoles || []).find(x => x.id === id);
+    if (b) { b.active = active; this._save(db); }
+  }
+  async benevoleAttendanceForMonth(year, month) {
+    const prefix = Util.monthKey(year, month);
+    return (this._db().benatt || []).filter(a => a.entry_date.startsWith(prefix));
+  }
+  // status : 'present' | 'absent' | null (efface l'enregistrement).
+  async setBenevoleAttendance(benevole_id, entry_date, status) {
+    return this.setBenevoleAttendances([{ benevole_id, entry_date, status }]);
+  }
+  async setBenevoleAttendances(list) {
+    const db = this._db();
+    db.benatt = db.benatt || [];
+    (list || []).forEach(({ benevole_id, entry_date, status }) => {
+      const i = db.benatt.findIndex(a => a.benevole_id === benevole_id && a.entry_date === entry_date);
+      if (!status) { if (i >= 0) db.benatt.splice(i, 1); }
+      else if (i >= 0) db.benatt[i].status = status;
+      else db.benatt.push({ benevole_id, entry_date, status });
+    });
+    this._save(db);
+  }
+  // Mémoire du pré-encodage — même rôle que kidPrefilledFor.
+  async benevolePrefilledFor(year, month) {
+    const mois = Util.monthKey(year, month);
+    return (this._db().benprefill || []).filter(x => x.month === mois).map(x => x.benevole_id);
+  }
+  async markBenevolePrefilled(year, month, ids) {
+    if (!ids || !ids.length) return;
+    const mois = Util.monthKey(year, month);
+    const db = this._db();
+    db.benprefill = db.benprefill || [];
+    ids.forEach((benevole_id) => {
+      if (!db.benprefill.some(x => x.benevole_id === benevole_id && x.month === mois)) db.benprefill.push({ benevole_id, month: mois });
+    });
+    this._save(db);
+  }
+  async clearBenevolePrefill(benevole_id) {
+    const db = this._db();
+    db.benprefill = (db.benprefill || []).filter(x => x.benevole_id !== benevole_id);
+    this._save(db);
+  }
+
   // Comptes agrégés par jour (enfants PRÉSENTS) — pour les statistiques.
   async allChildrenEntre(debut, fin) {
     const byDate = {};
@@ -422,6 +514,8 @@ class DemoStore {
       schedule_templates: db.templates || [],
       kids: db.kids || [], kid_attendance: db.kidatt || [],
       kid_prefill: db.kidprefill || [],
+      benevoles: db.benevoles || [], benevole_attendance: db.benatt || [],
+      benevole_prefill: db.benprefill || [],
       settings: db.settings || {},
     };
   }
@@ -437,6 +531,9 @@ class DemoStore {
     if (Array.isArray(data.kids))               { db.kids = data.kids;                      counts.kids = db.kids.length; }
     if (Array.isArray(data.kid_attendance))     { db.kidatt = data.kid_attendance;          counts.kid_attendance = db.kidatt.length; }
     if (Array.isArray(data.kid_prefill))        { db.kidprefill = data.kid_prefill;          counts.kid_prefill = db.kidprefill.length; }
+    if (Array.isArray(data.benevoles))          { db.benevoles = data.benevoles;              counts.benevoles = db.benevoles.length; }
+    if (Array.isArray(data.benevole_attendance)){ db.benatt = data.benevole_attendance;        counts.benevole_attendance = db.benatt.length; }
+    if (Array.isArray(data.benevole_prefill))   { db.benprefill = data.benevole_prefill;       counts.benevole_prefill = db.benprefill.length; }
     if (data.settings && typeof data.settings === 'object') { db.settings = data.settings;   counts.settings = 1; }
     if (Array.isArray(data.profiles)) {
       data.profiles.forEach((p) => {
@@ -846,6 +943,95 @@ class FirebaseStore {
     this._oublier('preremplissage:');
   }
 
+  /* ---- Bénévoles ---- */
+  async listBenevoles(includeArchived = false) {
+    return this._cache(`benevoles:${includeArchived}`, async () => {
+      const snap = await this.db.collection('benevoles').get();
+      return this._docs(snap)
+        .filter((b) => includeArchived || b.active !== false)
+        .sort((a, b) => ((a.last_name || '') + a.first_name).localeCompare((b.last_name || '') + b.first_name));
+    });
+  }
+  async addBenevole(first_name, last_name, email, phone, days) {
+    first_name = (first_name || '').trim(); last_name = (last_name || '').trim();
+    if (!first_name) throw new Error('Le prénom est requis.');
+    const data = { first_name, last_name, email: (email || '').trim(), phone: (phone || '').trim(),
+      days: Array.isArray(days) ? days : [], active: true, created_at: new Date().toISOString() };
+    const ref = await this.db.collection('benevoles').add(data);
+    this._oublier('benevoles:');
+    return { id: ref.id, ...data };
+  }
+  async setBenevoleActive(id, active) {
+    await this.db.collection('benevoles').doc(id).set({ active }, { merge: true });
+    this._oublier('benevoles:');
+  }
+  async countBenevoleData(id) {
+    const snap = await this.db.collection('benevole_attendance').where('benevole_id', '==', id).get();
+    return { benevole_attendance: snap.size };
+  }
+  async deleteBenevole(id) {
+    const snap = await this.db.collection('benevole_attendance').where('benevole_id', '==', id).get();
+    const ops = snap.docs.map((d) => ({ ref: d.ref, delete: true }));
+    ops.push({ ref: this.db.collection('benevoles').doc(id), delete: true });
+    await this._commit(ops);
+    await this.clearBenevolePrefill(id);
+    this._oublier('benevoles:', 'presencesBen:', 'presencesBenPeriode:');
+    return { benevole_attendance: snap.size };
+  }
+  async setBenevoleInfo(id, info) {
+    const first_name = (info.first_name || '').trim();
+    if (!first_name) throw new Error('Le prénom est requis.');
+    const patch = { first_name, last_name: (info.last_name || '').trim(),
+      email: (info.email || '').trim(), phone: (info.phone || '').trim() };
+    if (Array.isArray(info.days)) patch.days = info.days;
+    await this.db.collection('benevoles').doc(id).set(patch, { merge: true });
+    this._oublier('benevoles:');
+  }
+  async benevoleAttendanceForMonth(year, month) {
+    return this._cache(`presencesBen:${Util.monthKey(year, month)}`, async () => {
+      const p = Util.monthKey(year, month);
+      const snap = await this.db.collection('benevole_attendance')
+        .where('entry_date', '>=', `${p}-01`).where('entry_date', '<=', `${p}-31`).get();
+      return this._docs(snap);
+    });
+  }
+  async setBenevoleAttendance(benevole_id, entry_date, status) {
+    const ref = this.db.collection('benevole_attendance').doc(`${benevole_id}_${entry_date}`);
+    if (!status) await ref.delete();
+    else await ref.set({ benevole_id, entry_date, status });
+    this._oublier('presencesBen:', 'presencesBenPeriode:');
+  }
+  async setBenevoleAttendances(list) {
+    if (!list || !list.length) return;
+    const ops = list.map(({ benevole_id, entry_date, status }) => ({
+      ref: this.db.collection('benevole_attendance').doc(`${benevole_id}_${entry_date}`),
+      data: status ? { benevole_id, entry_date, status } : null, delete: !status,
+    }));
+    await this._commit(ops);
+    this._oublier('presencesBen:', 'presencesBenPeriode:');
+  }
+  async benevolePrefilledFor(year, month) {
+    return this._cache(`preremplissageBen:${Util.monthKey(year, month)}`, async () => {
+      const snap = await this.db.collection('benevole_prefill')
+        .where('month', '==', Util.monthKey(year, month)).get();
+      return this._docs(snap).map((d) => d.benevole_id);
+    });
+  }
+  async markBenevolePrefilled(year, month, ids) {
+    if (!ids || !ids.length) return;
+    const mois = Util.monthKey(year, month);
+    await this._commit(ids.map((benevole_id) => ({
+      ref: this.db.collection('benevole_prefill').doc(`${benevole_id}_${mois}`),
+      data: { benevole_id, month: mois },
+    })));
+    this._oublier('preremplissageBen:');
+  }
+  async clearBenevolePrefill(benevole_id) {
+    const snap = await this.db.collection('benevole_prefill').where('benevole_id', '==', benevole_id).get();
+    await this._commit(snap.docs.map((d) => ({ ref: d.ref, delete: true })));
+    this._oublier('preremplissageBen:');
+  }
+
   // Nombre d'enfants presents par jour, sur une periode. Le balayage complet de
   // la collection etait inutile et devenait de plus en plus lourd au fil des
   // annees.
@@ -862,11 +1048,14 @@ class FirebaseStore {
   /* ---- Export / restauration ---- */
   async exportAll() {
     const get = async (c) => this._docs(await this.db.collection(c).get());
-    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill] = await Promise.all(
-      ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance', 'kid_prefill'].map(get));
+    const [profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill,
+      benevoles, benevole_attendance, benevole_prefill] = await Promise.all(
+      ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance', 'kid_prefill',
+       'benevoles', 'benevole_attendance', 'benevole_prefill'].map(get));
     const settings = await this.getReglages();
     return { exported_at: new Date().toISOString(), mode: 'firebase',
-      profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill, settings };
+      profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill,
+      benevoles, benevole_attendance, benevole_prefill, settings };
   }
   // Restaure une sauvegarde JSON (y compris une ancienne sauvegarde exportee).
   // Les identifiants d'employées diffèrent d'un hébergeur à l'autre : on les
@@ -913,6 +1102,25 @@ class FirebaseStore {
     (data.kid_prefill || []).forEach((x) => ops.push({
       ref: this.db.collection('kid_prefill').doc(`${x.kid_id}_${x.month}`),
       data: { kid_id: String(x.kid_id), month: x.month },
+    }));
+    // Bénévoles : même logique que les enfants (fiche complète + présences + pré-encodage).
+    (data.benevoles || []).forEach((b) => ops.push({
+      ref: this.db.collection('benevoles').doc(String(b.id)),
+      data: {
+        first_name: b.first_name || '', last_name: b.last_name || '',
+        email: b.email || '', phone: b.phone || '',
+        days: Array.isArray(b.days) ? b.days : [],
+        active: b.active !== false,
+      },
+    }));
+    (data.benevole_attendance || []).forEach((a) => ops.push({
+      ref: this.db.collection('benevole_attendance').doc(`${a.benevole_id}_${a.entry_date}`),
+      data: { benevole_id: String(a.benevole_id), entry_date: a.entry_date,
+        status: a.status === 'absent' ? 'absent' : 'present' },
+    }));
+    (data.benevole_prefill || []).forEach((x) => ops.push({
+      ref: this.db.collection('benevole_prefill').doc(`${x.benevole_id}_${x.month}`),
+      data: { benevole_id: String(x.benevole_id), month: x.month },
     }));
     /* Solde de départ des employées.
      * La restauration ne recrée volontairement PAS les comptes (nom, email,
@@ -999,8 +1207,10 @@ class FirebaseStore {
       const BORNE = {
         day_entries: (col) => (estAdmin ? anneeEnCours(col) : col.where('employee_id', '==', user.uid)),
         kid_attendance: anneeEnCours,
+        benevole_attendance: anneeEnCours,
       };
-      ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
+      ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'benevoles', 'benevole_attendance',
+       'benevole_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
         const base = this.db.collection(c);
         const un = (BORNE[c] ? BORNE[c](base) : base).onSnapshot(
           { includeMetadataChanges: false },
@@ -1027,6 +1237,9 @@ class FirebaseStore {
             if (c === 'kids') this._oublier('enfants:');
             if (c === 'kid_attendance') this._oublier('presences:', 'presencesPeriode:');
             if (c === 'kid_prefill') this._oublier('preremplissage:');
+            if (c === 'benevoles') this._oublier('benevoles:');
+            if (c === 'benevole_attendance') this._oublier('presencesBen:', 'presencesBenPeriode:');
+            if (c === 'benevole_prefill') this._oublier('preremplissageBen:');
             if (c === 'schedule_templates') this._oublier('horaire:');
             if (c === 'settings') this._oublier('reglages');
             cb();

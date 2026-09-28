@@ -32,9 +32,9 @@ test.beforeEach(async ({ page }) => {
   await setupDemo(page);
 });
 
-test('connexion admin puis navigation entre les 5 onglets sans écran blanc', async ({ page }) => {
+test('connexion admin puis navigation entre les 6 onglets sans écran blanc', async ({ page }) => {
   await loginAdmin(page);
-  const tabs = ['sheet', 'recap', 'children', 'stats', 'employees'];
+  const tabs = ['sheet', 'recap', 'children', 'benevoles', 'stats', 'employees'];
   for (const v of tabs) {
     await page.locator(`.navbtn[data-v="${v}"]`).click();
     // Le contenu se rend et aucun message fatal n'apparaît.
@@ -430,7 +430,7 @@ test('employée : l’onglet Statistiques n’est pas accessible', async ({ page
   await loginEmployee(page);
   // L'onglet est retiré de la navigation tant qu'il n'est pas finalisé.
   await expect(page.locator('.navbtn[data-v="stats"]')).toHaveCount(0);
-  await expect(page.locator('.navbtn')).toHaveCount(3);
+  await expect(page.locator('.navbtn')).toHaveCount(4);
 
   // Et l'accès direct (état résiduel) retombe sur la feuille, sans écran blanc.
   await page.evaluate(() => { window.VIEW = 'stats'; });

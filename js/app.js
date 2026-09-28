@@ -13,8 +13,10 @@ let VIEW = 'sheet';
 let SEL_EMP = null;                 // employée sélectionnée (vue admin)
 let APPLYING = false;               // garde anti-réentrance du pré-remplissage (feuille)
 let APPLYING_KIDS = false;          // garde anti-réentrance du pré-encodage des présences enfants
+let APPLYING_BENEVOLES = false;     // même garde, pour le pré-encodage des présences bénévoles
 let CHART = null;                   // instance Chart.js courante (détruite avant réutilisation)
 const PREFILLED_KIDS = new Set();   // mois déjà pré-encodés cette session (anti-boucle)
+const PREFILLED_BENEVOLES = new Set(); // idem, pour les bénévoles
 const PREFILLED_SHEETS = new Set(); // feuilles déjà pré-remplies cette session (anti-boucle)
 let CUR = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 
@@ -119,6 +121,16 @@ const statutDe = (a) => (!a.status || a.status === 'present') ? 'present'
 /* Nom affiché d'un enfant : « DUPONT Victor ». Défini au niveau global — il
  * sert aussi bien à la grille qu'à l'export PDF de la fiche. */
 const kidLabel = (k) => `${k.last_name ? k.last_name.toUpperCase() + ' ' : ''}${k.first_name || ''}`.trim();
+
+/* Statuts de présence d'un bénévole — deux états seulement (pas de nuance
+ * « justifiée / injustifiée » comme pour les enfants : on veut juste savoir
+ * si le bénévole était là son jour habituel). */
+const BEN_ETATS = {
+  present: { sym: '✓', cls: 'pres-p', mot: 'présent' },
+  absent:  { sym: '✗', cls: 'pres-a', mot: 'absent' },
+};
+const BEN_SUIVANT = { undefined: 'present', present: 'absent', absent: null };
+const benevoleLabel = (b) => `${b.last_name ? b.last_name.toUpperCase() + ' ' : ''}${b.first_name || ''}`.trim();
 
 /* Pastille d'initiales devant chaque enfant : repère visuel qui aide à
  * retrouver sa ligne dans une grille de 31 colonnes. La couleur est tirée du
@@ -607,8 +619,8 @@ function buildNav() {
   // L'onglet Statistiques reste réservé à l'administration tant qu'il n'est pas finalisé.
   const items = ME.role === 'admin'
     ? [['sheet', '📅 Feuille du mois'], ['recap', '📊 Récapitulatif'], ['children', '🧒 Enfants'],
-       ['stats', '📈 Statistiques'], ['employees', '👥 Utilisateurs']]
-    : [['sheet', '📅 Ma feuille'], ['recap', '📊 Mon récap'], ['children', '🧒 Enfants']];
+       ['benevoles', '🙋 Bénévoles'], ['stats', '📈 Statistiques'], ['employees', '👥 Utilisateurs']]
+    : [['sheet', '📅 Ma feuille'], ['recap', '📊 Mon récap'], ['children', '🧒 Enfants'], ['benevoles', '🙋 Bénévoles']];
   document.getElementById('nav').innerHTML = items.map(
     ([v, l]) => `<button class="navbtn ${v === VIEW ? 'active' : ''}" data-v="${v}">${l}</button>`).join('');
   document.querySelectorAll('.navbtn').forEach((b) => b.onclick = () => { VIEW = b.dataset.v; buildNav(); render(); });
@@ -677,7 +689,7 @@ function wireToolbar() {
  * Rendu principal (avec filet de sécurité : jamais d'écran blanc)
  * ================================================================ */
 async function render() {
-  const map = { sheet: viewSheet, recap: viewRecap, children: viewChildren, stats: viewStats, employees: viewEmployees };
+  const map = { sheet: viewSheet, recap: viewRecap, children: viewChildren, benevoles: viewBenevoles, stats: viewStats, employees: viewEmployees };
   // Libère le graphique avant tout nouveau rendu (il sera recréé par viewStats si besoin) :
   // évite d'accumuler des instances Chart.js orphelines en mémoire.
   if (CHART) { try { CHART.destroy(); } catch {} CHART = null; }
@@ -686,8 +698,8 @@ async function render() {
   const appEl = document.getElementById('app');
   if (appEl) {
     appEl.onchange = null; appEl.onclick = null;
-    // Seul l'onglet Enfants s'élargit : il doit afficher les 31 jours du mois.
-    appEl.classList.toggle('wide', VIEW === 'children');
+    // Les onglets Enfants et Bénévoles s'élargissent : ils affichent les 31 jours du mois.
+    appEl.classList.toggle('wide', VIEW === 'children' || VIEW === 'benevoles');
   }
   wireLazyTimes();
   const bar = document.getElementById('loadbar');
@@ -1560,6 +1572,375 @@ async function viewChildren() {
     try { await STORE.setKidAttendance(kid, date, next); }
     catch (e) { if (cur) stat.set(key, cur); else stat.delete(key); toast('Erreur : ' + e.message, 'error'); render(); }
   };
+}
+
+/* ---------------- Vue : Bénévoles (liste nominative + présences) ----------------
+ * Même mécanique que l'onglet Enfants (grille de présence + pré-encodage des
+ * jours habituels), avec deux différences volontaires :
+ *  - la fiche (nom, contact, jours habituels) n'est modifiable QUE par
+ *    l'administration ; les employées encodent uniquement les présences ;
+ *  - deux états seulement (présent / absent), pas de nuance « justifiée » ;
+ *  - ces présences n'entrent JAMAIS dans l'onglet Statistiques (agrément
+ *    enfants) : elles sont suivies séparément, pour la seule équipe bénévole. */
+async function viewBenevoles() {
+  const app = document.getElementById('app');
+  const [tousBen, att] = await Promise.all([
+    STORE.listBenevoles(ME.role === 'admin'),
+    STORE.benevoleAttendanceForMonth(CUR.y, CUR.m),
+  ]);
+  const bens = tousBen.filter((b) => b.active !== false);
+  const archives = tousBen.filter((b) => b.active === false);
+  const benStatutDe = (a) => (a.status === 'absent' ? 'absent' : 'present');
+  const stat = new Map();
+  att.forEach((a) => stat.set(a.benevole_id + '|' + a.entry_date, benStatutDe(a)));
+  const getSt = (id, date) => stat.get(id + '|' + date);
+  const dim = daysInMonth(CUR.y, CUR.m);
+  const days = [];
+  for (let d = 1; d <= dim; d++) {
+    const dow = new Date(CUR.y, CUR.m - 1, d).getDay();
+    days.push({ d, dow, date: `${CUR.y}-${pad(CUR.m)}-${pad(d)}`, weekend: dow === 0 || dow === 6 });
+  }
+  const isExpected = (b, dow) => Array.isArray(b.days) && b.days.includes(dow);
+
+  // Pré-encodage automatique des jours habituels — voir viewChildren() pour la
+  // justification détaillée du mécanisme (mémorisé en base, une fois par mois).
+  const _now = new Date();
+  const monthIsCurrentOrFuture = ymNum(CUR.y, CUR.m) >= ymNum(_now.getFullYear(), _now.getMonth() + 1);
+  const prefillKey = `${CUR.y}-${pad(CUR.m)}`;
+  if (monthIsCurrentOrFuture && !anneeClose() && !APPLYING_BENEVOLES && !PREFILLED_BENEVOLES.has(prefillKey)) {
+    PREFILLED_BENEVOLES.add(prefillKey);
+    const dejaFait = new Set(await STORE.benevolePrefilledFor(CUR.y, CUR.m));
+    const aMarquer = bens.filter((b) => !dejaFait.has(b.id)).map((b) => b.id);
+    const toWrite = [];
+    bens.forEach((b) => {
+      if (dejaFait.has(b.id)) return;
+      days.forEach((day) => {
+        if (day.date < MIN_ISO) return;
+        if (!isExpected(b, day.dow)) return;
+        if (stat.get(b.id + '|' + day.date)) return;
+        toWrite.push({ benevole_id: b.id, entry_date: day.date, status: 'present' });
+      });
+    });
+    if (aMarquer.length) {
+      APPLYING_BENEVOLES = true;
+      try {
+        if (toWrite.length) await STORE.setBenevoleAttendances(toWrite);
+        await STORE.markBenevolePrefilled(CUR.y, CUR.m, aMarquer);
+      }
+      catch (e) { console.error('[benevoles:auto-prefill]', e); }
+      finally { APPLYING_BENEVOLES = false; }
+      if (toWrite.length) return render();
+    }
+  }
+
+  const compte = (id, date) => (date >= MIN_ISO && getSt(id, date) === 'present') ? 1 : 0;
+  const benPresentCount = (b) => days.reduce((n, day) => n + compte(b.id, day.date), 0);
+  const dayPresentCount = (day) => bens.reduce((n, b) => n + compte(b.id, day.date), 0);
+  const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
+
+  const headDays = days.map((day) =>
+    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}"><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
+
+  const cellHtml = (b, day) => {
+    if (day.date < MIN_ISO) {
+      return `<td class="daycell${day.weekend ? ' weekend' : ''}"><span class="presbtn pres-off"
+        title="Aucun encodage avant le ${new Date(MIN_ISO).toLocaleDateString('fr-FR')}"></span></td>`;
+    }
+    const st = getSt(b.id, day.date);
+    const expected = isExpected(b, day.dow);
+    const etat = BEN_ETATS[st];
+    const cls = etat ? etat.cls : (expected ? 'pres-exp' : 'pres-v');
+    const sym = etat ? etat.sym : '';
+    const lbl = `${benevoleLabel(b)} le ${day.d}/${pad(CUR.m)} : ${etat ? etat.mot : 'non défini'}`;
+    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-ben="${b.id}" data-date="${day.date}" title="Cliquer : présent → absent → non défini" aria-label="${echapper(lbl)}">${sym}</button></td>`;
+  };
+  const benRows = bens.length ? bens.map((b) => {
+    const cells = days.map((day) => cellHtml(b, day)).join('');
+    const nom = benevoleLabel(b);
+    const esc = echapper(nom);
+    const habituels = (b.days || []).length
+      ? `<div class="kidmeta">Habituels : ${(b.days || []).slice().sort().map((w) => DOW[w]).join(' ')}</div>` : '';
+    const contact = [b.email, b.phone].filter(Boolean)
+      .map((t) => `<div class="kidmeta">${echapper(t)}</div>`).join('');
+    return `<tr>
+      <th scope="row" class="kidname">
+        <div class="kidcell">
+          <span class="avatar" style="background:${avatarColor(nom)}" aria-hidden="true">${echapper(initials(b))}</span>
+          <div class="kidinfo">
+            <button type="button" class="kidnom" data-fiche="${echapper(b.id)}"
+              title="Voir la fiche du mois de ${echapper(nom)}">${echapper(nom)}</button>
+            ${contact}${habituels}
+          </div>
+          ${ME.role === 'admin' ? `<div class="kidacts">
+            <button class="iconbtn edit" data-editben="${b.id}" aria-label="Modifier ${esc}" title="Modifier (nom, contact, jours)">✏️</button>
+            <button class="iconbtn del" data-archben="${b.id}" aria-label="Retirer ${esc} de la liste" title="Retirer de la liste">🗑️</button>
+          </div>` : ''}
+        </div>
+      </th>
+      ${cells}
+      <td class="kidtot"><strong id="bentot_${b.id}">${benPresentCount(b)}</strong></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="${dim + 2}" class="muted" style="padding:16px">Aucun bénévole. Cliquez sur « + Ajouter un bénévole ».</td></tr>`;
+
+  const totalCells = () => days.map((day) =>
+    `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong data-daytotben="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+  const totalRow = `<tr class="totrow"><th scope="row" class="kidname">Total présents / jour</th>
+    ${totalCells()}<td class="kidtot"><strong data-grandtotben>${totalPresent}</strong></td></tr>`;
+  const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="bd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
+
+  const legende = `<span class="pres-leg"><span class="presbtn pres-p" aria-hidden="true">✓</span> Présent</span>
+    <span class="pres-leg"><span class="presbtn pres-a" aria-hidden="true">✗</span> Absent</span>
+    <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
+
+  app.innerHTML = `${await toolbar(false, ME.role === 'admin'
+      ? '<button id="bToggle" class="addkid">+ Ajouter un bénévole</button>' : '')}
+    <div class="card">
+      <h2 style="margin:0 0 4px">🙋 Présences des bénévoles — ${monthName(CUR.y, CUR.m)}</h2>
+      ${ME.role === 'admin' ? `
+      <div class="card sub hidden" id="addBenCard">
+        <div class="row" style="align-items:end">
+          <div><label for="bFirst">Prénom</label><input id="bFirst" placeholder="Prénom"/></div>
+          <div><label for="bLast">Nom</label><input id="bLast" placeholder="Nom"/></div>
+          <div><label for="bEmail">Email</label><input id="bEmail" type="email" placeholder="email@exemple.be"/></div>
+          <div><label for="bPhone">Téléphone</label><input id="bPhone" type="tel" placeholder="04xx/xx xx xx"/></div>
+        </div>
+        <div style="margin-top:8px"><label>Jours habituels de présence</label><div class="daychks">${dayCheckboxes}</div></div>
+        <div id="bMsg"></div>
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap">
+          <button id="bAdd">+ Ajouter</button>
+          <button class="gray" id="bCancel">Annuler</button>
+        </div>
+      </div>
+      <div class="card hidden" id="editBenCard" style="background:#fbf6ec; margin-top:12px">
+        <h3 style="margin-top:0">✏️ Modifier la fiche du bénévole</h3>
+        <input type="hidden" id="ebId"/>
+        <div class="row" style="align-items:end; max-width:900px">
+          <div><label for="ebFirst">Prénom</label><input id="ebFirst"/></div>
+          <div><label for="ebLast">Nom</label><input id="ebLast"/></div>
+          <div><label for="ebEmail">Email</label><input id="ebEmail" type="email"/></div>
+          <div><label for="ebPhone">Téléphone</label><input id="ebPhone" type="tel"/></div>
+        </div>
+        <div style="margin-top:6px"><label>Jours habituels de présence</label>
+          <div class="daychks">${WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="ebd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ')}</div></div>
+        <div id="ebMsg"></div>
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap">
+          <button class="green" id="ebSave">💾 Enregistrer</button>
+          <button class="gray" id="ebCancel">Annuler</button>
+        </div>
+      </div>` : `
+      <div class="msg">
+        Vous encodez les <strong>présences</strong> ; les fiches des bénévoles (nom, email,
+        téléphone, jours habituels) sont gérées par l'administration.<br>
+        <strong>En cas de changement</strong> (coordonnées, jours habituels), signalez-le à
+        un administrateur : <strong>${ADMINS_CONTACT}</strong>.
+      </div>`}
+      <div class="card sub hidden" id="ficheBenevole"></div>
+      <div class="legbar">
+        <div><span class="legtitle">Légende :</span> ${legende}</div>
+        <p class="muted small" style="margin:0">Les jours habituels de chaque bénévole sont
+          <strong>pré-encodés « présent » automatiquement</strong>.</p>
+      </div>
+      <div class="table-wrap attend-wrap" style="margin-top:8px"><table class="attend">
+        <caption class="sr-only">Présences des bénévoles pour ${monthName(CUR.y, CUR.m)}.</caption>
+        <thead>
+          <tr><th scope="col" class="kidname">Bénévole</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr>
+          ${totalRow}
+        </thead>
+        <tbody>${benRows}</tbody>
+        <tfoot>${totalRow}</tfoot>
+      </table></div>
+      <div class="legbar foot">
+        <div class="kidcount">🙋 <strong>${bens.length}</strong> bénévole${bens.length > 1 ? 's' : ''}</div>
+        <div>${legende}</div>
+      </div>
+      ${ME.role === 'admin' && archives.length ? `
+      <label class="daychk" style="margin-top:10px">
+        <input type="checkbox" id="showArchBen"/> Afficher ${archives.length === 1 ? 'le bénévole retiré' : `les ${archives.length} bénévoles retirés`} de la liste
+      </label>
+      <div id="archListBen" class="card sub hidden" style="margin-top:8px">
+        <p class="muted small" style="margin-top:0">Ces fiches sont conservées ; leurs présences déjà encodées ne sont
+          pas perdues. « Réactiver » remet la fiche dans la grille ci-dessus.
+          « 🗑️ » l'efface <strong>définitivement</strong>, avec toutes ses présences.</p>
+        ${archives.map((b) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
+          <span class="avatar" style="background:${avatarColor(benevoleLabel(b))}" aria-hidden="true">${echapper(initials(b))}</span>
+          <span style="flex:1">${echapper(benevoleLabel(b))}${b.email ? ` <span class="muted small">— ${echapper(b.email)}</span>` : ''}</span>
+          <button class="small green" data-reactben="${b.id}">Réactiver</button>
+          <button class="rowbtn danger" data-delben="${b.id}" title="Effacer définitivement ${echapper(benevoleLabel(b))} et toutes ses présences" aria-label="Effacer définitivement ${echapper(benevoleLabel(b))}">🗑️</button>
+        </div>`).join('')}
+      </div>` : ''}
+      <p class="muted small">« Prés. » = jours de présence du bénévole ce mois-ci. Ces présences ne comptent
+        pas dans l'onglet 📈 Statistiques (réservé aux enfants).</p>
+    </div>`;
+  wireToolbar();
+
+  const addCard = document.getElementById('addBenCard');
+  const bToggle = document.getElementById('bToggle');
+  if (bToggle) bToggle.onclick = () => {
+    addCard.classList.toggle('hidden');
+    if (!addCard.classList.contains('hidden')) {
+      document.getElementById('bFirst').focus();
+      addCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  };
+  const bCancel = document.getElementById('bCancel');
+  if (bCancel) bCancel.onclick = () => addCard.classList.add('hidden');
+
+  const readDays = (sel) => [...app.querySelectorAll(sel)].map((c) => Number(c.dataset.w));
+
+  if (ME.role === 'admin') {
+    document.getElementById('bAdd').onclick = async () => {
+      const msg = document.getElementById('bMsg');
+      try {
+        await STORE.addBenevole(document.getElementById('bFirst').value, document.getElementById('bLast').value,
+          document.getElementById('bEmail').value, document.getElementById('bPhone').value, readDays('input.bd:checked'));
+        PREFILLED_BENEVOLES.clear(); toast('Bénévole ajouté(e)'); render();
+      } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
+    };
+    const editCard = document.getElementById('editBenCard');
+    app.querySelectorAll('[data-editben]').forEach((btn) => btn.onclick = () => {
+      const b = bens.find((x) => x.id === btn.dataset.editben) || {};
+      document.getElementById('ebId').value = b.id || '';
+      document.getElementById('ebFirst').value = b.first_name || '';
+      document.getElementById('ebLast').value = b.last_name || '';
+      document.getElementById('ebEmail').value = b.email || '';
+      document.getElementById('ebPhone').value = b.phone || '';
+      const set = new Set(b.days || []);
+      app.querySelectorAll('input.ebd').forEach((c) => (c.checked = set.has(Number(c.dataset.w))));
+      document.getElementById('ebMsg').innerHTML = '';
+      editCard.classList.remove('hidden');
+      editCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    document.getElementById('ebCancel').onclick = () => editCard.classList.add('hidden');
+    document.getElementById('ebSave').onclick = async () => {
+      const id = document.getElementById('ebId').value;
+      const info = {
+        first_name: document.getElementById('ebFirst').value,
+        last_name: document.getElementById('ebLast').value,
+        email: document.getElementById('ebEmail').value,
+        phone: document.getElementById('ebPhone').value,
+        days: readDays('input.ebd:checked'),
+      };
+      const avant = ((bens.find((x) => x.id === id) || {}).days || []).slice().sort().join(',');
+      try {
+        await STORE.setBenevoleInfo(id, info);
+        if (avant !== info.days.slice().sort().join(',')) await STORE.clearBenevolePrefill(id);
+        PREFILLED_BENEVOLES.clear(); toast('Fiche bénévole modifiée'); render();
+      }
+      catch (e) { document.getElementById('ebMsg').innerHTML = `<div class="msg error">${e.message}</div>`; }
+    };
+    app.querySelectorAll('[data-archben]').forEach((btn) => btn.onclick = async () => {
+      if (!confirm('Retirer ce bénévole de la liste ? (ses présences passées restent comptées)')) return;
+      try { await STORE.setBenevoleActive(btn.dataset.archben, false); toast('Bénévole retiré(e)'); render(); }
+      catch (e) { toast('Erreur : ' + e.message, 'error'); }
+    });
+    const showArch = document.getElementById('showArchBen');
+    if (showArch) showArch.onchange = () =>
+      document.getElementById('archListBen').classList.toggle('hidden', !showArch.checked);
+    app.querySelectorAll('[data-delben]').forEach((btn) => btn.onclick = async () => {
+      const b = tousBen.find((x) => x.id === btn.dataset.delben);
+      if (!b) return;
+      if (await effacerBenevole(b)) render();
+    });
+    app.querySelectorAll('[data-reactben]').forEach((btn) => btn.onclick = async () => {
+      try { await STORE.setBenevoleActive(btn.dataset.reactben, true); toast('Bénévole remis(e) dans la liste'); render(); }
+      catch (e) { toast('Erreur : ' + e.message, 'error'); }
+    });
+  }
+
+  /* Fiche récapitulative du mois : présences/absences + coordonnées de contact
+   * (la « riche fiche » demandée — email et téléphone). Consultable par tout
+   * le monde, modification réservée à l'admin. */
+  const fiche = document.getElementById('ficheBenevole');
+  const compterFiche = (id) => {
+    const c = { present: 0, absent: 0, attendus: 0 };
+    days.forEach((day) => {
+      if (day.date < MIN_ISO) return;
+      const bb = bens.find((x) => x.id === id);
+      if (bb && isExpected(bb, day.dow)) c.attendus++;
+      const st = getSt(id, day.date);
+      if (!st) return;
+      c[st]++;
+    });
+    return c;
+  };
+  app.querySelectorAll('[data-fiche]').forEach((btn) => btn.onclick = () => {
+    const b = bens.find((x) => x.id === btn.dataset.fiche) || {};
+    const c = compterFiche(b.id);
+    const encodes = c.present + c.absent;
+    fiche.innerHTML = `
+      <div class="row-between">
+        <h3 style="margin:0">📄 ${benevoleLabel(b)} — ${monthName(CUR.y, CUR.m)}</h3>
+        <button class="small gray" id="ficheCloseBen">Fermer</button>
+      </div>
+      <p class="muted small" style="margin:4px 0 12px">
+        ${[b.email, b.phone].filter(Boolean).join(' · ') || 'Aucune coordonnée renseignée'}${(b.days || []).length
+          ? ` · jours habituels : ${(b.days || []).slice().sort().map((w) => DOW[w]).join(' ')}` : ''}</p>
+      <div class="stat-grid">
+        <div class="stat"><div class="num pos">${c.present}</div><div class="lbl">Présences</div></div>
+        <div class="stat"><div class="num neg">${c.absent}</div><div class="lbl">Absences</div></div>
+        <div class="stat"><div class="num">${encodes}/${c.attendus || '—'}</div><div class="lbl">Jours encodés / attendus</div></div>
+      </div>
+      ${ME.role === 'admin' ? `<div style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px">
+        <button class="small red" id="ficheDelBen">🗑️ Effacer définitivement ce bénévole</button>
+        <span class="muted small"> — sa fiche et TOUTES ses présences, sans retour possible.
+        Pour retirer le bénévole en gardant l'historique, utilisez 🗑️ dans la liste (retrait simple).</span>
+      </div>` : ''}`;
+    fiche.classList.remove('hidden');
+    document.getElementById('ficheCloseBen').onclick = () => fiche.classList.add('hidden');
+    const delBtn = document.getElementById('ficheDelBen');
+    if (delBtn) delBtn.onclick = async () => {
+      if (await effacerBenevole(b)) { fiche.classList.add('hidden'); render(); }
+    };
+    fiche.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+
+  const setTotal = (sel, valeur) => app.querySelectorAll(sel).forEach((el) => (el.textContent = valeur));
+  const setGrandTotal = () => setTotal('[data-grandtotben]',
+    days.reduce((s, day) => s + bens.reduce((n, b) => n + compte(b.id, day.date), 0), 0));
+  app.onclick = async (ev) => {
+    const el = ev.target && ev.target.closest ? ev.target.closest('button.presbtn') : null;
+    if (!el) return;
+    if (anneeClose() && ME.role !== 'admin') {
+      toast(`Année ${libelleAnnee(ANNEE_VUE)} close — encodage impossible.`, 'error');
+      return;
+    }
+    const ben = el.dataset.ben, date = el.dataset.date, key = ben + '|' + date;
+    const cur = stat.get(key);
+    const next = BEN_SUIVANT[cur];
+    if (next) stat.set(key, next); else stat.delete(key);
+    el.classList.remove('pres-p', 'pres-a', 'pres-exp', 'pres-v');
+    const day = days.find((d) => d.date === date);
+    const bb = bens.find((b) => b.id === ben);
+    const expected = !!(bb && day && isExpected(bb, day.dow));
+    const etat = BEN_ETATS[next];
+    el.textContent = etat ? etat.sym : '';
+    el.classList.add(etat ? etat.cls : (expected ? 'pres-exp' : 'pres-v'));
+    el.setAttribute('aria-label', echapper(`${benevoleLabel(bb || {})} le ${Number(date.slice(8))}/${pad(CUR.m)} : ${etat ? etat.mot : 'non défini'}`));
+    const bt = document.getElementById('bentot_' + ben);
+    if (bt) bt.textContent = days.reduce((n, d) => n + compte(ben, d.date), 0);
+    setTotal(`[data-daytotben="${Number(date.slice(8))}"]`,
+      bens.reduce((n, b) => n + compte(b.id, date), 0));
+    setGrandTotal();
+    try { await STORE.setBenevoleAttendance(ben, date, next); }
+    catch (e) { if (cur) stat.set(key, cur); else stat.delete(key); toast('Erreur : ' + e.message, 'error'); render(); }
+  };
+}
+
+/* Effacement DÉFINITIF d'un bénévole — même procédure que effacerEnfant(). */
+async function effacerBenevole(b) {
+  const n = await STORE.countBenevoleData(b.id);
+  const ok1 = confirm(
+    `Effacer DÉFINITIVEMENT ${benevoleLabel(b)} ?\n\n`
+    + `Seront supprimées : sa fiche et ${n.benevole_attendance} présence(s)/absence(s) enregistrée(s), `
+    + `sans retour possible.\n\nPour garder l'historique, utilisez plutôt le retrait de la liste.`);
+  if (!ok1) return false;
+  const ok2 = confirm(`Dernière confirmation : effacer ${benevoleLabel(b)} et son historique ?`);
+  if (!ok2) return false;
+  try {
+    await STORE.deleteBenevole(b.id);
+    toast(`${benevoleLabel(b)} effacé(e) définitivement`);
+    return true;
+  } catch (e) { toast('Erreur : ' + e.message, 'error'); return false; }
 }
 
 /* ---------------- Vue : Statistiques (graphiques) ---------------- */
