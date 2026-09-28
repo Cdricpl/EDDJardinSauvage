@@ -86,8 +86,10 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
 
 /* ---------- Conteneur & cartes ---------- */
 .container { max-width:1060px; margin:24px auto; padding:0 16px; }
-/* L'onglet Enfants a besoin de plus de large : 31 colonnes de jours + la
-   colonne des noms ne tiennent pas dans la largeur de lecture habituelle. */
+/* Deux onglets ont besoin de plus large que la largeur de lecture : l'onglet
+   Enfants (31 colonnes de jours + la colonne des noms) et la feuille du mois
+   (11 colonnes depuis l'ajout de « Journée »). Sur ordinateur, l'écran est
+   large : le plafond de lecture faisait défiler la grille pour rien. */
 .container.wide { max-width:1440px; }
 .card {
   background:var(--card); border:1px solid var(--border); border-radius:16px;
@@ -145,6 +147,10 @@ th { background:#f2ead9; color:#6b5f4c; font-weight:700; font-size:14px; letter-
 .grid input.cell.wide { width:100%; min-width:120px; text-align:left; }
 .grid select.cell { border:none; padding:6px; background:transparent; }
 .grid select.cell.time { width:84px; }
+/* Colonne « Journée » : assez large pour « Maladie », et mise en evidence des
+   qu'un motif est pose, pour qu'une ligne a 0 h se repère d'un coup d'oeil. */
+.grid select.cell.jtype { width:92px; }
+.grid select.cell.jtype.jtype-on { background:#f7efe0; color:var(--ink); font-weight:700; }
 /* Temps de midi : colonne etroite, elle reste discrete car rarement utilisee. */
 .grid select.cell.brk { width:92px; font-size:14.5px; color:var(--muted); }
 .grid select.cell.brk:not(.brk-on) { opacity:.75; }

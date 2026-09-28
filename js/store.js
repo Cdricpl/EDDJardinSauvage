@@ -279,12 +279,12 @@ class DemoStore {
       e = { id: Util.uuid(), employee_id: entry.employee_id, entry_date: entry.entry_date,
             planned_start: '', planned_end: '', planned_minutes: 0, worked_minutes: 0,
             start_time: '', end_time: '', worked_touched: false, justification: '',
-            break_minutes: 0 };
+            break_minutes: 0, jour_type: '' };
       db.entries.push(e);
     }
     // Liste blanche : tout champ oublié ici serait silencieusement perdu.
     ['planned_start', 'planned_end', 'planned_minutes', 'worked_minutes', 'start_time',
-     'end_time', 'worked_touched', 'justification', 'break_minutes'].forEach(k => {
+     'end_time', 'worked_touched', 'justification', 'break_minutes', 'jour_type'].forEach(k => {
       if (entry[k] !== undefined) e[k] = entry[k];
     });
     return e;
@@ -600,6 +600,18 @@ class FirebaseStore {
       if (prefixes.some((p) => cle.startsWith(p))) this._memo.delete(cle);
     }
   }
+  /* PATCHE une lecture deja memorisee, au lieu de l'oublier. Oublier force une
+   * relecture complete au serveur ; or quand c'est NOUS qui venons d'ecrire, nous
+   * savons exactement ce que cette relecture contiendrait. Rien en cache : on ne
+   * fait rien, la prochaine lecture ira au serveur comme avant. La gestion
+   * d'erreur reprend celle de _cache : une lecture qui echoue quitte le cache. */
+  _patcherMemo(cle, muter) {
+    const connue = this._memo.get(cle);
+    if (!connue) return;
+    this._memo.set(cle, connue.then(
+      (liste) => { muter(liste); return liste; },
+      (e) => { this._memo.delete(cle); throw e; }));
+  }
   _entryId(emp, date) { return `${emp}_${date}`; }
   _monthId(emp, y, m) { return `${emp}_${Util.monthKey(y, m)}`; }
   _docs(snap) { return snap.docs.map((d) => ({ id: d.id, ...d.data() })); }
@@ -618,7 +630,14 @@ class FirebaseStore {
     try {
       await this.auth.signInWithEmailAndPassword((email || '').trim(), password);
     } catch (e) { throw new Error(this._authMsg(e)); }
-    return this.getCurrentUser();
+    try {
+      return await this.getCurrentUser();
+    } catch (e) {
+      // Compte authentifié mais sans fiche : on le déconnecte tout de suite,
+      // sinon il resterait connecté à un programme qui ne lui montre rien.
+      if (e && e.code === 'non-autorise') { try { await this.auth.signOut(); } catch {} }
+      throw e;
+    }
   }
   _authMsg(e) {
     const c = (e && e.code) || '';
@@ -638,17 +657,17 @@ class FirebaseStore {
     if (!user) return null;
     const snap = await this.db.collection('profiles').doc(user.uid).get();
     if (!snap.exists) {
-      // Compte créé directement dans la console Firebase : on initialise son profil.
-      // TOUJOURS en 'employee' — le passage en admin se fait dans la console
-      // (les règles Firestore interdisent de s'auto-promouvoir).
-      const prof = {
-        full_name: user.displayName || user.email, email: user.email,
-        role: 'employee', active: true,
-        created_at: new Date().toISOString(),
-      };
-      await this.db.collection('profiles').doc(user.uid).set(prof);
-      this._profilesCache = null;
-      return (this._profile = { id: user.uid, ...prof });
+      /* Un compte authentifié SANS fiche n'est pas un membre de l'équipe.
+       * L'application créait ici la fiche elle-même, en « employee » active —
+       * or l'inscription Firebase est ouverte (c'est par elle que l'onglet
+       * Utilisateurs crée les comptes) et la configuration du projet est
+       * publique : n'importe qui pouvait donc se fabriquer un accès et lire les
+       * fiches des enfants. Les comptes se créent désormais uniquement depuis
+       * l'onglet Utilisateurs, qui écrit la fiche au nom de l'administration. */
+      const e = new Error("Ce compte n'est pas autorisé à utiliser le programme. "
+        + "Demandez à l'administration de vous créer un accès.");
+      e.code = 'non-autorise';
+      throw e;
     }
     return (this._profile = { id: user.uid, ...snap.data() });
   }
@@ -805,16 +824,40 @@ class FirebaseStore {
     if (i >= 0) list[i] = { ...list[i], ...entry }; else list.push({ ...entry });
   }
   async upsertEntry(entry) {
+    const id = this._entryId(entry.employee_id, entry.entry_date);
     const data = { ...entry, updated_at: new Date().toISOString() };
-    await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date))
-      .set(data, { merge: true });
-    // Relit la version fusionnee pour renvoyer l'etat complet.
-    const s = await this.db.collection('day_entries').doc(this._entryId(entry.employee_id, entry.entry_date)).get();
-    const saved = { id: s.id, ...s.data() };
+    const ref = this.db.collection('day_entries').doc(id);
+    await ref.set(data, { merge: true });
+    /* La version fusionnee etait RELUE au serveur juste apres l'ecriture, pour
+     * renvoyer l'etat complet de la journee : deux allers-retours l'un apres
+     * l'autre a chaque cellule modifiee, alors que l'ecran attend la reponse
+     * pour se mettre a jour. Or les prestations sont des champs plats : la
+     * fusion se refait a l'identique en local, a partir de la journee deja en
+     * cache. On ne relit le serveur que si elle n'y est pas (premiere ouverture,
+     * cache vide) — le resultat est le meme, l'attente est deux fois plus courte. */
+    const cache = this._entriesCache[entry.employee_id];
+    const connue = cache && cache.find((e) => e.entry_date === entry.entry_date);
+    let saved;
+    if (connue) {
+      saved = { ...connue, ...data, id };
+    } else {
+      const s = await ref.get();
+      saved = { id: s.id, ...s.data() };
+    }
     this._mergeCache(saved);
     this._oublier('prestationsPeriode:');
     return saved;
   }
+  /* L'ECRITURE GROUPEE JETAIT TOUT LE CACHE de l'employee, et le render() qui
+   * suit relisait aussitot son historique COMPLET. Mesure sur un changement de
+   * mois reel : 106 Ko relus pour 100 fiches que le navigateur avait deja en
+   * memoire, soit 81 % du trafic du geste — et ce cout grandit d'environ 22
+   * fiches par mois ouvert. Les prestations sont des champs plats : la fusion
+   * se refait a l'identique en local, exactement comme pour une cellule seule
+   * (voir upsertEntry). Cache froid : _mergeCache ne fait rien et la lecture a
+   * lieu normalement au prochain acces.
+   * `prestationsPeriode:` reste invalide : ces vues d'administration ne sont pas
+   * fusionnables fiche par fiche, et la feuille mensuelle ne les relit pas. */
   async upsertEntries(entries) {
     if (!entries || !entries.length) return [];
     const now = new Date().toISOString();
@@ -822,7 +865,9 @@ class FirebaseStore {
       ref: this.db.collection('day_entries').doc(this._entryId(e.employee_id, e.entry_date)),
       data: { ...e, updated_at: now },
     })));
-    delete this._entriesCache[entries[0].employee_id];
+    entries.forEach((e) => this._mergeCache({
+      ...e, id: this._entryId(e.employee_id, e.entry_date), updated_at: now,
+    }));
     this._oublier('prestationsPeriode:');
     return entries;
   }
@@ -900,12 +945,39 @@ class FirebaseStore {
       return this._docs(snap);
     });
   }
+  /* Repercute en local des presences ecrites (ou effacees), au lieu d'oublier le
+   * mois. Oublier faisait RELIRE le mois entier au serveur : mesure sur un
+   * changement de mois reel de l'onglet Enfants, 86 Ko relus pour ~150 presences
+   * que le navigateur venait lui-meme d'ecrire — 34 % du trafic du geste.
+   * Les presences sont des enregistrements complets (enfant, date, statut) :
+   * la liste memorisee se met a jour a l'identique sans aller-retour. */
+  _patcherPresences(list) {
+    const parMois = new Map();
+    list.forEach((p) => {
+      const mois = (p.entry_date || '').slice(0, 7);
+      if (!mois) return;
+      if (!parMois.has(mois)) parMois.set(mois, []);
+      parMois.get(mois).push(p);
+    });
+    parMois.forEach((presences, mois) => this._patcherMemo(`presences:${mois}`, (liste) => {
+      presences.forEach(({ kid_id, entry_date, status }) => {
+        const i = liste.findIndex((a) => a.kid_id === kid_id && a.entry_date === entry_date);
+        if (!status) { if (i >= 0) liste.splice(i, 1); return; }   // case effacee : le document est supprime
+        const doc = { id: `${kid_id}_${entry_date}`, kid_id, entry_date, status };
+        if (i >= 0) liste[i] = doc; else liste.push(doc);
+      });
+    }));
+  }
   // status : 'present' | 'absent' | null (efface l'enregistrement).
   async setKidAttendance(kid_id, entry_date, status) {
     const ref = this.db.collection('kid_attendance').doc(`${kid_id}_${entry_date}`);
     if (!status) await ref.delete();
     else await ref.set({ kid_id, entry_date, status });
-    this._oublier('presences:', 'presencesPeriode:');
+    this._patcherPresences([{ kid_id, entry_date, status }]);
+    /* `presencesPeriode:` reste invalide : ces lectures servent aux statistiques
+     * et aux PDF d'agrement, sur des periodes quelconques, et la grille ne les
+     * relit pas — les patcher couterait plus que de les relire au besoin. */
+    this._oublier('presencesPeriode:');
   }
   async setKidAttendances(list) {
     if (!list || !list.length) return;
@@ -914,7 +986,8 @@ class FirebaseStore {
       data: status ? { kid_id, entry_date, status } : null, delete: !status,
     }));
     await this._commit(ops);
-    this._oublier('presences:', 'presencesPeriode:');
+    this._patcherPresences(list);
+    this._oublier('presencesPeriode:');
   }
   /* ---- Memoire du pre-encodage ----
    * Voir DemoStore : sans ce marqueur, une case effacee volontairement serait
@@ -1196,26 +1269,54 @@ class FirebaseStore {
    * puisqu'on ne modifie pas une année clôturée à plusieurs en même temps. */
   onChange(cb) {
     let detacher = [];
+    let anneeReglage = null;   // valeur brute d'annee_scolaire au moment de poser
     const poser = async (user) => {
       detacher.forEach((f) => { try { f(); } catch {} });
       detacher = [];
       if (!user) return;                                  // déconnectée : rien à écouter
       const prof = await this.getCurrentUser().catch(() => null);
       const estAdmin = !!(prof && prof.role === 'admin');
-      const y = new Date().getFullYear();
-      const anneeEnCours = (col) => col.where('entry_date', '>=', `${y}-01-01`).where('entry_date', '<=', `${y}-12-31`);
+      /* Borne : l'ANNÉE SCOLAIRE ouverte (1er août → 31 juillet), et non l'année
+       * civile. Avec l'ancienne borne `AAAA-01-01 → AAAA-12-31`, la moitié de
+       * chaque année scolaire n'était jamais écoutée : en septembre, rien de ce
+       * qui serait encodé entre janvier et juillet suivants ne déclenchait de
+       * rafraîchissement, et après le 1er janvier c'était l'inverse pour
+       * août-décembre. L'écran de l'administration affichait alors des chiffres
+       * périmés jusqu'au rechargement de la page. */
+      const reglages = await this.getReglages().catch(() => ({}));
+      anneeReglage = Number(reglages.annee_scolaire) || 0;
+      const a = Math.max(anneeReglage, 2026);             // même défaut que chargerAnnee()
+      const anneeScolaire = (col) => col
+        .where('entry_date', '>=', `${a}-08-01`).where('entry_date', '<=', `${a + 1}-07-31`);
       const BORNE = {
-        day_entries: (col) => (estAdmin ? anneeEnCours(col) : col.where('employee_id', '==', user.uid)),
-        kid_attendance: anneeEnCours,
-        benevole_attendance: anneeEnCours,
+        day_entries: (col) => (estAdmin ? anneeScolaire(col) : col.where('employee_id', '==', user.uid)),
+        kid_attendance: anneeScolaire,
+        benevole_attendance: anneeScolaire,
       };
       ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'benevoles', 'benevole_attendance',
        'benevole_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
         const base = this.db.collection(c);
+        /* PREMIER INSTANTANÉ IGNORÉ. `onSnapshot` commence par livrer TOUT le
+         * contenu suivi : ce n'est pas un changement, c'est ce que l'application
+         * vient elle-même de lire. Le traiter comme un changement vidait les
+         * caches que le premier rendu venait de remplir, et le re-rendu groupé
+         * relisait aussitôt les réglages, le mois et l'horaire type.
+         * Mesure sur une capture réelle de démarrage : trois allers-retours pour
+         * rien à 2,9-3,2 s (un document chacun, tous déjà connus), et la vue
+         * entièrement redessinée ~800 ms après son apparition. Les changements
+         * SUIVANTS, eux, continuent d'être traités normalement.
+         * Contrepartie assumée : une modification faite par une collègue dans les
+         * quelques centaines de millisecondes qui séparent la pose de l'écouteur
+         * de l'arrivée de cet instantané n'est pas signalée — la lecture suivante
+         * la rapportera. */
+        let premier = true;
         const un = (BORNE[c] ? BORNE[c](base) : base).onSnapshot(
           { includeMetadataChanges: false },
           (snap) => {
             if (snap.metadata.hasPendingWrites) return;   // ignore nos propres écritures
+            /* Après le filtre ci-dessus : le drapeau ne doit être consommé que par
+             * le premier instantané VENU DU SERVEUR, jamais par un état local. */
+            if (premier) { premier = false; return; }
             if (c === 'day_entries') {
               /* Ne vider QUE les employées réellement concernées.
                * Vider tout le cache faisait relire l'historique COMPLET de chaque
@@ -1241,7 +1342,15 @@ class FirebaseStore {
             if (c === 'benevole_attendance') this._oublier('presencesBen:', 'presencesBenPeriode:');
             if (c === 'benevole_prefill') this._oublier('preremplissageBen:');
             if (c === 'schedule_templates') this._oublier('horaire:');
-            if (c === 'settings') this._oublier('reglages');
+            if (c === 'settings') {
+              this._oublier('reglages');
+              /* L'administration vient peut-être d'ouvrir (ou de refermer) une
+               * année : les écouteurs ci-dessus sont bornés à l'ancienne, il faut
+               * les reposer, sans quoi la nouvelle année ne serait pas suivie. */
+              const doc = snap.docs.find((d) => d.id === 'app');
+              const a = Number((doc && doc.data().annee_scolaire) || 0);
+              if (a !== anneeReglage) { poser(user); return cb(); }
+            }
             cb();
           },
           (err) => console.warn('[firestore:onSnapshot]', c, err && err.message));

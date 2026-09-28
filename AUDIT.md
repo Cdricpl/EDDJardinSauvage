@@ -427,6 +427,43 @@ l'historique (755 nœuds constants) — le remplissage différé des menus d'heu
 Le rendu par `innerHTML` est structurel : ne le retouchez pas avant d'avoir traité P1 et P2,
 qui coûtent plus cher pour moins de risque.
 
+> ✅ **RÉÉVALUÉ (21/08/2026) — ne rien faire, et voici pourquoi.**
+>
+> **1. Les chiffres ci-dessus étaient gonflés.** Ils incluaient les lectures enchaînées du
+> store, supprimées depuis par P2. Sur le même scénario (12 enfants, 1 mois), le
+> basculement mesuré aujourd'hui est de **30 ms** sur un ordinateur et **154 ms** en CPU ×4 —
+> et non 87 / 336 ms. Le code d'origine, remesuré dans les mêmes conditions, donne
+> 29 / 153 ms : l'écart annoncé venait bien de la méthode de mesure, pas du rendu.
+>
+> **2. Le rendu incrémental ne toucherait que 19 % du coût.** Décomposition à CPU ×4
+> (30 enfants), compteurs du navigateur :
+>
+> | | |
+> |---|---:|
+> | calcul JavaScript | 31 ms |
+> | affectation `innerHTML` | 26 ms |
+> | **recalcul des styles** | **49 ms** |
+> | **mise en page** | **78 ms** |
+> | **peinture et composition** | **≈ 139 ms** |
+>
+> Soit **81 % de travail du navigateur** que le rendu incrémental ne supprime pas : il faut
+> de toute façon poser, mesurer et peindre la même grille.
+>
+> **3. Sept pistes testées, aucune ne gagne quoi que ce soit** (médiane de 5, CPU ×4) :
+> `content-visibility: auto` sur les lignes, `contain: layout style paint`, les deux
+> combinés, `table-layout: fixed`, `fixed` + `content-visibility`, suppression des ombres
+> de cellule, et suppression du bouton interne de chaque cellule. Toutes les variantes
+> restent dans le bruit (±20 ms sur 300 ms) au volume réel.
+>
+> **4. La grille ne grandit pas avec l'historique.** Elle n'affiche jamais qu'**un mois** :
+> sa taille dépend du seul nombre d'enfants. Avec les **12 enfants** de la liste actuelle,
+> l'onglet s'ouvre en 30 ms sur les appareils de l'administration.
+>
+> **Seuil de réévaluation** : si la liste approche **30 enfants**, le basculement monte à
+> ~310 ms en CPU ×4 et la virtualisation des lignes redevient discutable — c'est la seule
+> piste qui réduirait réellement le travail de mise en page, puisqu'elle réduit le nombre
+> d'éléments. En dessous, elle ne gagnerait rien : presque toutes les lignes sont visibles.
+
 #### P4 — `entriesForEmployee` lit tout l'historique, sans borne de date · **MINEUR (aujourd'hui) / MAJEUR (dans 3 ans)** · effort : S
 **`js/store.js:538-542`** — la requête ne filtre que sur `employee_id` : elle rapporte
 **toutes** les prestations depuis août 2026, indéfiniment. Elle est mise en cache
@@ -579,6 +616,7 @@ Corrections locales, chacune de quelques lignes, aucune n'affecte l'interface.
 |---|---|---|
 | 5 | **P1** — charger `chart.js` et `jsPDF` à la demande | **−1 000 ms au démarrage, −194 Ko** |
 | 6 | **P2** — grouper en `Promise.all` les lectures indépendantes de `viewSheet`, `viewChildren`, `viewStats` | **−300 à −900 ms par ouverture d'onglet** (cloud) |
+| — | ~~**P3** — rendu incrémental~~ → **NE PAS FAIRE** : 81 % du coût est du travail navigateur que le rendu ne touche pas (voir la réévaluation en P3). | — |
 | 7 | ~~**P4** — borner `entriesForEmployee` sur l'année~~ → **NE PAS FAIRE** (efface le solde reporté, voir la correction en P4). Vider le cache par employée au lieu de le vider entièrement. | évite la dégradation progressive |
 | 8 | **P5** — sortir `toLocaleDateString` de la boucle de cellules | ~3 ms — pour la propreté |
 

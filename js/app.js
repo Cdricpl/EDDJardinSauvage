@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.08.21-12';
+const APP_VERSION = 'v2026.09.28-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -232,7 +232,9 @@ function wireLazyTimes() {
   app.dataset.lazyWired = '1';
   const hyd = (ev) => {
     const t = ev.target;
-    if (t && t.closest) hydrateTimeSelect(t.closest('select.time'));
+    if (!t || !t.closest) return;
+    hydrateTimeSelect(t.closest('select.time'));
+    hydrateBreakSelect(t.closest('select.brk'));
   };
   ['pointerdown', 'focusin', 'keydown'].forEach((e) => app.addEventListener(e, hyd, true));
 }
@@ -248,16 +250,34 @@ function plannedMinutes(e) {
 /* Temps de midi : pause NON comptée dans les prestations. En temps normal il
  * n'y en a pas ; certains jours seulement, l'employée prend une pause qui ne
  * doit pas être payée. On la déduit donc des heures prestées.
- * Choix limité aux quarts d'heure, jusqu'à 2 h, comme le reste de la feuille. */
-const BREAK_LIST = [0, 15, 30, 45, 60, 75, 90, 105, 120];
+ * Choix limité aux quarts d'heure, jusqu'à 6 h, comme le reste de la feuille :
+ * une interruption longue en milieu de journée doit pouvoir être encodée ici,
+ * sinon il ne reste qu'à trafiquer l'horaire réel — ce qui réclamerait alors une
+ * justification écrite pour un écart parfaitement normal. */
+const BREAK_LIST = (() => { const o = []; for (let m = 0; m <= 6 * 60; m += 15) o.push(m); return o; })();
 const breakMinutes = (e) => Math.max(0, Number(e && e.break_minutes) || 0);
 function fmtBreak(min) { return !min ? '—' : (min < 60 ? `${min} min` : fmtHM(min)); }
-function breakSelect(date, value, disabled) {
-  const v = Math.max(0, Number(value) || 0);
-  const opts = BREAK_LIST.concat(BREAK_LIST.includes(v) ? [] : [v])
+function breakOptionsHTML(v) {
+  return BREAK_LIST.concat(BREAK_LIST.includes(v) ? [] : [v])
     .sort((a, b) => a - b)
     .map((m) => `<option value="${m}"${m === v ? ' selected' : ''}>${fmtBreak(m)}</option>`).join('');
-  return `<select class="cell brk${v ? ' brk-on' : ''}" data-k="break_minutes" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts}</select>`;
+}
+/* Rempli à la demande, comme les menus d'heures (voir hydrateTimeSelect).
+ * En passant de 2 h à 6 h le menu est passé de 9 à 25 choix : posés d'emblée sur
+ * chaque jour du mois, cela ajoutait ~500 balises <option> à chaque affichage de
+ * la feuille — exactement ce que le remplissage différé des heures avait supprimé.
+ * Au repos le menu ne contient donc que sa valeur ; ses 25 choix arrivent au
+ * premier clic (ou à la tabulation). */
+function breakSelect(date, value, disabled) {
+  const v = Math.max(0, Number(value) || 0);
+  return `<select class="cell brk${v ? ' brk-on' : ''}" data-k="break_minutes" data-date="${date}" ${disabled ? 'disabled' : ''}><option value="${v}" selected>${fmtBreak(v)}</option></select>`;
+}
+function hydrateBreakSelect(sel) {
+  if (!sel || sel.dataset.full) return;
+  const v = Math.max(0, Number(sel.value) || 0);
+  sel.dataset.full = '1';
+  sel.innerHTML = breakOptionsHTML(v);
+  sel.value = String(v);
 }
 // Heures ENCODÉES, avant déduction du temps de midi.
 function grossWorked(e) {
@@ -267,12 +287,37 @@ function grossWorked(e) {
   return e.worked_minutes || 0;
 }
 // Heures PRESTÉES effectives : les heures encodées, moins le temps de midi.
-function effectiveWorked(e) { return Math.max(0, grossWorked(e) - breakMinutes(e)); }
+/* Journées non ordinaires. « Récupération » consomme des heures du solde ;
+ * « Congé » et « Maladie » comptent comme prestées, le solde ne bouge pas. */
+const JOUR_TYPES = { recup: 'Récupération', conge: 'Congé', maladie: 'Maladie' };
+const JOUR_COURTS = { recup: 'Récup.', conge: 'Congé', maladie: 'Maladie' };
+const estJourType = (e) => !!(e && JOUR_TYPES[e.jour_type]);
+
+/* Le type de journée l'emporte sur les heures encodées : une journée récupérée
+ * vaut 0 h quoi qu'il y ait dans les menus, un congé vaut la durée prévue.
+ * Avant, une journée entière récupérée était INENCODABLE : effacer les deux
+ * heures la faisait compter comme entièrement prestée. */
+function effectiveWorked(e) {
+  if (e.jour_type === 'recup') return 0;
+  if (e.jour_type === 'conge' || e.jour_type === 'maladie') return plannedMinutes(e);
+  return Math.max(0, grossWorked(e) - breakMinutes(e));
+}
 /* Écart qui doit être JUSTIFIÉ par écrit : celui qui subsiste une fois le temps
  * de midi mis de côté. Une pause encodée explique déjà l'écart qu'elle crée —
  * demander en plus une phrase serait redondant. Seule une différence entre
  * l'horaire prévu et l'horaire réellement encodé appelle une explication. */
-function deltaAJustifier(e) { return grossWorked(e) - plannedMinutes(e); }
+function deltaAJustifier(e) {
+  // Une journée typée porte déjà sa raison : ne pas réclamer en plus une phrase.
+  if (estJourType(e)) return 0;
+  return grossWorked(e) - plannedMinutes(e);
+}
+// Menu du type de journée, dans la colonne « Journée ».
+function jourTypeSelect(date, value, disabled) {
+  const v = JOUR_TYPES[value] ? value : '';
+  const opts = ['', 'recup', 'conge', 'maladie']
+    .map((k) => `<option value="${k}"${k === v ? ' selected' : ''}>${k ? JOUR_COURTS[k] : '—'}</option>`).join('');
+  return `<select class="cell jtype${v ? ' jtype-on' : ''}" data-k="jour_type" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts}</select>`;
+}
 function fmtHM(min) {
   const sign = min < 0 ? '-' : '';
   min = Math.abs(Math.round(min));
@@ -341,8 +386,14 @@ async function backupJSON() {
  * restent en place et prennent le relais si le téléchargement échoue —
  * typiquement hors ligne : le comportement est alors exactement celui d'avant.
  * ================================================================ */
+/* Versions FIGÉES à l'unité près. `chart.js@4` suivait toutes les versions 4.x à
+ * venir : le graphique des statistiques pouvait se casser un matin sans qu'aucun
+ * déploiement n'ait eu lieu ici, donc sans que le numéro de version affiché le
+ * laisse deviner. 4.5.1 est la version que le CDN servait déjà (relevée dans le
+ * navigateur avec `Chart.version`) : rien ne change aujourd'hui, on empêche
+ * seulement le changement de demain. La forme de l'adresse est inchangée. */
 const CDN = {
-  chart:     'https://cdn.jsdelivr.net/npm/chart.js@4',
+  chart:     'https://cdn.jsdelivr.net/npm/chart.js@4.5.1',
   jspdf:     'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
   autotable: 'https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js',
 };
@@ -412,7 +463,37 @@ async function openingMinutes(empId, annee) {
   // Première année : le solde saisi une fois par l'administration.
   // Années suivantes : le solde reporté au moment d'ouvrir l'année.
   if (annee === MIN_YM.y) return Number(p.opening_minutes) || 0;
-  return Number((p.soldes || {})[String(annee)]) || 0;
+  const report = (p.soldes || {})[String(annee)];
+  /* UN REPORT ABSENT N'EST PAS UN REPORT NUL. Les reports sont écrits au moment
+   * d'ouvrir l'année, pour les employées actives À CE MOMENT-LÀ. Une employée
+   * engagée (ou réactivée) ensuite n'en a donc aucun : son « solde de départ »,
+   * saisi par l'administration, était alors purement et simplement ignoré, et sa
+   * feuille annonçait un report de 0. Mesuré : 10 h de départ affichées 0h00.
+   * Faute de report enregistré, on repart du solde de départ — ce que fait déjà
+   * soldeRecalcule. Un report enregistré, même NUL, reste prioritaire : c'est la
+   * valeur figée voulue, et `Number(0) || 0` la rendrait indiscernable d'un trou. */
+  if (report == null) return Number(p.opening_minutes) || 0;
+  return Number(report) || 0;
+}
+/* Recalcule ce que le solde reporté DEVRAIT valoir au 1er août d'une année,
+ * d'après les prestations réellement encodées. Le report enregistré, lui, est
+ * figé au moment où l'année a été ouverte : c'est voulu (une valeur stable et
+ * vérifiable), mais une correction apportée ensuite à une année close ne
+ * remonte pas — d'où le bouton « Recalculer » de l'onglet Utilisateurs.
+ * On repart du solde de départ et on ré-additionne année par année : corriger
+ * seulement la dernière laisserait un écart ancien figé dans tous les reports. */
+async function soldeRecalcule(empId, annee) {
+  const prof = (await STORE.listProfiles()).find((x) => x.id === empId);
+  if (!prof) return 0;
+  let solde = Number(prof.opening_minutes) || 0;          // au 1er août 2026
+  if (annee <= MIN_YM.y) return solde;
+  const all = await STORE.entriesForEmployee(empId);
+  const fin = finAnnee(annee - 1);                        // tout ce qui précède l'année visée
+  all.forEach((e) => {
+    if (e.entry_date < MIN_ISO || e.entry_date > fin) return;
+    solde += effectiveWorked(e) - plannedMinutes(e);
+  });
+  return solde;
 }
 async function monthSummary(empId, y, m) {
   const annee = anneeScolaireDe(y, m);
@@ -423,14 +504,24 @@ async function monthSummary(empId, y, m) {
   const all = await STORE.entriesForEmployee(empId);
   const firstOfMonth = `${y}-${pad(m)}-01`;
   let planned = 0, worked = 0, carryIn = await openingMinutes(empId, annee);
+  /* Le pré-remplissage écrit le MOIS ENTIER, jours à venir compris : les totaux
+   * annoncent donc un mois complet dès son premier jour. L'écart, lui, reste
+   * juste (prévu et presté montent ensemble), et c'est lui qui fait le solde —
+   * on ne touche donc pas au calcul. On compte seulement, à côté, ce qui est
+   * réellement presté à ce jour, pour pouvoir le dire sous les totaux. */
+  const auj = todayISO();
+  let workedToDate = 0, aVenir = false;
   all.forEach((e) => {
     const w = effectiveWorked(e), p = plannedMinutes(e);
     if (e.entry_date < depart) return;
     if (e.entry_date < firstOfMonth) carryIn += (w - p);
-    else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) { planned += p; worked += w; }
+    else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) {
+      planned += p; worked += w;
+      if (e.entry_date <= auj) workedToDate += w; else if (p || w) aVenir = true;
+    }
   });
   const delta = worked - planned;
-  return { planned, worked, delta, carryIn, closing: carryIn + delta };
+  return { planned, worked, delta, carryIn, closing: carryIn + delta, workedToDate, aVenir };
 }
 
 /* ================================================================
@@ -510,7 +601,13 @@ async function installerRaccourci() {
 async function boot() {
   const created = await createStore();
   STORE = created.store; MODE = created.mode;
-  await chargerAnnee();
+  /* L'année scolaire ouverte n'est PAS lue ici : les règles Firestore refusent
+   * toute lecture à un visiteur non identifié, et la session n'est restaurée
+   * qu'au `getCurrentUser()` plus bas. Lue trop tôt, la lecture échouait
+   * (« Missing or insufficient permissions » dans la console), l'erreur était
+   * avalée, et l'année retombait sur sa valeur par défaut : l'application
+   * s'ouvrait sur la première année, close, quelle que soit l'année réellement
+   * ouverte. Elle est donc lue dans `afterLogin`, une fois connectée. */
   const vEl = document.getElementById('appVersion');
   if (vEl) vEl.textContent = APP_VERSION;
   document.getElementById('modeBadge').textContent = MODE === 'firebase' ? '🔥 Firebase' : '🧪 Démo (local)';
@@ -531,22 +628,42 @@ async function boot() {
     render();
   }, 800));
 
-  ME = await STORE.getCurrentUser();
+  try {
+    ME = await STORE.getCurrentUser();
+  } catch (e) {
+    // Compte authentifié mais sans fiche dans l'équipe : on le dit, on ne
+    // laisse pas une erreur de permission brute à l'écran.
+    if (e && e.code === 'non-autorise') { try { await STORE.signOut(); } catch {} return showNonAutorise(e.message); }
+    throw e;
+  }
   if (ME) await afterLogin(); else renderLogin();
 }
 
 async function afterLogin() {
-  if (ME.role === 'employee') SEL_EMP = ME.id;
-  else {
-    const profs = await STORE.listProfiles();
+  /* L'annee ouverte doit etre connue AVANT le premier rendu : le mois affiche et
+   * les droits en dependent. La liste des employees, elle, ne depend pas de
+   * l'annee — elle sert seulement a choisir la feuille ouverte par defaut. Les
+   * enchainer faisait payer deux allers-retours l'un apres l'autre au demarrage
+   * (~180 ms de trop, mesure sur une capture reelle) ; groupees, on n'en attend
+   * plus qu'un. */
+  if (ME.role === 'employee') {
+    await chargerAnnee();
+    SEL_EMP = ME.id;
+  } else {
+    const [, profs] = await Promise.all([chargerAnnee(), STORE.listProfiles()]);
     const firstEmp = profs.find((p) => p.role === 'employee' && p.active);
     SEL_EMP = firstEmp ? firstEmp.id : ME.id;
   }
   VIEW = 'sheet';
   document.body.dataset.role = ME.role;   // thème couleur : admin=bleu, employée=vert
+  /* On MASQUE l'ecran de connexion sans le vider. Il etait auparavant efface du
+   * DOM aussitot apres la connexion, pour empecher le telephone de proposer
+   * d'enregistrer le mot de passe en boucle — mais cela empechait aussi le
+   * navigateur de l'ordinateur de le proposer une seule fois, au bon moment.
+   * Avec un vrai formulaire, la proposition arrive a la soumission et n'a plus
+   * de raison de se repeter. */
   const loginEl = document.getElementById('login');
   loginEl.style.display = 'none';
-  loginEl.innerHTML = '';   // retire le champ mot de passe du DOM (sinon le mobile propose de l'enregistrer en boucle)
   document.getElementById('appShell').style.display = 'block';
   document.getElementById('meName').textContent = ME.full_name + (ME.role === 'admin' ? ' (Admin)' : '');
   // Bouton de sauvegarde rapide dans l'entête (accessible partout) — admin uniquement.
@@ -572,12 +689,19 @@ function renderLogin() {
       <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
       <h1>EDD Jardin Sauvage</h1>
       <p class="muted">Gestion des horaires, prestations et présences</p>
-      <label for="email">Email</label>
-      <input id="email" type="email" autocomplete="username" value="${MODE === 'demo' ? 'admin@ecole.be' : ''}" placeholder="votre email" />
-      <label for="pwd">Mot de passe</label>
-      <input id="pwd" type="password" autocomplete="current-password" value="${MODE === 'demo' ? 'admin123' : ''}" placeholder="votre mot de passe" />
-      <div id="loginMsg"></div>
-      <button class="big" id="loginBtn">Se connecter</button>
+      <!-- Un vrai formulaire, avec un bouton « submit » : c'est ce que les
+           gestionnaires de mots de passe des navigateurs attendent pour proposer
+           d'enregistrer l'identifiant. Sans lui, il fallait retaper son mot de
+           passe a chaque connexion — plusieurs fois par jour, la deconnexion
+           automatique tombant au bout de 15 minutes. -->
+      <form id="loginForm">
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username" value="${MODE === 'demo' ? 'admin@ecole.be' : ''}" placeholder="votre email" />
+        <label for="pwd">Mot de passe</label>
+        <input id="pwd" type="password" autocomplete="current-password" value="${MODE === 'demo' ? 'admin123' : ''}" placeholder="votre mot de passe" />
+        <div id="loginMsg"></div>
+        <button class="big" id="loginBtn" type="submit">Se connecter</button>
+      </form>
       <p class="center" style="margin-top:10px"><a href="#" id="forgotLink" class="muted small">Mot de passe oublié ?</a></p>
       ${MODE === 'demo' ? `<p class="muted small" style="margin-top:6px">
         Mode démo — comptes de test :<br>
@@ -600,8 +724,9 @@ function renderLogin() {
       await afterLogin();
     } catch (e) { loginMsg(e.message); }
   };
-  document.getElementById('loginBtn').onclick = go;
-  document.getElementById('pwd').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  /* `submit` et non plus `onclick` : la touche Entree fonctionne depuis les deux
+   * champs, et le navigateur voit passer une vraie connexion. */
+  document.getElementById('loginForm').onsubmit = (e) => { e.preventDefault(); go(); };
   document.getElementById('forgotLink').onclick = async (e) => {
     e.preventDefault();
     const email = document.getElementById('email').value.trim();
@@ -698,8 +823,12 @@ async function render() {
   const appEl = document.getElementById('app');
   if (appEl) {
     appEl.onchange = null; appEl.onclick = null;
-    // Les onglets Enfants et Bénévoles s'élargissent : ils affichent les 31 jours du mois.
-    appEl.classList.toggle('wide', VIEW === 'children' || VIEW === 'benevoles');
+    /* Trois onglets s'élargissent : Enfants et Bénévoles (31 colonnes de jours)
+     * et la Feuille du mois. Mesuré sur ordinateur : avec la largeur de lecture
+     * habituelle (1060 px), la feuille et ses 11 colonnes débordaient de 40 px —
+     * il fallait la faire défiler pour lire la justification, écrasée à 131 px,
+     * alors qu'il restait jusqu'à 860 px d'écran inutilisés de part et d'autre. */
+    appEl.classList.toggle('wide', VIEW === 'children' || VIEW === 'benevoles' || VIEW === 'sheet');
   }
   wireLazyTimes();
   const bar = document.getElementById('loadbar');
@@ -729,6 +858,28 @@ function showFatal(msg) {
   if (visible) { document.getElementById('app').innerHTML = contenu; return; }
   const login = document.getElementById('login');
   if (login) { login.style.display = 'flex'; login.innerHTML = `<div class="login-card">${contenu}</div>`; }
+}
+
+/* Écran dédié pour un compte authentifié qui n'appartient pas à l'équipe.
+ * Ce n'est ni une panne ni une erreur de mot de passe : il n'y a rien à
+ * réessayer, il faut que l'administration crée l'accès. */
+function showNonAutorise(msg) {
+  const shell = document.getElementById('appShell');
+  if (shell) shell.style.display = 'none';
+  const login = document.getElementById('login');
+  if (!login) return;
+  login.style.display = 'flex';
+  login.innerHTML = `
+    <div class="card login-card">
+      <img src="assets/logo.png" onerror="this.onerror=null;this.src='assets/logo.svg'" alt="Jardin Sauvage" class="logo-login" />
+      <h1>Accès non autorisé</h1>
+      <div class="msg error" style="margin-top:14px">${echapper(msg || "Ce compte n'est pas autorisé à utiliser le programme.")}</div>
+      <p class="muted small">Les accès sont créés par l'administration : ${ADMINS_CONTACT}.</p>
+      <button class="big" id="retourConnexion">Retour à la connexion</button>
+      <p class="muted small" style="margin-top:14px">${APP_VERSION}</p>
+    </div>`;
+  const b = document.getElementById('retourConnexion');
+  if (b) b.onclick = () => location.reload();
 }
 
 /* Écran dédié quand l'application ne peut pas joindre le serveur au démarrage.
@@ -765,19 +916,37 @@ async function viewSheet() {
   const [month, entries, tpl, editableProf] = await Promise.all([
     STORE.getMonth(empId, CUR.y, CUR.m),
     STORE.entriesForMonth(empId, CUR.y, CUR.m),
-    ME.role === 'admin' ? STORE.getTemplate(empId) : Promise.resolve({}),
+    STORE.getTemplate(empId),   // lu aussi par l'employée : il sert au pré-remplissage
     currentEmpProfile(empId),
   ]);
 
-  // Pré-remplissage automatique : mois OUVERT + vide + un horaire type existe.
-  // (Les mois validés ne sont jamais touchés.) Garde anti-réentrance.
-  // Verrou : on ne tente le pré-remplissage qu'UNE fois par mois, par employée et
-  // par session. Indispensable : sinon un échec d'écriture (règle serveur, quota,
-  // réseau coupé) laisserait le mois vide, et le `render()` de fin relancerait
-  // aussitôt viewSheet → pré-remplissage → render()… en boucle, jusqu'à figer
-  // l'appareil. Le pré-encodage des présences enfants a la même protection.
+  /* Pré-remplissage automatique du mois à partir de l'horaire type.
+   *
+   * Deux conditions ont été assouplies, parce que ensemble elles produisaient un
+   * mois définitivement bancal (mesuré) :
+   *   - il était réservé à l'ADMINISTRATION : une employée qui ouvrait le mois
+   *     neuf avant elle ne voyait aucun horaire prévu ;
+   *   - il exigeait un mois totalement VIDE : dès qu'elle encodait un seul jour,
+   *     le mois cessait d'être vide et n'était plus JAMAIS pré-rempli, même
+   *     quand l'administration l'ouvrait ensuite. Résultat à l'écran :
+   *     « +4h00 d'écart non justifié » sur une journée parfaitement normale
+   *     (l'horaire prévu valant zéro), et tout le mois à ressaisir à la main.
+   *
+   * Désormais : il suffit qu'AUCUN jour du mois n'ait d'horaire prévu, et
+   * l'employée peut le déclencher sur SA propre feuille. Elle ne décide rien :
+   * on recopie l'horaire type, que seule l'administration peut définir. Un mois
+   * où l'administration a déjà posé des horaires n'est jamais retouché, et les
+   * jours déjà modifiés gardent leur horaire réel (voir applyTemplate).
+   *
+   * Verrou : on ne tente le pré-remplissage qu'UNE fois par mois, par employée et
+   * par session. Indispensable : sinon un échec d'écriture (règle serveur, quota,
+   * réseau coupé) laisserait le mois vide, et le `render()` de fin relancerait
+   * aussitôt viewSheet → pré-remplissage → render()… en boucle, jusqu'à figer
+   * l'appareil. Le pré-encodage des présences enfants a la même protection. */
   const sheetKey = `${empId}|${CUR.y}-${pad(CUR.m)}`;
-  if (ME.role === 'admin' && month.status === 'open' && !anneeClose() && entries.length === 0 && templateHasSlots(tpl)
+  const aucunHorairePrevu = entries.every((e) => !plannedMinutes(e));
+  const peutPreremplir = ME.role === 'admin' || (empId === ME.id && editableProf.active);
+  if (peutPreremplir && month.status === 'open' && !anneeClose() && aucunHorairePrevu && templateHasSlots(tpl)
       && !APPLYING && !PREFILLED_SHEETS.has(sheetKey)) {
     PREFILLED_SHEETS.add(sheetKey);   // marqué comme tenté AVANT l'écriture (anti-boucle)
     APPLYING = true;
@@ -809,6 +978,7 @@ async function viewSheet() {
     const worked = effectiveWorked(e);
     const delta = worked - planned;
     const modified = !!e.worked_touched;
+    const typeJour = estJourType(e);          // récupération, congé ou maladie
     const needJustif = deltaAJustifier(e) !== 0 && !e.justification;
     if (needJustif) warnings++;
     // Valeurs réelles affichées : par défaut = prévu (pré-remplissage) si non modifié.
@@ -820,11 +990,12 @@ async function viewSheet() {
       <td>${DOW[dow]}</td>
       <td class="grp-plan">${timeSelect('planned_start', date, e.planned_start || '', !canEditPlanned)}</td>
       <td class="grp-plan">${timeSelect('planned_end', date, e.planned_end || '', !canEditPlanned)}</td>
-      <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked)}</td>
-      <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked)}</td>
-      <td class="grp-real">${breakSelect(date, e.break_minutes, !canEditWorked)}</td>
+      <td class="grp-real">${timeSelect('start_time', date, realStart, !canEditWorked || typeJour)}</td>
+      <td class="grp-real">${timeSelect('end_time', date, realEnd, !canEditWorked || typeJour)}</td>
+      <td class="grp-real">${breakSelect(date, typeJour ? 0 : e.break_minutes, !canEditWorked || typeJour)}</td>
       <td class="nowrap c-worked"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
       <td class="c-delta ${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
+      <td class="c-jtype">${jourTypeSelect(date, e.jour_type, !canEditWorked)}</td>
       <td class="c-justif"><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${echapper(e.justification)}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
     </tr>`;
   }
@@ -855,7 +1026,9 @@ async function viewSheet() {
               <th rowspan="2">Date</th><th rowspan="2">Jour</th>
               <th colspan="2" class="grp-plan-h">Horaire prévu (admin)</th>
               <th colspan="3" class="grp-real-h">Horaire réel</th>
-              <th rowspan="2">Presté</th><th rowspan="2">Écart</th><th rowspan="2">Justification</th>
+              <th rowspan="2">Presté</th><th rowspan="2">Écart</th>
+              <th rowspan="2" title="Journée entière récupérée, en congé ou de maladie">Journée</th>
+              <th rowspan="2">Justification</th>
             </tr>
             <tr>
               <th class="grp-plan-h">Début</th><th class="grp-plan-h">Fin</th>
@@ -873,12 +1046,21 @@ async function viewSheet() {
         <div class="stat"><div class="num" id="tCarry">${fmtHM(sum.carryIn)}</div><div class="lbl">Solde reporté</div></div>
         <div class="stat"><div class="num ${sum.closing >= 0 ? 'pos' : 'neg'}" id="tClosing">${fmtHM(sum.closing)}</div><div class="lbl">Solde cumulé</div></div>
       </div>
+      ${sum.aVenir ? `<p class="muted small" style="margin-top:10px">
+        ⏳ <strong>Jours à venir compris</strong> dans les totaux ci-dessus : ils sont comptés à
+        l'horaire prévu tant qu'ils n'ont pas eu lieu. Réellement presté au ${new Date().toLocaleDateString('fr-FR')} :
+        <strong>${fmtHM(sum.workedToDate)}</strong>.
+      </p>` : ''}
       <p class="muted small">
         <span class="legend"><span class="sw grp-plan-h"></span> Horaire prévu (défini par l'admin)</span>
         <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employée)</span>
         <span class="legend"><span class="dot">●</span> jour modifié</span>
         <span class="legend"><span class="pos">▲ vert = heures supplémentaires</span> / <span class="neg">▼ rouge = heures récupérées</span></span><br>
-        Heures par tranches de 15 min. Enregistrement automatique.
+        Heures par tranches de 15 min. Enregistrement automatique.<br>
+        Colonne <strong>Journée</strong> : pour une journée <strong>entière</strong> non prestée.
+        <strong>Récup.</strong> compte 0 h et fait baisser le solde d'autant ;
+        <strong>Congé</strong> et <strong>Maladie</strong> comptent comme prestées, le solde ne bouge pas.
+        Pour une récupération de quelques heures seulement, raccourcissez simplement l'horaire réel.
       </p>
     </div>`;
   wireToolbar();
@@ -907,6 +1089,27 @@ async function viewSheet() {
     ec.className = 'c-delta ' + (delta > 0 ? 'pos' : delta < 0 ? 'neg' : '');
     const jinp = tr.querySelector('.c-justif input');
     if (jinp) { jinp.classList.toggle('err', needJustif); jinp.placeholder = needJustif ? 'Justification requise' : ''; }
+    /* Journée typée : l'horaire réel est sans objet, on le grise. Il faut aussi
+     * remettre les menus à ce que contient la base — l'utilisatrice vient
+     * peut-être d'effacer un type, auquel cas le prévu réapparaît. */
+    const typeJour = estJourType(e);
+    const jsel = tr.querySelector('.c-jtype select');
+    if (jsel) { jsel.value = e.jour_type || ''; jsel.classList.toggle('jtype-on', typeJour); }
+    const modifiable = !!(jsel && !jsel.disabled);
+    tr.querySelectorAll('[data-k="start_time"], [data-k="end_time"], [data-k="break_minutes"]')
+      .forEach((el) => { el.disabled = !modifiable || typeJour; });
+    if (!typeJour) {
+      setTimeValue(tr.querySelector('[data-k="start_time"]'), e.start_time || e.planned_start || '');
+      setTimeValue(tr.querySelector('[data-k="end_time"]'), e.end_time || e.planned_end || '');
+    } else {
+      setTimeValue(tr.querySelector('[data-k="start_time"]'), '');
+      setTimeValue(tr.querySelector('[data-k="end_time"]'), '');
+    }
+    /* Journée typée : le temps de midi est masqué (« — ») mais conservé en base ;
+     * il réapparaît tel quel si l'on revient à une journée ordinaire. */
+    const bsel = tr.querySelector('[data-k="break_minutes"]');
+    const midi = typeJour ? 0 : breakMinutes(e);
+    if (bsel) { bsel.value = String(midi); bsel.classList.toggle('brk-on', midi > 0); }
   }
   function refreshTotals() {
     let P = 0, W = 0, warn = 0;
@@ -978,6 +1181,29 @@ async function viewSheet() {
         patch.start_time = start; patch.end_time = end;
         patch.worked_touched = true;
         patch.worked_minutes = (s != null && f != null) ? Math.max(0, f - s) : 0;
+      }
+    } else if (k === 'jour_type') {
+      /* Journée entière récupérée, en congé ou de maladie. L'horaire réel n'a
+       * plus de sens : on l'efface, et `worked_touched` protège la journée du
+       * pré-remplissage automatique. Le calcul se fait dans effectiveWorked,
+       * qui court-circuite les heures d'après le type. */
+      const t = JOUR_TYPES[el.value] ? el.value : '';
+      patch.jour_type = t;
+      if (t) {
+        patch.start_time = ''; patch.end_time = '';
+        /* Le temps de midi n'est PAS effacé : il est simplement sans objet tant
+         * qu'un motif est posé (`effectiveWorked` ne le regarde pas), et masqué
+         * à l'écran comme les heures réelles. L'effacer faisait perdre la saisie :
+         * en revenant à « — », la journée repartait avec 30 minutes de trop. */
+        patch.worked_touched = true;
+        patch.worked_minutes = (t === 'recup') ? 0 : plannedMinutes(prev);
+      } else {
+        // Retour à une journée ordinaire : l'horaire réel redevient le prévu,
+        // exactement comme un jour jamais modifié.
+        patch.start_time = prev.planned_start || '';
+        patch.end_time = prev.planned_end || '';
+        patch.worked_touched = false;
+        patch.worked_minutes = plannedMinutes(prev);
       }
     } else if (k === 'break_minutes') {
       // Temps de midi : simple déduction des heures prestées, l'horaire encodé
@@ -1295,8 +1521,11 @@ async function viewChildren() {
     <span class="pres-leg"><span class="presbtn pres-nj" aria-hidden="true">!</span> Absence injustifiée</span>
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
-  app.innerHTML = `${await toolbar(false, ME.role === 'admin'
-      ? '<button id="kToggle" class="addkid">+ Ajouter un enfant</button>' : '')}
+  const actionsEnfants = ME.role === 'admin'
+    ? '<button class="small" id="listePdfBtn" title="Télécharger la liste des enfants et leurs jours habituels">🖨️ Liste PDF</button>'
+      + ' <button id="kToggle" class="addkid">+ Ajouter un enfant</button>'
+    : '';
+  app.innerHTML = `${await toolbar(false, actionsEnfants)}
     <div class="card">
       <h2 style="margin:0 0 4px">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
       ${ME.role === 'admin' ? `
@@ -1377,6 +1606,11 @@ async function viewChildren() {
         ME.role === 'admin' ? ' La moyenne annuelle est dans l\'onglet 📈 Statistiques.' : ''}</p>
     </div>`;
   wireToolbar();
+
+  // Liste imprimable des enfants (administration seule).
+  const listeBtn = document.getElementById('listePdfBtn');
+  if (listeBtn) listeBtn.onclick = () => avecBarre(() => exportListeEnfantsPDF(kids))
+    .catch((e) => toast('Export impossible : ' + e.message, 'error'));
 
   // Le formulaire d'ajout reste replié : la grille est ainsi lisible d'emblée.
   const addCard = document.getElementById('addKidCard');
@@ -2177,6 +2411,86 @@ async function exportFichePDF(k, c, absences) {
   doc.save(`fiche_${(kidLabel(k) || 'enfant').replace(/[^\w-]+/g, '-')}_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
+/* ---------------- Export PDF : liste des enfants et jours habituels ----------------
+ * Le document qu'on imprime pour l'afficher au local ou le glisser dans le
+ * dossier : qui est inscrit, dans quelle école, en quelle année, né quand, et
+ * quels jours on l'attend. Réservé à l'administration, comme les fiches.
+ * Seuls les enfants ACTIFS y figurent : ceux qui ont été retirés de la liste
+ * n'ont plus à être attendus. */
+async function exportListeEnfantsPDF(kids) {
+  const titre = 'Liste des enfants';
+  const sousTitre = `Au ${new Date().toLocaleDateString('fr-FR')} · ${kids.length} enfant${kids.length > 1 ? 's' : ''}`;
+  // Jours dans l'ordre de la semaine (lundi d'abord) : la liste interne
+  // commence au dimanche, ce qui se lit mal sur un document affiché au mur.
+  const joursDe = (k) => {
+    const d = k.days || [];
+    const l = WEEK_ORDER.filter((w) => d.includes(w)).map((w) => DOW[w]);
+    return l.length ? l.join(' ') : '—';
+  };
+  const corps = kids.map((k) => [
+    kidLabel(k),
+    k.grade || '—',
+    k.school || '—',
+    k.birthdate ? k.birthdate.split('-').reverse().join('/') : '—',
+    joursDe(k),
+  ]);
+  /* Combien d'enfants attendus chaque jour : c'est la question qu'on se pose en
+   * lisant cette liste, autant y répondre plutôt que de faire compter. */
+  const parJour = WEEK_ORDER
+    .map((w) => ({ w, n: kids.filter((k) => (k.days || []).includes(w)).length }))
+    .filter((x) => x.n > 0)
+    .map((x) => [DOW_FULL[x.w], String(x.n)]);
+  const entetes = ['Enfant', 'Année', 'École', 'Naissance', 'Jours habituels'];
+
+  if (!(await assurerPdf())) {           // repli impression, comme les autres exports
+    const w = window.open('', '_blank');
+    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const tab = (t, e, l) => `<h3>${echapper(t)}</h3><table border=1 cellpadding=5 style="border-collapse:collapse">`
+      + `<tr>${e.map((h) => `<th>${echapper(h)}</th>`).join('')}</tr>`
+      + l.map((r) => '<tr>' + r.map((c) => `<td>${echapper(c)}</td>`).join('') + '</tr>').join('') + '</table>';
+    w.document.write(`<img src="assets/logo.svg" style="height:60px">
+      <h2>${echapper(titre)} — ${echapper(sousTitre)}</h2>
+      ${tab('Enfants inscrits', entetes, corps)}
+      ${parJour.length ? tab('Effectif attendu par jour', ['Jour', 'Enfants attendus'], parJour) : ''}
+      <p>Seuls les enfants actifs figurent dans cette liste.</p>
+      <button onclick="print()">Imprimer</button>`);
+    w.document.close(); return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const BLEU = [59, 91, 219];
+  let y = await pdfHeader(doc, titre, sousTitre);
+  doc.autoTable({
+    startY: y,
+    head: [entetes],
+    body: lignesPdf(corps),
+    styles: { fontSize: 10 },
+    columnStyles: { 0: { cellWidth: 52 }, 1: { cellWidth: 18 }, 3: { cellWidth: 24 } },
+    headStyles: { fillColor: BLEU },
+  });
+  y = doc.lastAutoTable.finalY + 10;
+
+  if (parJour.length) {
+    // Saut de page si le second tableau ne tient plus.
+    if (y + 14 + parJour.length * 10 > doc.internal.pageSize.getHeight() - 18) { doc.addPage(); y = 20; }
+    doc.setFontSize(12); doc.setTextColor(0);
+    doc.text('Effectif attendu par jour', 14, y); y += 6;
+    doc.autoTable({
+      startY: y,
+      head: [['Jour', 'Enfants attendus']],
+      body: lignesPdf(parJour),
+      styles: { fontSize: 10 },
+      columnStyles: { 0: { cellWidth: 40 }, 1: { cellWidth: 34, halign: 'right' } },
+      headStyles: { fillColor: BLEU },
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+  doc.setFontSize(9); doc.setTextColor(110);
+  doc.text(pourPdf('Seuls les enfants actifs figurent dans cette liste.'), 14, y);
+  doc.save(`liste_enfants_${todayISO()}.pdf`);
+}
+
 /* ---------------- Export PDF des statistiques de l'année scolaire ----------------
  * Le PDF doit contenir TOUT ce que l'onglet Statistiques affiche : c'est lui
  * qui part dans le dossier d'agrément, et il ne doit rien laisser à retrouver
@@ -2344,6 +2658,18 @@ async function viewEmployees() {
     p: x, cloture: (await monthSummary(x.id, ANNEE + 1, 7)).closing,
   })));
 
+  /* Le solde reporté est FIGÉ à l'ouverture de l'année, comme convenu : il ne
+   * bouge pas tout seul. Mais l'administration peut encore corriger une année
+   * close, et cette correction ne remonte pas. On compare donc ce qui est
+   * enregistré à ce que les prestations donnent aujourd'hui — sans quoi
+   * personne ne saurait qu'il faut cliquer sur « Recalculer ». */
+  const reports = ANNEE > MIN_YM.y ? await Promise.all(emps.map(async (x) => ({
+    p: x,
+    enregistre: await openingMinutes(x.id, ANNEE),
+    recalcule: await soldeRecalcule(x.id, ANNEE),
+  }))) : [];
+  const aCorriger = reports.filter((r) => r.enregistre !== r.recalcule);
+
   /* Ce qui a déjà été encodé dans l'année ouverte. On l'annonce avant de
    * proposer de la refermer : refermer ne supprime rien, mais il faut le dire
    * plutôt que de le laisser deviner. */
@@ -2378,6 +2704,20 @@ async function viewEmployees() {
         et ajouterez les nouveaux. L'année ${libelleAnnee(ANNEE)} passe alors en lecture seule pour les employées ;
         vous pourrez encore la corriger.
       </p>
+      ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:14px;gap:12px;flex-wrap:wrap;align-items:center">
+        <p class="muted small" style="margin:0;flex:1;min-width:240px">
+          Le <strong>solde reporté au 1<sup>er</sup> août ${ANNEE}</strong> a été figé à l'ouverture de l'année :
+          il ne bouge pas tout seul. Si vous corrigez une année close, remettez-le à jour ici.
+        </p>
+        <button class="small" id="recalcSoldes">🔄 Recalculer les soldes reportés</button>
+      </div>
+      ${aCorriger.length ? `<div class="msg error" style="margin-top:8px">
+        ⚠️ ${aCorriger.length === 1 ? 'Un solde reporté ne correspond plus' : `${aCorriger.length} soldes reportés ne correspondent plus`}
+        aux prestations encodées :
+        <ul style="margin:6px 0 0 18px">${aCorriger.map((r) =>
+          `<li>${echapper(r.p.full_name)} : figé à <strong>${fmtDelta(r.enregistre)}</strong>,
+           recalculé à <strong>${fmtDelta(r.recalcule)}</strong></li>`).join('')}</ul>
+      </div>` : ''}` : ''}
       ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:16px;gap:12px;flex-wrap:wrap;align-items:center">
         <p class="muted small" style="margin:0;flex:1;min-width:220px">
           <strong>Ouverte par erreur ?</strong> Vous pouvez refermer ${libelleAnnee(ANNEE)} et revenir à
@@ -2475,6 +2815,34 @@ async function viewEmployees() {
       console.error('[nouvelle-annee]', e);
       nouvelle.disabled = false;
       toast("Ouverture impossible : " + e.message, 'error');
+    }
+  };
+
+  /* Recalcul des soldes reportés — administration seule (tout cet onglet l'est).
+   * On réécrit TOUTES les années depuis la première : corriger seulement la
+   * dernière laisserait un écart ancien figé dans les reports intermédiaires,
+   * qu'on voit encore en consultant une année passée. */
+  const recalc = document.getElementById('recalcSoldes');
+  if (recalc) recalc.onclick = async () => {
+    if (!aCorriger.length) { toast('Les soldes reportés sont déjà à jour.'); return; }
+    const detail = aCorriger.map((r) =>
+      `  · ${r.p.full_name} : ${fmtDelta(r.enregistre)} → ${fmtDelta(r.recalcule)}`).join('\n');
+    if (!confirm(
+      `Recalculer les soldes reportés au 1er août ${ANNEE} ?\n\n${detail}\n\n`
+      + `Aucune prestation n'est modifiée : seul le report de début d'année est remis à jour.`)) return;
+    recalc.disabled = true;
+    try {
+      for (const { p } of aCorriger) {
+        for (let a = MIN_YM.y + 1; a <= ANNEE; a++) {
+          await STORE.setSoldeAnnee(p.id, a, await soldeRecalcule(p.id, a));
+        }
+      }
+      toast('Soldes reportés recalculés');
+      render();
+    } catch (e) {
+      console.error('[recalcul-soldes]', e);
+      recalc.disabled = false;
+      toast('Recalcul impossible : ' + e.message, 'error');
     }
   };
 
@@ -2644,15 +3012,18 @@ async function viewEmployees() {
       const nameById = {}; (data.profiles || []).forEach((p) => (nameById[p.id] = p.full_name));
       // Sans la colonne « Temps de midi », une ligne « 14:00 → 18:00, presté 195 »
       // était incompréhensible : les 45 minutes déduites n'apparaissaient nulle part.
+      /* La colonne « Motif » est indispensable depuis les journées entières :
+       * sans elle, une journée récupérée apparaît à 0 minute sans explication. */
       const rows = [['Employée', 'Date', 'Prévu début', 'Prévu fin', 'Réel début', 'Réel fin',
-        'Temps de midi (min)', 'Presté (min)', 'Écart (min)', 'Justification']];
+        'Temps de midi (min)', 'Presté (min)', 'Écart (min)', 'Motif', 'Justification']];
       (data.day_entries || [])
         .slice().sort((a, b) => (a.entry_date + a.employee_id).localeCompare(b.entry_date + b.employee_id))
         .forEach((e) => {
           const p = plannedMinutes(e), w = effectiveWorked(e);
           rows.push([nameById[e.employee_id] || e.employee_id, e.entry_date,
             e.planned_start || '', e.planned_end || '', e.start_time || '', e.end_time || '',
-            breakMinutes(e), w, w - p, e.justification || '']);
+            estJourType(e) ? 0 : breakMinutes(e), w, w - p,
+            JOUR_TYPES[e.jour_type] || '', e.justification || '']);
         });
       downloadFile(`prestations_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
       toast('CSV prestations téléchargé');
@@ -2774,8 +3145,10 @@ async function exportSheetPDF(empId) {
     body.push([`${pad(d)}/${pad(CUR.m)}`,
       e.planned_start || '—', e.planned_end || '—',
       e.start_time || '—', e.end_time || '—',
-      breakMinutes(e) ? fmtBreak(breakMinutes(e)) : '—',   // sinon l'écart semble inexpliqué
-      fmtHM(worked), fmtHM(worked - planned), e.justification || '']);
+      (!estJourType(e) && breakMinutes(e)) ? fmtBreak(breakMinutes(e)) : '—',   // sinon l'écart semble inexpliqué
+      fmtHM(worked), fmtHM(worked - planned),
+      // Sans le motif, un ecart de -3h30 resterait inexplique sur le document.
+      [JOUR_TYPES[e.jour_type], e.justification].filter(Boolean).join(' — ')]);
   }
 
   if (!(await assurerPdf())) { // repli impression
