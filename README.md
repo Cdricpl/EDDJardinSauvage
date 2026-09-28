@@ -72,6 +72,11 @@ les **règles Firestore**, pas par le secret.
   l'admin peut intervenir) — imposé côté serveur via les règles Firestore.
 - **Présences enfants** : liste nominative (prénom + nom) et **grille de présences**
   journalières par enfant (case décochée un jour d'ouverture = absence).
+- **Présences bénévoles** : liste nominative (nom, email, téléphone) et grille de
+  présences par jour habituel (présent/absent), pré-remplie comme pour les enfants.
+  La fiche (coordonnées, jours habituels) n'est modifiable que par l'administration ;
+  les employées encodent uniquement les présences. Ces présences ne sont **pas**
+  comptées dans les statistiques (réservées aux enfants).
 - **Statistiques** : moyenne annuelle d'enfants par jour + détail mensuel, graphique,
   avec **export PDF** (moyennes + graphique inclus).
 - **Export PDF** : fiche mensuelle par employée (tableau début/fin, totaux, signatures).

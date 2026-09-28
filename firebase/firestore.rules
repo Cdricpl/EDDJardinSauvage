@@ -113,6 +113,26 @@ service cloud.firestore {
       allow write: if isActive();
     }
 
+    // ---- BENEVOLES : fiche (nom, contact, jours habituels) reservee a l'admin ----
+    // Contrairement aux enfants, l'equipe ne cree ni ne modifie une fiche
+    // benevole : seule l'administration gere ces informations.
+    match /benevoles/{id} {
+      allow read:  if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---- PRESENCES BENEVOLES : encodage par l'equipe, comme les enfants ----
+    match /benevole_attendance/{id} {
+      allow read:  if signedIn();
+      allow write: if isActive();
+    }
+
+    // ---- MEMOIRE DU PRE-ENCODAGE (benevoles) ----
+    match /benevole_prefill/{id} {
+      allow read:  if signedIn();
+      allow write: if isActive();
+    }
+
     // ---- REGLAGES PARTAGES : annee scolaire en cours ----
     // Lisible par toute l'equipe (elle determine ce qui est modifiable),
     // modifiable par la seule administration : ouvrir une nouvelle annee
