@@ -117,19 +117,19 @@ service cloud.firestore {
     // Contrairement aux enfants, l'equipe ne cree ni ne modifie une fiche
     // benevole : seule l'administration gere ces informations.
     match /benevoles/{id} {
-      allow read:  if signedIn();
+      allow read:  if membre();
       allow write: if isAdmin();
     }
 
     // ---- PRESENCES BENEVOLES : encodage par l'equipe, comme les enfants ----
     match /benevole_attendance/{id} {
-      allow read:  if signedIn();
+      allow read:  if membre();
       allow write: if isActive();
     }
 
     // ---- MEMOIRE DU PRE-ENCODAGE (benevoles) ----
     match /benevole_prefill/{id} {
-      allow read:  if signedIn();
+      allow read:  if membre();
       allow write: if isActive();
     }
 
