@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.09.28-1';
+const APP_VERSION = 'v2026.10.15-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -1729,14 +1729,14 @@ async function viewChildren() {
       : '<span class="muted">Aucune absence ce mois-ci.</span>';
     fiche.innerHTML = `
       <div class="row-between">
-        <h3 style="margin:0">📄 ${kidLabel(k)} — ${monthName(CUR.y, CUR.m)}</h3>
+        <h3 style="margin:0">📄 ${echapper(kidLabel(k))} — ${monthName(CUR.y, CUR.m)}</h3>
         <div style="display:flex; gap:8px">
           <button class="small" id="fichePdf">🖨️ Export PDF</button>
           <button class="small gray" id="ficheClose">Fermer</button>
         </div>
       </div>
       <p class="muted small" style="margin:4px 0 12px">
-        ${[k.grade, k.school].filter(Boolean).join(' · ')}${(k.days || []).length
+        ${echapper([k.grade, k.school].filter(Boolean).join(' · '))}${(k.days || []).length
           ? ` · jours habituels : ${(k.days || []).slice().sort().map((w) => DOW[w]).join(' ')}` : ''}</p>
       <div class="stat-grid">
         <div class="stat"><div class="num pos">${c.present}</div><div class="lbl">Présences</div></div>
@@ -2103,11 +2103,11 @@ async function viewBenevoles() {
     const encodes = c.present + c.absent;
     fiche.innerHTML = `
       <div class="row-between">
-        <h3 style="margin:0">📄 ${benevoleLabel(b)} — ${monthName(CUR.y, CUR.m)}</h3>
+        <h3 style="margin:0">📄 ${echapper(benevoleLabel(b))} — ${monthName(CUR.y, CUR.m)}</h3>
         <button class="small gray" id="ficheCloseBen">Fermer</button>
       </div>
       <p class="muted small" style="margin:4px 0 12px">
-        ${[b.email, b.phone].filter(Boolean).join(' · ') || 'Aucune coordonnée renseignée'}${(b.days || []).length
+        ${echapper([b.email, b.phone].filter(Boolean).join(' · ')) || 'Aucune coordonnée renseignée'}${(b.days || []).length
           ? ` · jours habituels : ${(b.days || []).slice().sort().map((w) => DOW[w]).join(' ')}` : ''}</p>
       <div class="stat-grid">
         <div class="stat"><div class="num pos">${c.present}</div><div class="lbl">Présences</div></div>

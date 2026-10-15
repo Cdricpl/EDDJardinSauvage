@@ -46,7 +46,7 @@ présences des enfants, statistiques pour le dossier d'agrément.
 ## Tests
 
 ```bash
-cd tests && npx playwright test          # 39 tests end-to-end, mode démo
+cd tests && npx playwright test          # 64 tests end-to-end, mode démo
 PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-1194/chrome-linux/chrome npx playwright test
 ```
 

@@ -1815,3 +1815,40 @@ test('enfants : la liste PDF n’est pas proposée aux employées', async ({ pag
   await expect(page.locator('table.attend')).toBeVisible();
   await expect(page.locator('#listePdfBtn')).toHaveCount(0);
 });
+
+test('bénévoles : l’administration ajoute une fiche, une présence se coche, la fiche montre le contact', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="benevoles"]').click();
+  await page.locator('#bToggle').click();
+  await page.locator('#bFirst').fill('Test');
+  await page.locator('#bLast').fill('<b>Essai</b>');
+  await page.locator('#bEmail').fill('test@example.com');
+  await page.locator('#bPhone').fill('0470/00 00 00');
+  await page.locator('#bAdd').click();
+  const ligne = page.locator('table.attend tbody tr', { hasText: 'ESSAI' });
+  await expect(ligne).toHaveCount(1);
+  // Un 1er octobre (jeudi) : case encodable, cycle vide → présent → absent.
+  await page.locator('#nextM').click();
+  const ligneOct = page.locator('table.attend tbody tr', { hasText: 'ESSAI' });
+  const cell = ligneOct.locator('td.daycell button').first();
+  await cell.click();
+  await expect(cell).toHaveText('✓');
+  await cell.click();
+  await expect(cell).toHaveText('✗');
+  // Fiche : contact affiché, nom échappé (pas de balise <b> interprétée).
+  await ligneOct.locator('button.kidnom').click();
+  const fiche = page.locator('#ficheBenevole');
+  await expect(fiche).toContainText('test@example.com');
+  await expect(fiche).toContainText('0470/00 00 00');
+  await expect(fiche.locator('h3 b')).toHaveCount(0);
+});
+
+test('bénévoles : une employée encode les présences mais ne modifie aucune fiche', async ({ page }) => {
+  await loginEmployee(page);
+  await page.locator('.navbtn[data-v="benevoles"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+  await expect(page.locator('#bToggle')).toHaveCount(0);
+  await expect(page.locator('[data-editben]')).toHaveCount(0);
+  await expect(page.locator('[data-archben]')).toHaveCount(0);
+  await expect(page.locator('#app .msg')).toContainText('administration');
+});
