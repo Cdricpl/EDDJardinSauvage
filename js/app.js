@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-2';
+const APP_VERSION = 'v2026.10.27-3';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -1421,15 +1421,96 @@ async function viewRecap() {
 }
 
 /* ---------------- Vue : Enfants (liste nominative + présences) ---------------- */
+/* ---------------- Stages et fermetures ----------------
+ * Une période suspend la grille habituelle des enfants inscrits. Sans elle, le
+ * pré-encodage marquait « présent » tous les enfants à leurs jours habituels,
+ * congés et jours fériés compris (mesuré : les 3 enfants de démonstration
+ * « présents » le 11 novembre) — et ces présences fictives gonflaient les
+ * statistiques et les chiffres déclarés à l'ONE. */
+const PERIODE_LIB = { stage: 'Stage', fermeture: 'Fermé' };
+const dateCourte = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+const libellePeriode = (p) => `${PERIODE_LIB[p.type]}${p.intitule ? ' — ' + p.intitule : ''} (du ${dateCourte(p.debut)} au ${dateCourte(p.fin)})`;
+const classePeriode = (p) => (p ? (p.type === 'stage' ? ' periode-stage' : ' periode-fermee') : '');
+const titrePeriode = (p) => (p ? ` title="${echapper(libellePeriode(p))}"` : '');
+// Rappel, sous le titre de la grille, des périodes qui touchent le mois affiché.
+function periodesDuMoisHTML(periodes, debutMois, finMois) {
+  const du = periodes.filter((p) => p.debut <= finMois && p.fin >= debutMois);
+  const indispo = STORE.periodesIndisponibles && ME.role === 'admin'
+    ? `<div class="msg error">Les stages et fermetures ne peuvent pas encore être lus : les nouvelles
+        règles Firestore (« periodes » et « stage_effectifs ») doivent être publiées dans la console
+        Firebase.</div>` : '';
+  if (!du.length) return indispo;
+  return indispo + `<p class="periodes-mois">${du.map((p) =>
+    `<span class="periode-tag${classePeriode(p)}">${p.type === 'stage' ? '🏕️' : '🚪'} ${echapper(libellePeriode(p))}</span>`).join(' ')}
+    <span class="muted small">— la grille habituelle est suspendue ces jours-là.</span></p>`;
+}
+// Carte de l'administration : déclarer, voir et supprimer les périodes.
+function carteperiodesHTML(periodes) {
+  const liste = periodes.length
+    ? periodes.map((p) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
+        <span class="periode-tag${classePeriode(p)}">${p.type === 'stage' ? '🏕️' : '🚪'} ${echapper(libellePeriode(p))}</span>
+        <button class="rowbtn danger" data-delper="${echapper(p.id)}" title="Supprimer cette période" aria-label="Supprimer ${echapper(libellePeriode(p))}">🗑️</button>
+      </div>`).join('')
+    : '<p class="muted small" style="margin:6px 0 0">Aucune période déclarée.</p>';
+  return `<div class="card sub hidden" id="perCard">
+      <h3 style="margin-top:0">🏕️ Stages et fermetures</h3>
+      <p class="muted small" style="margin-top:0">Pendant une période, la grille habituelle des enfants est suspendue
+        et rien n'y est pré-encodé. <strong>Stage</strong> : on encode le <strong>nombre</strong> d'enfants présents
+        chaque jour. <strong>Fermeture</strong> (congé, jour férié) : personne n'est compté.
+        Supprimer une période fait réapparaître les présences déjà encodées ces jours-là.</p>
+      <div class="row" style="align-items:end">
+        <div style="flex:0 0 150px"><label for="perType">Type</label>
+          <select id="perType"><option value="stage">Stage</option><option value="fermeture">Fermeture</option></select></div>
+        <div style="flex:0 0 160px"><label for="perDebut">Du</label><input id="perDebut" type="date"/></div>
+        <div style="flex:0 0 160px"><label for="perFin">Au</label><input id="perFin" type="date"/></div>
+        <div><label for="perIntitule">Intitulé (facultatif)</label><input id="perIntitule" maxlength="80" placeholder="Stage d'automne, Toussaint, 11 novembre…"/></div>
+        <div style="flex:0 0 auto"><button class="green" id="perAdd">+ Ajouter</button></div>
+      </div>
+      <div id="perList" style="margin-top:10px">${liste}</div>
+    </div>`;
+}
+function brancherPeriodes() {
+  const carte = document.getElementById('perCard');
+  const bouton = document.getElementById('perToggle');
+  if (!carte || !bouton) return;
+  bouton.onclick = () => carte.classList.toggle('hidden');
+  const debut = document.getElementById('perDebut');
+  const fin = document.getElementById('perFin');
+  debut.onchange = () => { if (!fin.value || fin.value < debut.value) fin.value = debut.value; };
+  document.getElementById('perAdd').onclick = async () => {
+    try {
+      await STORE.savePeriode({ type: document.getElementById('perType').value,
+        debut: debut.value, fin: fin.value, intitule: document.getElementById('perIntitule').value });
+      toast('Période enregistrée');
+      PREFILLED_KIDS.clear();
+      render();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  carte.querySelectorAll('[data-delper]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Supprimer cette période ? Les présences déjà encodées ces jours-là réapparaîtront dans la grille.')) return;
+    try { await STORE.deletePeriode(b.dataset.delper); toast('Période supprimée'); render(); }
+    catch (e) { toast('Suppression impossible : ' + e.message, 'error'); }
+  });
+}
+
 async function viewChildren() {
   const app = document.getElementById('app');
   // Lectures independantes : groupees pour n'attendre qu'un aller-retour.
   // L'administration lit AUSSI les fiches archivees, pour pouvoir en réactiver
   // une retirée par erreur ; la grille, elle, ne montre que les enfants actifs.
-  const [tousKids, att] = await Promise.all([
+  const debutMois = `${CUR.y}-${pad(CUR.m)}-01`;
+  const finMois = `${CUR.y}-${pad(CUR.m)}-${pad(daysInMonth(CUR.y, CUR.m))}`;
+  const [tousKids, att, periodes, effectifsMois] = await Promise.all([
     STORE.listKids(ME.role === 'admin'),
     STORE.kidAttendanceForMonth(CUR.y, CUR.m),
+    STORE.listPeriodes(),
+    STORE.stageEffectifsEntre(debutMois, finMois),
   ]);
+  /* Stages et fermetures : ces jours-là, la grille des enfants inscrits est
+   * suspendue (voir Util.periodeDu). Un jour de stage compte le NOMBRE encodé
+   * pour le stage ; un jour de fermeture ne compte personne. */
+  const periodeJour = (date) => Util.periodeDu(periodes, date);
+  const effectif = new Map(effectifsMois.map((x) => [x.entry_date, Number(x.count) || 0]));
   const kids = tousKids.filter((k) => k.active !== false);
   const archives = tousKids.filter((k) => k.active === false);
   // Statut par (kid,date) : 'present' | 'absent'. Ancien enregistrement sans statut = présent.
@@ -1469,6 +1550,7 @@ async function viewChildren() {
       if (dejaFait.has(k.id)) return;               // mois déjà pré-encodé pour cet enfant
       days.forEach((day) => {
         if (day.date < KIDS_MIN_ISO) return;        // avant l'ouverture : aucun accueil
+        if (periodeJour(day.date)) return;          // stage ou fermeture : personne n'est attendu
         if (!isExpected(k, day.dow)) return;
         if (stat.get(k.id + '|' + day.date)) return; // déjà présent/absent → on ne touche pas
         toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
@@ -1488,16 +1570,22 @@ async function viewChildren() {
     }
   }
 
-  // Un enregistrement antérieur à l'ouverture ne compte nulle part.
-  const compte = (kidId, date) => (date >= KIDS_MIN_ISO && getSt(kidId, date) === 'present') ? 1 : 0;
+  // Un enregistrement antérieur à l'ouverture ne compte nulle part, ni un
+  // enregistrement résiduel un jour de stage ou de fermeture.
+  const compte = (kidId, date) => (date >= KIDS_MIN_ISO && !periodeJour(date)
+    && getSt(kidId, date) === 'present') ? 1 : 0;
   const kidPresentCount = (kid) => days.reduce((n, day) => n + compte(kid.id, day.date), 0);
-  const dayPresentCount = (day) => kids.reduce((n, k) => n + compte(k.id, day.date), 0);
+  const dayPresentCount = (day) => {
+    const per = periodeJour(day.date);
+    if (per) return per.type === 'stage' ? (effectif.get(day.date) || 0) : 0;
+    return kids.reduce((n, k) => n + compte(k.id, day.date), 0);
+  };
   const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
 
   // En-tête : numéro du jour au-dessus de son initiale. Le dimanche est mis en
   // évidence, c'est le repère qui permet de compter les semaines d'un coup d'œil.
   const headDays = days.map((day) =>
-    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}"><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
+    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}${classePeriode(periodeJour(day.date))}"${titrePeriode(periodeJour(day.date))}><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
 
   const cellHtml = (k, day) => {
     // Avant le premier jour d'accueil, la case est neutralisée : on ne peut rien
@@ -1505,6 +1593,10 @@ async function viewChildren() {
     if (day.date < KIDS_MIN_ISO) {
       return `<td class="daycell${day.weekend ? ' weekend' : ''}"><span class="presbtn pres-off"
         title="Aucun accueil avant le ${KIDS_MIN_LISIBLE}"></span></td>`;
+    }
+    const per = periodeJour(day.date);
+    if (per) {
+      return `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(per)}"><span class="presbtn pres-off"${titrePeriode(per)}></span></td>`;
     }
     const st = getSt(k.id, day.date);
     const expected = isExpected(k, day.dow);
@@ -1548,9 +1640,25 @@ async function viewChildren() {
   // et 31 colonnes, il faut pouvoir lire le total sans remonter jusqu'au pied.
   // Repérage par attribut (et non par id) puisque chaque total existe en double.
   const totalCells = () => days.map((day) =>
-    `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong data-daytot="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+    `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(periodeJour(day.date))}"><strong data-daytot="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
   const totalRow = `<tr class="totrow"><th scope="row" class="kidname">Total présents / jour</th>
     ${totalCells()}<td class="kidtot"><strong data-grandtot>${totalPresent}</strong></td></tr>`;
+  /* Ligne « Enfants au stage » : n'apparaît que si le mois compte un jour de
+   * stage. Un champ par jour de stage, encodé par l'équipe comme les présences. */
+  const joursStage = days.filter((day) => (periodeJour(day.date) || {}).type === 'stage');
+  const peutEncoder = !(anneeClose() && ME.role !== 'admin');
+  const ligneStage = joursStage.length ? `<tr class="stagerow">
+      <th scope="row" class="kidname">🏕️ Enfants au stage</th>
+      ${days.map((day) => {
+        const per = periodeJour(day.date);
+        if (!per || per.type !== 'stage') return `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(per)}"></td>`;
+        const v = effectif.has(day.date) ? effectif.get(day.date) : '';
+        return `<td class="daycell periode-stage"><input type="number" class="stagecnt" min="0" max="999" step="1" inputmode="numeric"
+          data-date="${day.date}" value="${v}" ${peutEncoder ? '' : 'disabled'}
+          aria-label="Nombre d'enfants au stage le ${day.d}/${pad(CUR.m)}" title="Nombre d'enfants présents au stage ce jour-là"/></td>`;
+      }).join('')}
+      <td class="kidtot"><strong id="stageTot">${joursStage.reduce((n, day) => n + (effectif.get(day.date) || 0), 0)}</strong></td>
+    </tr>` : '';
   const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="kd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
 
   const legende = `<span class="pres-leg"><span class="presbtn pres-p" aria-hidden="true">✓</span> Présent</span>
@@ -1560,11 +1668,14 @@ async function viewChildren() {
 
   const actionsEnfants = ME.role === 'admin'
     ? '<button class="small" id="listePdfBtn" title="Télécharge en PDF la liste des enfants inscrits, leur école et leurs jours habituels">📄 PDF — Liste des enfants et jours habituels</button>'
+      + ' <button class="small" id="perToggle" title="Déclarer un stage ou une fermeture (congé, jour férié)">🏕️ Stages et fermetures</button>'
       + ' <button id="kToggle" class="addkid">+ Ajouter un enfant</button>'
     : '';
   app.innerHTML = `${await toolbar(false, actionsEnfants)}
     <div class="card">
       <h2 style="margin:0 0 4px">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
+      ${periodesDuMoisHTML(periodes, debutMois, finMois)}
+      ${ME.role === 'admin' ? carteperiodesHTML(periodes) : ''}
       ${ME.role === 'admin' ? `
       <div class="card sub hidden" id="addKidCard">
         <div class="row" style="align-items:end">
@@ -1617,7 +1728,7 @@ async function viewChildren() {
           <tr><th scope="col" class="kidname">Enfant</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr>
           ${totalRow}
         </thead>
-        <tbody>${kidRows}</tbody>
+        <tbody>${ligneStage}${kidRows}</tbody>
         <tfoot>${totalRow}</tfoot>
       </table></div>
       <div class="legbar foot">
@@ -1643,6 +1754,38 @@ async function viewChildren() {
         ME.role === 'admin' ? ' La moyenne annuelle est dans l\'onglet 📈 Statistiques.' : ''}</p>
     </div>`;
   wireToolbar();
+
+  // Enfants au stage : enregistré à la sortie du champ (ou sur Entrée).
+  app.querySelectorAll('input.stagecnt').forEach((inp) => {
+    const enregistrer = async () => {
+      const date = inp.dataset.date;
+      const brut = inp.value.trim();
+      const avant = effectif.has(date) ? effectif.get(date) : null;
+      let n = null;
+      if (brut !== '') {
+        n = Number(brut);
+        if (!Number.isInteger(n) || n < 0 || n > 999) {
+          toast("Nombre d'enfants invalide (un entier de 0 à 999).", 'error');
+          inp.value = avant == null ? '' : avant; return;
+        }
+      }
+      if (n === avant) return;
+      if (n == null) effectif.delete(date); else effectif.set(date, n);
+      setTotal(`[data-daytot="${Number(date.slice(8))}"]`, n || 0);
+      setGrandTotal();
+      const st = document.getElementById('stageTot');
+      if (st) st.textContent = joursStage.reduce((s, day) => s + (effectif.get(day.date) || 0), 0);
+      try { await STORE.setStageEffectif(date, n); }
+      catch (e) {
+        if (avant == null) effectif.delete(date); else effectif.set(date, avant);
+        inp.value = avant == null ? '' : avant;
+        toast('Enregistrement impossible : ' + e.message, 'error');
+      }
+    };
+    inp.onchange = enregistrer;
+    inp.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); } };
+  });
+  brancherPeriodes();
 
   // Liste imprimable des enfants (administration seule).
   const listeBtn = document.getElementById('listePdfBtn');
@@ -1748,6 +1891,7 @@ async function viewChildren() {
     const absences = [];
     days.forEach((day) => {
       if (day.date < KIDS_MIN_ISO) return;
+      if (periodeJour(day.date)) return;   // stage ou fermeture : ni attendu, ni compté
       const kk = kids.find((x) => x.id === kidId);
       if (kk && isExpected(kk, day.dow)) c.attendus++;
       const st = getSt(kidId, day.date);
@@ -1805,7 +1949,7 @@ async function viewChildren() {
   // jour TOUTES les cellules portant le repère, pas seulement la première.
   const setTotal = (sel, valeur) => app.querySelectorAll(sel).forEach((el) => (el.textContent = valeur));
   const setGrandTotal = () => setTotal('[data-grandtot]',
-    days.reduce((s, day) => s + kids.reduce((n, k) => n + compte(k.id, day.date), 0), 0));
+    days.reduce((s, day) => s + dayPresentCount(day), 0));
   // Cellule à 3 états : présent (✓) → absent (✗) → vide. Mise à jour ciblée.
   // Écouteur unique délégué : le tableau compte jusqu'à ~1 100 cases, leur
   // attacher un gestionnaire chacune ralentissait l'ouverture de l'onglet.
@@ -2231,11 +2375,12 @@ async function viewStats() {
   const auj = todayISO();
   const debut = debutAnnee(ANNEE) > MIN_ISO ? debutAnnee(ANNEE) : MIN_ISO;
   const fin = finAnnee(ANNEE) < auj ? finAnnee(ANNEE) : auj;
-  const [all, kidsAll, attAnnee, prestationsAnnee] = await Promise.all([
+  const [all, kidsAll, attAnnee, prestationsAnnee, periodesStats] = await Promise.all([
     STORE.allChildrenEntre(debut, fin),
     estAdmin ? STORE.listKids(true) : Promise.resolve([]),
     estAdmin ? STORE.kidAttendanceEntre(debut, fin) : Promise.resolve([]),
     estAdmin ? STORE.allEntriesEntre(debut, fin) : Promise.resolve([]),
+    STORE.listPeriodes(),
   ]);
   // Rien avant le premier jour d'accueil : sinon des jours d'ouverture fictifs
   // (issus d'un pré-encodage antérieur) tireraient la moyenne vers le bas.
@@ -2274,7 +2419,11 @@ async function viewStats() {
   let crit = null;
   if (ME.role === 'admin') {
   const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
-  const att = attAnnee.filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO);
+  /* Les jours de stage ou de fermeture sont écartés : la grille habituelle y est
+   * suspendue, et les enfants d'un stage, sans fiche, n'ont pas d'âge connu —
+   * ils comptent dans les totaux, pas dans ce critère d'âge. */
+  const att = attAnnee.filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO
+    && !Util.periodeDu(periodesStats, a.entry_date));
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
   const byDay = {};
   att.forEach((a) => {

@@ -1941,3 +1941,125 @@ test('bénévoles : une employée encode les présences mais ne modifie aucune f
   await expect(page.locator('[data-archben]')).toHaveCount(0);
   await expect(page.locator('#app .msg')).toContainText('administration');
 });
+
+/* ================================================================
+ * Stages et fermetures
+ * Le pre-encodage marquait « present » tous les enfants a leurs jours habituels,
+ * conges et jours feries compris (mesure : 3 enfants « presents » le 11 novembre).
+ * Une periode suspend la grille habituelle ; un stage compte un NOMBRE par jour.
+ * ================================================================ */
+async function joursHabituelsLundiJeudi(page) {
+  await page.evaluate(async () => {
+    for (const k of await STORE.listKids()) await STORE.setKidInfo(k.id, { ...k, days: [1, 2, 3, 4] });
+  });
+}
+async function allerEnNovembre(page) {
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+  await page.locator('#nextM').click();
+  await page.locator('#nextM').click();
+  await expect(page.locator('.toolbar strong').first()).toHaveText(/novembre 2026/i);
+}
+
+test('fermeture : un jour férié déclaré n’est plus pré-encodé ni compté', async ({ page }) => {
+  await loginAdmin(page);
+  await joursHabituelsLundiJeudi(page);
+  // Déclarée par l'interface, comme le fera l'administration.
+  await page.locator('.navbtn[data-v="children"]').click();
+  await page.locator('#perToggle').click();
+  await page.locator('#perType').selectOption('fermeture');
+  await page.locator('#perDebut').fill('2026-11-11');
+  await page.locator('#perFin').fill('2026-11-11');
+  await page.locator('#perIntitule').fill('Armistice');
+  await page.locator('#perAdd').click();
+  await expect(page.locator('#toast')).toContainText('Période enregistrée');
+
+  await allerEnNovembre(page);
+  const r = await page.evaluate(async () => {
+    const att = await STORE.kidAttendanceForMonth(2026, 11);
+    const n = (d) => att.filter((a) => a.entry_date === d).length;
+    return { mer11: n('2026-11-11'), mer18: n('2026-11-18') };
+  });
+  expect(r.mer11).toBe(0);    // le jour férié n'est pas pré-encodé
+  expect(r.mer18).toBe(3);    // un mercredi ordinaire l'est toujours
+  await expect(page.locator('[data-daytot="11"]').first()).toHaveText('0');
+  await expect(page.locator('[data-daytot="18"]').first()).toHaveText('3');
+  await expect(page.locator('button.presbtn[data-date="2026-11-11"]')).toHaveCount(0);   // cases neutralisées
+  await expect(page.locator('.periodes-mois')).toContainText('Fermé — Armistice');
+});
+
+test('stage : un nombre par jour remplace la grille, et revient après suppression', async ({ page }) => {
+  await loginAdmin(page);
+  await joursHabituelsLundiJeudi(page);
+  // Novembre pré-encodé AVANT la déclaration du stage : ces présences existent déjà.
+  await allerEnNovembre(page);
+  await expect(page.locator('[data-daytot="2"]').first()).toHaveText('3');
+  await page.evaluate(() => STORE.savePeriode({ type: 'stage', debut: '2026-11-02', fin: '2026-11-06', intitule: "Stage d'automne" }));
+  await page.locator('#prevM').click(); await page.locator('#nextM').click();
+  await expect(page.locator('tr.stagerow')).toBeVisible();
+  // Les présences déjà encodées sont ignorées, pas effacées.
+  await expect(page.locator('[data-daytot="2"]').first()).toHaveText('0');
+  const champ = page.locator('input.stagecnt[data-date="2026-11-02"]');
+  await champ.fill('12'); await champ.press('Enter');
+  await expect(page.locator('[data-daytot="2"]').first()).toHaveText('12');
+  await expect(page.locator('#stageTot')).toHaveText('12');
+  const stats = await page.evaluate(async () => (await STORE.allChildrenEntre('2026-11-01', '2026-11-30'))
+    .filter((x) => x.entry_date <= '2026-11-06'));
+  expect(stats).toEqual([{ entry_date: '2026-11-02', children: 12 }]);
+  // Le nombre est bien enregistré (survit à un nouvel affichage).
+  await page.locator('#prevM').click(); await page.locator('#nextM').click();
+  await expect(page.locator('input.stagecnt[data-date="2026-11-02"]')).toHaveValue('12');
+  // Suppression de la période : la grille habituelle et ses présences reviennent.
+  page.on('dialog', (d) => d.accept());
+  await page.locator('#perToggle').click();
+  await page.locator('[data-delper]').first().click();
+  await expect(page.locator('#toast')).toContainText('Période supprimée');
+  await expect(page.locator('tr.stagerow')).toHaveCount(0);
+  await expect(page.locator('[data-daytot="2"]').first()).toHaveText('3');
+});
+
+test('stage : une employée encode le nombre, mais ne déclare pas de période', async ({ page }) => {
+  await page.goto('/index.html');
+  await page.evaluate(async () => {
+    await new DemoStore().savePeriode({ type: 'stage', debut: '2026-09-21', fin: '2026-09-25', intitule: 'Stage' });
+  });
+  await loginEmployee(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('tr.stagerow')).toBeVisible();
+  await expect(page.locator('#perToggle')).toHaveCount(0);
+  await expect(page.locator('#perCard')).toHaveCount(0);
+  const champ = page.locator('input.stagecnt[data-date="2026-09-22"]');
+  await champ.fill('8'); await champ.press('Enter');
+  await expect(page.locator('[data-daytot="22"]').first()).toHaveText('8');
+});
+
+test('périodes : une déclaration incohérente est refusée avec un message clair', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await page.locator('#perToggle').click();
+  await page.locator('#perDebut').fill('2026-11-10');
+  await page.locator('#perFin').fill('2026-11-05');
+  await page.locator('#perAdd').click();
+  await expect(page.locator('#toast')).toContainText('La date de fin précède la date de début');
+  const n = await page.evaluate(async () => (await STORE.listPeriodes()).length);
+  expect(n).toBe(0);
+});
+
+/* Tant que les regles Firestore des deux nouvelles collections ne sont pas
+ * publiees, toute lecture est refusee : l'onglet Enfants ne doit pas tomber. */
+test('périodes : avant publication des règles Firestore, rien ne casse', async ({ page }) => {
+  await page.goto('/index.html');
+  const r = await page.evaluate(async () => {
+    const refus = () => Promise.reject(Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }));
+    const requete = { where() { return requete; }, get: refus };
+    const db = { collection: () => ({ get: refus, where: () => requete }) };
+    const store = new FirebaseStore({ auth: () => ({ setPersistence: async () => {}, onAuthStateChanged: () => () => {} }),
+      firestore: () => db });
+    const periodes = await store.listPeriodes();
+    const effectifs = await store.stageEffectifsEntre('2026-11-01', '2026-11-30');
+    return { periodes, effectifs, signal: store.periodesIndisponibles };
+  });
+  expect(r.periodes).toEqual([]);
+  expect(r.effectifs).toEqual([]);
+  expect(r.signal).toBe(true);
+});
