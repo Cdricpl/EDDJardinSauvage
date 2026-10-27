@@ -1702,7 +1702,7 @@ test('bibliothèques : hébergées avec l’application, versions figées dans l
 /* Le chemin REEL des PDF n'etait jamais teste : la suite coupait le CDN. Les
  * bibliotheques etant desormais servies par l'application, chaque export doit
  * produire un vrai fichier PDF. */
-test('exports : les six PDF sortent pour de vrai', async ({ page }) => {
+test('exports : les sept PDF sortent pour de vrai', async ({ page }) => {
   await loginAdmin(page);
   const exports = [
     ['sheet', '#pdfBtn', /^prestations_.+\.pdf$/],
@@ -1711,6 +1711,7 @@ test('exports : les six PDF sortent pour de vrai', async ({ page }) => {
     ['children', 'fiche', /^fiche_.+\.pdf$/],
     ['stats', '#statsPdfBtn', /^statistiques_.+\.pdf$/],
     ['children', '#onePdfBtn', /^presences_ONE_\d{4}-\d{2}\.pdf$/],
+    ['benevoles', '#benPdfBtn', /^presences_benevoles_\d{4}-\d{2}\.pdf$/],
   ];
   for (const [vue, bouton, nom] of exports) {
     await page.locator(`.navbtn[data-v="${vue}"]`).click();
@@ -2108,4 +2109,83 @@ test('ONE : le PDF du mois donne un nombre par jour, sans aucun nom', async ({ p
   // Aucun nom d'enfant nulle part dans le document.
   const tout = JSON.stringify(pdf);
   for (const n of noms.filter(Boolean)) expect(tout).not.toContain(n);
+});
+
+/* PDF du mois des benevoles : une ligne par benevole, puis le nombre de benevoles
+ * presents chaque jour, et un bilan. */
+test('bénévoles : le PDF du mois reprend chaque bénévole et chaque jour', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="benevoles"]').click();
+  await expect(page.locator('#benPdfBtn')).toContainText('Présences des bénévoles, septembre 2026');
+  // Une absence saisie : Alice (mardis) absente le 8.
+  await page.evaluate(() => STORE.setBenevoleAttendance('b1', '2026-09-08', 'absent'));
+  await page.locator('.navbtn[data-v="children"]').click();
+  await page.locator('.navbtn[data-v="benevoles"]').click();
+  await page.evaluate(() => {
+    window.__pdf = { tables: [], nom: null };
+    class FauxDoc {
+      constructor() { this.lastAutoTable = { finalY: 60 }; }
+      addImage() {} setFontSize() {} setTextColor() {} text() {}
+      autoTable(o) { window.__pdf.tables.push({ head: o.head, body: o.body }); }
+      save(n) { window.__pdf.nom = n; }
+    }
+    window.jspdf = { jsPDF: FauxDoc };
+  });
+  await page.locator('#benPdfBtn').click();
+  await expect.poll(() => page.evaluate(() => window.__pdf.nom)).toBe('presences_benevoles_2026-09.pdf');
+  const pdf = await page.evaluate(() => window.__pdf);
+  const parNom = Object.fromEntries(pdf.tables[0].body.map((l) => [l[0], l]));
+  expect(parNom['DUPUIS Alice']).toEqual(['DUPUIS Alice', '01, 15, 22, 29', '4', '1']);
+  expect(parNom['SIMON Marc']).toEqual(['SIMON Marc', '03, 10, 17, 24', '4', '0']);
+  expect(pdf.tables[1].body.length).toBe(8);                       // 8 jours avec un bénévole
+  expect(pdf.tables[2].body[0]).toEqual(['Total des présences du mois', '8']);
+});
+
+/* Les semaines de stage comptent dans les statistiques, critere d'agrement
+ * « 6 a 15 ans » compris (enfants sans fiche : comptes par defaut). */
+test('statistiques : les jours de stage comptent, critère des 6-15 ans compris', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="stats"]').click();
+  const critere = page.locator('table tbody tr', { hasText: '6 à 15 ans' });
+  const avant = parseFloat(await critere.locator('td').nth(1).innerText());
+  await page.evaluate(async () => {
+    await STORE.savePeriode({ type: 'stage', debut: '2026-09-07', fin: '2026-09-08', intitule: 'Stage' });
+    await STORE.setStageEffectif('2026-09-07', 30);
+    await STORE.setStageEffectif('2026-09-08', 30);
+  });
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await page.locator('.navbtn[data-v="stats"]').click();
+  await expect(critere).toContainText('dont 2 jour(s) de stage');
+  const apres = parseFloat(await critere.locator('td').nth(1).innerText());
+  expect(apres).toBeGreaterThan(avant);
+  // Et la moyenne générale aussi.
+  await expect(page.locator('.hero-stat')).toContainText(/\d+ enfants encodés/);
+  const total = await page.evaluate(async () => (await STORE.allChildrenEntre('2026-09-07', '2026-09-08'))
+    .reduce((s, x) => s + x.children, 0));
+  expect(total).toBe(60);
+});
+
+/* Une semaine ne compte comme ouverte que si des enfants etaient la : l'equipe
+ * peut etre a l'EDD sans aucun enfant (reunion, preparation). */
+test('statistiques : une semaine sans enfants ne compte pas comme ouverte', async ({ page }) => {
+  await loginAdmin(page);
+  const semaines = async () => {
+    await page.locator('.navbtn[data-v="sheet"]').click();
+    await page.locator('.navbtn[data-v="stats"]').click();
+    const c = page.locator('table tbody tr', { hasText: 'Ouvert' });
+    await expect(c).toContainText('seuls comptent les jours où des enfants étaient présents');
+    return parseInt(await c.locator('td').nth(1).innerText(), 10);
+  };
+  const avant = await semaines();
+  // Les travailleuses ont presté la semaine du 31/08 (données de démonstration) ;
+  // on retire tous les enfants de cette semaine-là.
+  const prestees = await page.evaluate(async () => {
+    const jours = ['2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04'];
+    const att = await STORE.kidAttendanceEntre('2026-08-31', '2026-09-04');
+    await STORE.setKidAttendances(att.map((a) => ({ kid_id: a.kid_id, entry_date: a.entry_date, status: null })));
+    const ent = await STORE.allEntriesEntre('2026-08-31', '2026-09-04');
+    return ent.reduce((s, e) => s + effectiveWorked(e), 0) >= 120 && jours.length;
+  });
+  expect(prestees, 'il faut des heures prestées cette semaine-là').toBeTruthy();
+  expect(await semaines()).toBe(avant - 1);
 });
