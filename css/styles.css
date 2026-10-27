@@ -261,6 +261,19 @@ button.kidnom:focus-visible { outline:2px solid var(--primary); outline-offset:2
 .attend .daycol .dini { color:var(--muted); font-weight:400; }
 .attend .daycol.dim .dnum, .attend .daycol.dim .dini { color:var(--red); }  /* dimanche = repère de semaine */
 .attend .daycell { width:30px; padding:4px 1px; }
+/* REPÈRES DE SEMAINE. Les 31 colonnes se ressemblaient toutes : rien ne
+   séparait une semaine de la suivante. Un trait épais avant chaque lundi forme
+   des blocs d'une semaine, et le week-end — EDD fermée, sauf grande exception —
+   est mis en retrait : colonnes étroites et grisées, cases atténuées mais
+   toujours cliquables. */
+.attend th.lundi, .attend td.lundi { border-left:2px solid #8b7a66; }
+.attend .daycol.weekend, .attend .daycell.weekend { width:18px; background:#efe9df; }
+.attend .daycol.weekend .dnum, .attend .daycol.weekend .dini { font-size:11px; color:#a39683; }
+.attend .daycol.weekend.dim .dnum, .attend .daycol.weekend.dim .dini { color:#c98f86; }
+.attend .daycell.weekend .presbtn { width:16px; height:16px; font-size:10px; opacity:.6; }
+.attend .daycell.weekend .presbtn:hover { opacity:1; }
+.attend .daycell.weekend .presbtn.pres-v, .attend .daycell.weekend .presbtn.pres-exp { border:1px dashed #c9b9a4; background:transparent; }
+.attend .daycell.weekend strong { color:#a39683; font-weight:600; }
 .attend .kidtot { background:#faf5ec; width:42px; min-width:42px; border-left:1px solid var(--border); }
 .attend tfoot td { background:#f2ead9; font-weight:700; }
 
