@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.15-1';
+const APP_VERSION = 'v2026.10.27-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -383,19 +383,23 @@ async function backupJSON() {
  * On les télécharge donc au moment où elles servent réellement.
  *
  * Les replis existants (« Graphique indisponible », impression navigateur)
- * restent en place et prennent le relais si le téléchargement échoue —
- * typiquement hors ligne : le comportement est alors exactement celui d'avant.
+ * restent en place et prennent le relais si le chargement échoue malgré tout.
  * ================================================================ */
-/* Versions FIGÉES à l'unité près. `chart.js@4` suivait toutes les versions 4.x à
- * venir : le graphique des statistiques pouvait se casser un matin sans qu'aucun
- * déploiement n'ait eu lieu ici, donc sans que le numéro de version affiché le
- * laisse deviner. 4.5.1 est la version que le CDN servait déjà (relevée dans le
- * navigateur avec `Chart.version`) : rien ne change aujourd'hui, on empêche
- * seulement le changement de demain. La forme de l'adresse est inchangée. */
+/* Bibliothèques HÉBERGÉES AVEC L'APPLICATION (dossier js/vendor), et non plus
+ * demandées à un CDN au moment du clic. Mesuré en octobre : quand
+ * cdn.jsdelivr.net était bloqué (filtre réseau, bloqueur de publicité) AUCUN
+ * PDF ne sortait, 5 fois sur 5 ; quand il était lent, le PDF arrivait après
+ * 12 s, hors de l'activation utilisateur, et Chrome le classait en
+ * téléchargement « automatique » — le suivant déclenchait « Ce site tente de
+ * télécharger plusieurs fichiers », et un refus bloquait ensuite tout en silence.
+ * Mêmes bibliothèques, mêmes versions qu'avant (licence MIT), fichiers copiés tels
+ * que publiés : seule l'adresse change. La version figure dans le NOM du fichier :
+ * le service worker sert ces fichiers « cache d'abord » sur leur adresse exacte,
+ * une montée de version doit donc changer l'adresse. */
 const CDN = {
-  chart:     'https://cdn.jsdelivr.net/npm/chart.js@4.5.1',
-  jspdf:     'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
-  autotable: 'https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js',
+  chart:     'js/vendor/chart-4.5.1.umd.min.js',
+  jspdf:     'js/vendor/jspdf-2.5.1.umd.min.js',
+  autotable: 'js/vendor/jspdf.plugin.autotable-3.8.2.min.js',
 };
 // On mémorise la PROMESSE : deux clics rapprochés ne téléchargent qu'une fois.
 const SCRIPTS = new Map();
@@ -434,6 +438,31 @@ async function avecBarre(travail) {
   if (bar) bar.classList.add('on');
   try { return await travail(); }
   finally { if (bar) bar.classList.remove('on'); }
+}
+/* Repli d'impression quand jsPDF reste indisponible. Il ouvrait une NOUVELLE
+ * FENÊTRE après un `await` : hors de l'activation utilisateur, Chrome la bloquait
+ * comme pop-up (« Impression bloquée par le navigateur »). On écrit désormais le
+ * document dans un cadre invisible de la page et on lance l'impression de ce
+ * cadre : aucun bloqueur de fenêtres surgissantes ne s'en mêle. */
+function feuilleImpression() {
+  const cadre = document.createElement('iframe');
+  cadre.setAttribute('aria-hidden', 'true');
+  cadre.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(cadre);
+  const d = cadre.contentWindow.document;
+  d.open();
+  return {
+    document: d,
+    async imprimer() {
+      d.close();
+      // Le logo doit être chargé, sinon il manque sur la page imprimée.
+      await Promise.all([...d.images].map((i) => (i.complete ? null
+        : new Promise((ok) => { i.onload = i.onerror = ok; }))));
+      cadre.contentWindow.focus();
+      cadre.contentWindow.print();
+      setTimeout(() => cadre.remove(), 60000);   // laissé le temps de la boîte d'impression
+    },
+  };
 }
 
 /* Relit l'année scolaire ouverte (réglage partagé). Par défaut : la première. */
@@ -2317,10 +2346,16 @@ async function viewStats() {
     </div>`;
   wireToolbar();
 
+  /* Bouton branché DÈS LE RENDU. Il ne l'était qu'une fois la bibliothèque des
+   * graphiques chargée : pendant ce chargement, un clic sur l'export ne faisait
+   * rien, sans aucun message (mesuré). Le PDF part maintenant tout de suite,
+   * avec le graphique s'il est prêt, sans lui sinon. */
+  let graphique = null;
+  document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, graphique)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+
   if (!(await assurerChart())) {
     const c = document.getElementById('chartMonthly');
-    if (c) c.replaceWith(Object.assign(document.createElement('p'), { className: 'muted small', textContent: 'Graphique indisponible hors ligne — voir le tableau ci-dessous.' }));
-    document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, null)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+    if (c) c.replaceWith(Object.assign(document.createElement('p'), { className: 'muted small', textContent: 'Graphique indisponible — voir le tableau ci-dessous.' }));
     return;
   }
   if (CHART) { try { CHART.destroy(); } catch {} }   // libère le graphique précédent (évite une fuite mémoire)
@@ -2329,8 +2364,7 @@ async function viewStats() {
     data: { labels: months.map((m) => m.short), datasets: [{ label: 'Moyenne/jour', data: months.map((m) => +m.avg.toFixed(1)), backgroundColor: '#2f9e44' }] },
     options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
-  const chartMonthly = CHART;
-  document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, chartMonthly)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+  graphique = CHART;
 }
 
 /* Effacement DÉFINITIF d'un enfant — procédure unique, utilisée depuis sa fiche
@@ -2387,15 +2421,14 @@ async function exportFichePDF(k, c, absences) {
     : [['—', 'Aucune absence ce mois-ci']];
 
   if (!(await assurerPdf())) {           // repli impression, comme les autres exports
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     const tab = (t, l) => `<h3>${t}</h3><table border=1 cellpadding=5 style="border-collapse:collapse">`
       + l.map((r) => '<tr>' + r.map((c2) => `<td>${echapper(c2)}</td>`).join('') + '</tr>').join('') + '</table>';
     w.document.write(`<img src="assets/logo.svg" style="height:60px">
       <h2>${echapper(titre)} — ${echapper(sousTitre)}</h2>
       ${tab('Fiche', infos)}${tab('Bilan du mois', bilan)}${tab('Détail des absences', detail)}
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
@@ -2443,8 +2476,7 @@ async function exportListeEnfantsPDF(kids) {
   const entetes = ['Enfant', 'Année', 'École', 'Naissance', 'Jours habituels'];
 
   if (!(await assurerPdf())) {           // repli impression, comme les autres exports
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     const tab = (t, e, l) => `<h3>${echapper(t)}</h3><table border=1 cellpadding=5 style="border-collapse:collapse">`
       + `<tr>${e.map((h) => `<th>${echapper(h)}</th>`).join('')}</tr>`
       + l.map((r) => '<tr>' + r.map((c) => `<td>${echapper(c)}</td>`).join('') + '</tr>').join('') + '</table>';
@@ -2453,8 +2485,8 @@ async function exportListeEnfantsPDF(kids) {
       ${tab('Enfants inscrits', entetes, corps)}
       ${parJour.length ? tab('Effectif attendu par jour', ['Jour', 'Enfants attendus'], parJour) : ''}
       <p>Seuls les enfants actifs figurent dans cette liste.</p>
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
 
   const { jsPDF } = window.jspdf;
@@ -2509,8 +2541,7 @@ async function exportStatsPDF(stats, chartMonthly) {
 
   // Repli impression si jsPDF reste indisponible (hors ligne).
   if (!(await assurerPdf())) {
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     const tableau = (entetes, lignes) =>
       `<table border=1 cellpadding=5 style="border-collapse:collapse">
         <tr>${entetes.map((h) => `<th>${h}</th>`).join('')}</tr>
@@ -2527,8 +2558,8 @@ async function exportStatsPDF(stats, chartMonthly) {
         stats.crit.map((c) => [c.label, c.val + (c.note ? ' — ' + c.note : ''), c.ok ? 'atteint' : 'non atteint']))}` : ''}
       ${chartMonthly ? `<h3>Moyenne d'enfants par jour, mois par mois</h3><img src="${chartMonthly.toBase64Image()}" style="max-width:100%"/>` : ''}
       <h3>Détail mensuel</h3>${tableau(['Mois', 'Moyenne / jour', 'Total', 'Jours'], lignesMois)}
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
 
   const { jsPDF } = window.jspdf;
@@ -3110,13 +3141,12 @@ async function exportRecapPDF(data) {
   ]);
 
   if (!(await assurerPdf())) { // repli impression
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${title} — ${sub}</h2>
       <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Employée</th><th>Prévu</th><th>Presté</th><th>Écart</th><th>Reporté</th><th>Cumulé</th><th>Statut</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
@@ -3152,14 +3182,13 @@ async function exportSheetPDF(empId) {
   }
 
   if (!(await assurerPdf())) { // repli impression
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Prestations — ${prof.full_name} — ${monthName(CUR.y, CUR.m)}</h2>
       <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>Prévu début</th><th>Prévu fin</th><th>Réel début</th><th>Réel fin</th><th>Midi</th><th>Presté</th><th>Écart</th><th>Justif.</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
       <p><b>Total presté:</b> ${fmtHM(sum.worked)} — <b>Solde cumulé:</b> ${fmtHM(sum.closing)}</p>
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();

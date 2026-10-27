@@ -47,7 +47,7 @@ présences des enfants, statistiques pour le dossier d'agrément.
 
 ```bash
 cd tests && npx playwright test          # 64 tests end-to-end, mode démo
-PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-1194/chrome-linux/chrome npx playwright test
+PW_CHROMIUM_PATH=$(ls -d /opt/pw-browsers/chromium-*/chrome-linux*/chrome | tail -1) npx playwright test   # le n° de Chromium change avec l'image
 ```
 
 CI GitHub Actions : `.github/workflows/ci.yml` rejoue la suite à chaque push.

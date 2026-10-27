@@ -1681,17 +1681,85 @@ test('accès : un compte authentifié sans fiche est refusé, pas provisionné',
   expect(ecran.shell).toBe('none');
 });
 
-/* `chart.js@4` suivait toutes les versions 4.x à venir : le graphique pouvait se
- * casser sans aucun déploiement de notre côté. Toute adresse de CDN doit porter
- * une version exacte — c'est ce que ce test empêche de perdre. */
-test('bibliothèques externes : les versions du CDN sont figées à l’unité près', async ({ page }) => {
+/* Les bibliotheques sont HEBERGEES avec l'application (js/vendor) : un CDN
+ * bloque ou lent empechait tout PDF (mesure d'octobre). Ce test empeche de
+ * revenir a une adresse exterieure, et garde la version exacte dans le nom du
+ * fichier — le service worker sert ces fichiers sur leur adresse exacte. */
+test('bibliothèques : hébergées avec l’application, versions figées dans le nom', async ({ page }) => {
   const source = await (await page.request.get('/js/app.js')).text();
-  const urls = source.match(/https:\/\/cdn\.jsdelivr\.net\/npm\/[^']+/g) || [];
-  expect(urls.length).toBeGreaterThan(0);
-  for (const u of urls) {
-    expect(u, `version non figée : ${u}`).toMatch(/@\d+\.\d+\.\d+(\/|$)/);
+  expect(source).not.toMatch(/https:\/\/cdn\.jsdelivr\.net\/npm\//);
+  const urls = source.match(/'js\/vendor\/[^']+'/g) || [];
+  expect(urls.length).toBe(3);
+  for (const u of urls.map((x) => x.slice(1, -1))) {
+    expect(u, `version non figée : ${u}`).toMatch(/-\d+\.\d+\.\d+\./);
+    const r = await page.request.get('/' + u);
+    expect(r.status(), `fichier absent : ${u}`).toBe(200);
   }
-  expect(urls.some((u) => u.includes('chart.js@4.5.1'))).toBe(true);
+  expect(urls.some((u) => u.includes('chart-4.5.1'))).toBe(true);
+  expect(urls.some((u) => u.includes('jspdf-2.5.1'))).toBe(true);
+});
+
+/* Le chemin REEL des PDF n'etait jamais teste : la suite coupait le CDN. Les
+ * bibliotheques etant desormais servies par l'application, chaque export doit
+ * produire un vrai fichier PDF. */
+test('exports : les cinq PDF sortent pour de vrai', async ({ page }) => {
+  await loginAdmin(page);
+  const exports = [
+    ['sheet', '#pdfBtn', /^prestations_.+\.pdf$/],
+    ['recap', '#recapPdfBtn', /^recapitulatif_\d{4}-\d{2}\.pdf$/],
+    ['children', '#listePdfBtn', /^liste_enfants_.+\.pdf$/],
+    ['children', 'fiche', /^fiche_.+\.pdf$/],
+    ['stats', '#statsPdfBtn', /^statistiques_.+\.pdf$/],
+  ];
+  for (const [vue, bouton, nom] of exports) {
+    await page.locator(`.navbtn[data-v="${vue}"]`).click();
+    let sel = bouton;
+    if (bouton === 'fiche') { await page.locator('[data-fiche]').first().click(); sel = '#fichePdf'; }
+    await expect(page.locator(sel)).toBeVisible();
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.locator(sel).click()]);
+    expect(dl.suggestedFilename()).toMatch(nom);
+    const debut = require('fs').readFileSync(await dl.path()).subarray(0, 5).toString('latin1');
+    expect(debut, `${sel} : ce n'est pas un PDF`).toBe('%PDF-');
+  }
+});
+
+/* Le bouton des statistiques n'etait branche qu'une fois les graphiques charges :
+ * pendant ce temps, un clic ne faisait rien, sans message. */
+test('statistiques : l’export PDF répond même pendant le chargement du graphique', async ({ page }) => {
+  let relacher;
+  const bloque = new Promise((ok) => { relacher = ok; });
+  await page.route(/\/js\/vendor\/chart-/, async (route) => { await bloque; await route.continue(); });
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="stats"]').click();
+  await expect(page.locator('#statsPdfBtn')).toBeVisible();
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#statsPdfBtn').click()]);
+  expect(dl.suggestedFilename()).toMatch(/^statistiques_/);
+  relacher();
+});
+
+/* Repli quand jsPDF reste introuvable : il ouvrait une fenetre surgissante apres
+ * un `await`, que Chrome bloquait. Il imprime maintenant depuis un cadre de la
+ * page : aucune fenetre ne s'ouvre. */
+test('exports : sans jsPDF, le repli imprime sans fenêtre surgissante', async ({ page }) => {
+  await page.route(/\/js\/vendor\/jspdf/, (route) => route.abort());
+  await loginAdmin(page);
+  await page.evaluate(() => { window.__imprime = 0; });
+  let fenetres = 0;
+  page.on('popup', () => { fenetres++; });
+  await page.locator('.navbtn[data-v="recap"]').click();
+  // On intercepte l'impression du cadre (la vraie boite d'impression bloquerait le test).
+  await page.evaluate(() => {
+    const ajout = Node.prototype.appendChild;
+    Node.prototype.appendChild = function (n) {
+      const r = ajout.call(this, n);
+      if (n.tagName === 'IFRAME') n.contentWindow.print = () => { window.__imprime++; };
+      return r;
+    };
+  });
+  await page.locator('#recapPdfBtn').click();
+  await expect.poll(() => page.evaluate(() => window.__imprime)).toBe(1);
+  expect(fenetres).toBe(0);
+  await expect(page.locator('#toast')).not.toContainText('bloquée');
 });
 
 /* Le pré-remplissage écrit le mois entier : un mois à venir s'affichait
