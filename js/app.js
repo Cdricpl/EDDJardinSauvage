@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-1';
+const APP_VERSION = 'v2026.10.27-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -367,8 +367,9 @@ const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${pad(
 async function backupJSON() {
   try {
     const data = await STORE.exportAll();
-    downloadFile(`edd-sauvegarde_${todayISO()}.json`, JSON.stringify(data, null, 2), 'application/json');
-    toast('Sauvegarde JSON téléchargée');
+    const nom = `edd-sauvegarde_${todayISO()}.json`;
+    downloadFile(nom, JSON.stringify(data, null, 2), 'application/json');
+    toast(`Sauvegarde téléchargée : ${nom} (dossier Téléchargements)`);
   } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
 }
 
@@ -438,6 +439,13 @@ async function avecBarre(travail) {
   if (bar) bar.classList.add('on');
   try { return await travail(); }
   finally { if (bar) bar.classList.remove('on'); }
+}
+/* Enregistre le PDF et DIT ce qui vient d'être téléchargé : les boutons
+ * s'appelaient tous « Export PDF », et rien n'indiquait ensuite quel fichier
+ * était arrivé, ni où. */
+function enregistrerPdf(doc, nom) {
+  doc.save(nom);
+  toast(`PDF téléchargé : ${nom} (dossier Téléchargements)`);
 }
 /* Repli d'impression quand jsPDF reste indisponible. Il ouvrait une NOUVELLE
  * FENÊTRE après un `await` : hors de l'activation utilisateur, Chrome la bloquait
@@ -1043,7 +1051,7 @@ async function viewSheet() {
     <div class="card">
       <div class="row-between">
         <h2 style="margin:0">Feuille mensuelle ${statusBadge}</h2>
-        <div>${adminControls} <button class="small" id="pdfBtn">🖨️ Export PDF</button></div>
+        <div>${adminControls} <button class="small" id="pdfBtn" title="Télécharge en PDF la feuille de prestations de ${echapper((editableProf && editableProf.full_name) || '')} pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Prestations de ${echapper((editableProf && editableProf.full_name) || '')}, ${monthName(CUR.y, CUR.m)}</button></div>
       </div>
       <div class="msg error" id="warnBanner" ${warnings ? '' : 'style="display:none"'}>${warnings} jour(s) avec un écart non justifié.</div>
       ${!monthEditable && empId === ME.id && ME.role === 'employee'
@@ -1396,7 +1404,7 @@ async function viewRecap() {
       <td class="${s.closing >= 0 ? 'pos' : 'neg'}"><strong>${fmtDelta(s.closing)}</strong></td>
       <td>${{ open: 'En cours', validated: '✓ Validé' }[mo.status] || 'En cours'}</td>
     </tr>`).join('');
-  const pdfBtn = ME.role === 'admin' ? '<button class="small" id="recapPdfBtn">🖨️ Export PDF récap</button>' : '';
+  const pdfBtn = ME.role === 'admin' ? `<button class="small" id="recapPdfBtn" title="Télécharge en PDF le récapitulatif des heures de toutes les employées pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Récapitulatif des heures, ${monthName(CUR.y, CUR.m)}</button>` : '';
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <div class="row-between"><h2 style="margin:0">Récapitulatif — ${monthName(CUR.y, CUR.m)}</h2>${pdfBtn}</div>
@@ -1551,7 +1559,7 @@ async function viewChildren() {
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
   const actionsEnfants = ME.role === 'admin'
-    ? '<button class="small" id="listePdfBtn" title="Télécharger la liste des enfants et leurs jours habituels">🖨️ Liste PDF</button>'
+    ? '<button class="small" id="listePdfBtn" title="Télécharge en PDF la liste des enfants inscrits, leur école et leurs jours habituels">📄 PDF — Liste des enfants et jours habituels</button>'
       + ' <button id="kToggle" class="addkid">+ Ajouter un enfant</button>'
     : '';
   app.innerHTML = `${await toolbar(false, actionsEnfants)}
@@ -1760,7 +1768,7 @@ async function viewChildren() {
       <div class="row-between">
         <h3 style="margin:0">📄 ${echapper(kidLabel(k))} — ${monthName(CUR.y, CUR.m)}</h3>
         <div style="display:flex; gap:8px">
-          <button class="small" id="fichePdf">🖨️ Export PDF</button>
+          <button class="small" id="fichePdf" title="Télécharge en PDF la fiche de présence de ${echapper(kidLabel(k))} pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Fiche de présence, ${monthName(CUR.y, CUR.m)}</button>
           <button class="small gray" id="ficheClose">Fermer</button>
         </div>
       </div>
@@ -2316,7 +2324,7 @@ async function viewStats() {
     <div class="card">
       <div class="row-between">
         <h2 style="margin:0">📈 Statistiques — année scolaire ${libelleAnnee(ANNEE)}</h2>
-        <button class="small" id="statsPdfBtn">🖨️ Export PDF</button>
+        <button class="small" id="statsPdfBtn" title="Télécharge en PDF les statistiques de fréquentation et les critères d'agrément de l'année ${libelleAnnee(ANNEE)}">📄 PDF — Statistiques ${libelleAnnee(ANNEE)}</button>
       </div>
       <div class="hero-stat">
         <div class="big">${dailyYear.toFixed(1)}</div>
@@ -2441,7 +2449,7 @@ async function exportFichePDF(k, c, absences) {
   bloc(["Fiche de l'enfant", ''], infos);
   bloc(['Bilan du mois', 'Nombre'], bilan);
   bloc(['Détail des absences', 'Motif'], detail);
-  doc.save(`fiche_${(kidLabel(k) || 'enfant').replace(/[^\w-]+/g, '-')}_${CUR.y}-${pad(CUR.m)}.pdf`);
+  enregistrerPdf(doc, `fiche_${(kidLabel(k) || 'enfant').replace(/[^\w-]+/g, '-')}_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
 /* ---------------- Export PDF : liste des enfants et jours habituels ----------------
@@ -2520,7 +2528,7 @@ async function exportListeEnfantsPDF(kids) {
   }
   doc.setFontSize(9); doc.setTextColor(110);
   doc.text(pourPdf('Seuls les enfants actifs figurent dans cette liste.'), 14, y);
-  doc.save(`liste_enfants_${todayISO()}.pdf`);
+  enregistrerPdf(doc, `liste_enfants_${todayISO()}.pdf`);
 }
 
 /* ---------------- Export PDF des statistiques de l'année scolaire ----------------
@@ -2635,7 +2643,7 @@ async function exportStatsPDF(stats, chartMonthly) {
     headStyles: { fillColor: BLEU },
   });
 
-  doc.save(`statistiques_${stats.annee}.pdf`);
+  enregistrerPdf(doc, `statistiques_${stats.annee}.pdf`);
 }
 
 /* ---------------- Vue : Utilisateurs (admin) ---------------- */
@@ -2803,9 +2811,9 @@ async function viewEmployees() {
         en cas de perte ou de fausse manipulation.</p>
       <h3 style="margin-bottom:6px">Sauvegarde / export</h3>
       <div class="row" style="flex-wrap:wrap; gap:10px">
-        <button class="small" id="expJson">⬇️ Exporter tout (JSON)</button>
-        <button class="small" id="expCsvPresta">⬇️ CSV prestations</button>
-        <button class="small" id="expCsvKids">⬇️ CSV présences enfants</button>
+        <button class="small" id="expJson" title="Sauvegarde complète de toutes les données, pour une restauration">⬇️ Sauvegarde complète (JSON)</button>
+        <button class="small" id="expCsvPresta" title="Tableau Excel de toutes les prestations encodées, une ligne par jour et par employée">⬇️ Excel (CSV) — Prestations des employées</button>
+        <button class="small" id="expCsvKids" title="Tableau Excel de toutes les présences et absences des enfants, une ligne par enfant et par jour">⬇️ Excel (CSV) — Présences des enfants</button>
       </div>
       <h3 style="margin:16px 0 6px">Restauration</h3>
       <p class="muted small" style="margin-top:0">Réimporte une sauvegarde <strong>JSON</strong>. ${isCloud()
@@ -3056,8 +3064,9 @@ async function viewEmployees() {
             estJourType(e) ? 0 : breakMinutes(e), w, w - p,
             JOUR_TYPES[e.jour_type] || '', e.justification || '']);
         });
-      downloadFile(`prestations_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
-      toast('CSV prestations téléchargé');
+      const nom = `prestations_${todayISO()}.csv`;
+      downloadFile(nom, toCSV(rows), 'text/csv;charset=utf-8');
+      toast(`Tableau téléchargé : ${nom} (dossier Téléchargements)`);
     } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
   };
   document.getElementById('expCsvKids').onclick = async () => {
@@ -3075,8 +3084,9 @@ async function viewEmployees() {
           const k = kidById[a.kid_id] || {};
           rows.push([k.last_name || '', k.first_name || '', a.entry_date, MOTS[statutDe(a)]]);
         });
-      downloadFile(`presences_enfants_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
-      toast('CSV présences téléchargé');
+      const nom = `presences_enfants_${todayISO()}.csv`;
+      downloadFile(nom, toCSV(rows), 'text/csv;charset=utf-8');
+      toast(`Tableau téléchargé : ${nom} (dossier Téléchargements)`);
     } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
   };
 }
@@ -3156,7 +3166,7 @@ async function exportRecapPDF(data) {
     head: [['Employée', 'Prévu', 'Presté', 'Écart mois', 'Solde reporté', 'Solde cumulé', 'Statut']],
     body: lignesPdf(body), styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] },
   });
-  doc.save(`recapitulatif_${CUR.y}-${pad(CUR.m)}.pdf`);
+  enregistrerPdf(doc, `recapitulatif_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
 /* ---------------- Export PDF : fiche de prestations ---------------- */
@@ -3203,7 +3213,7 @@ async function exportSheetPDF(empId) {
   doc.text(`Total prévu : ${fmtHM(sum.planned)}      Total presté : ${fmtHM(sum.worked)}`, 14, y);
   doc.text(`Écart du mois : ${fmtHM(sum.delta)}      Solde reporté : ${fmtHM(sum.carryIn)}      Solde cumulé : ${fmtHM(sum.closing)}`, 14, y + 7);
   doc.text('Signature employée : ______________        Signature responsable : ______________', 14, y + 24);
-  doc.save(`prestations_${prof.full_name.replace(/\s/g, '_')}_${CUR.y}-${pad(CUR.m)}.pdf`);
+  enregistrerPdf(doc, `prestations_${prof.full_name.replace(/\s/g, '_')}_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
 /* ---------------- Déconnexion ---------------- */

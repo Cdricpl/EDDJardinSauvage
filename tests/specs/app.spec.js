@@ -1723,6 +1723,27 @@ test('exports : les cinq PDF sortent pour de vrai', async ({ page }) => {
   }
 });
 
+/* Trois boutons s'appelaient « Export PDF » : on ne savait pas ce qu'on
+ * telechargeait. Chaque libelle nomme le document et sa periode, et un message
+ * nomme le fichier arrive. */
+test('exports : chaque bouton dit ce qu’il télécharge, et le fichier est nommé', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#pdfBtn')).toContainText(/PDF — Prestations de .+, septembre 2026/);
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#pdfBtn').click()]);
+  await expect(page.locator('#toast')).toContainText(`PDF téléchargé : ${dl.suggestedFilename()}`);
+  await page.locator('.navbtn[data-v="recap"]').click();
+  await expect(page.locator('#recapPdfBtn')).toContainText('Récapitulatif des heures, septembre 2026');
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('#listePdfBtn')).toContainText('Liste des enfants et jours habituels');
+  await page.locator('[data-fiche]').first().click();
+  await expect(page.locator('#fichePdf')).toContainText('Fiche de présence, septembre 2026');
+  await page.locator('.navbtn[data-v="stats"]').click();
+  await expect(page.locator('#statsPdfBtn')).toContainText('Statistiques 2026');
+  // Plus aucun bouton anonyme « Export PDF ».
+  await expect(page.locator('button', { hasText: /^🖨️ Export PDF$/ })).toHaveCount(0);
+});
+
 /* Le bouton des statistiques n'etait branche qu'une fois les graphiques charges :
  * pendant ce temps, un clic ne faisait rien, sans message. */
 test('statistiques : l’export PDF répond même pendant le chargement du graphique', async ({ page }) => {
