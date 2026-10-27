@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-9';
+const APP_VERSION = 'v2026.10.27-10';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -599,7 +599,7 @@ function marcheASuivreInstallation() {
   const ua = navigator.userAgent;
   if (/Firefox/i.test(ua)) {
     return "Firefox ne crée pas de raccourci automatiquement.\n\n"
-      + "Le plus simple : ouvrez ce programme dans Chrome ou Edge, puis cliquez sur « 📥 Installer ».\n\n"
+      + "Le plus simple : ouvrez ce programme dans Chrome ou Edge, puis cliquez sur « Installer ».\n\n"
       + "Sinon, réduisez la fenêtre et faites glisser l'adresse du site (dans la barre d'adresse) "
       + "vers votre bureau : cela crée un raccourci classique.";
   }
@@ -780,9 +780,9 @@ function renderLogin() {
 function buildNav() {
   // L'onglet Statistiques reste réservé à l'administration tant qu'il n'est pas finalisé.
   const items = ME.role === 'admin'
-    ? [['sheet', '📅 Feuille du mois'], ['recap', '📊 Récapitulatif'], ['children', '🧒 Enfants'],
-       ['benevoles', '🙋 Bénévoles'], ['stats', '📈 Statistiques'], ['employees', '👥 Utilisateurs']]
-    : [['sheet', '📅 Ma feuille'], ['recap', '📊 Mon récap'], ['children', '🧒 Enfants'], ['benevoles', '🙋 Bénévoles']];
+    ? [['sheet', '<span class="ic ic-calendrier" aria-hidden="true"></span> Feuille du mois'], ['recap', '<span class="ic ic-graphique" aria-hidden="true"></span> Récapitulatif'], ['children', '<span class="ic ic-enfant" aria-hidden="true"></span> Enfants'],
+       ['benevoles', '<span class="ic ic-main" aria-hidden="true"></span> Bénévoles'], ['stats', '<span class="ic ic-courbe" aria-hidden="true"></span> Statistiques'], ['employees', '<span class="ic ic-personnes" aria-hidden="true"></span> Utilisateurs']]
+    : [['sheet', '<span class="ic ic-calendrier" aria-hidden="true"></span> Ma feuille'], ['recap', '<span class="ic ic-graphique" aria-hidden="true"></span> Mon récap'], ['children', '<span class="ic ic-enfant" aria-hidden="true"></span> Enfants'], ['benevoles', '<span class="ic ic-main" aria-hidden="true"></span> Bénévoles']];
   document.getElementById('nav').innerHTML = items.map(
     ([v, l]) => `<button class="navbtn ${v === VIEW ? 'active' : ''}" data-v="${v}">${l}</button>`).join('');
   document.querySelectorAll('.navbtn').forEach((b) => b.onclick = () => { VIEW = b.dataset.v; buildNav(); render(); });
@@ -811,10 +811,10 @@ async function toolbar(showEmployee, actionHTML) {
     anneeSel = `<select id="anneeSel" title="Année scolaire">${options.join('')}</select>`;
   }
   return `<div class="toolbar">
-    <button class="small" id="prevM" ${atOrBeforeMin() ? `disabled title="${monthName(bas.y, bas.m)} = premier mois de l'année"` : ''}>◀</button>
+    <button class="small" id="prevM" ${atOrBeforeMin() ? `disabled title="${monthName(bas.y, bas.m)} = premier mois de l'année"` : ''}><span class="ic ic-precedent" aria-hidden="true"></span></button>
     <strong style="min-width:170px;text-align:center;text-transform:capitalize">${monthName(CUR.y, CUR.m)}</strong>
-    <button class="small" id="nextM" ${atOrAfterMax() ? `disabled title="${monthName(haut.y, haut.m)} = dernier mois de l'année"` : ''}>▶</button>
-    <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours">📅 Aujourd'hui</button>
+    <button class="small" id="nextM" ${atOrAfterMax() ? `disabled title="${monthName(haut.y, haut.m)} = dernier mois de l'année"` : ''}><span class="ic ic-suivant" aria-hidden="true"></span></button>
+    <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours"><span class="ic ic-aujourdhui" aria-hidden="true"></span> Aujourd'hui</button>
     ${anneeSel}
     ${empSel}
     <span style="flex:1"></span>
@@ -868,6 +868,7 @@ async function render() {
     appEl.classList.toggle('wide', VIEW === 'children' || VIEW === 'benevoles' || VIEW === 'sheet');
   }
   wireLazyTimes();
+  majHauteurEntete();
   const bar = document.getElementById('loadbar');
   if (bar) bar.classList.add('on');
   try {
@@ -1041,9 +1042,9 @@ async function viewSheet() {
   let adminControls = '';
   if (ME.role === 'admin') {
     adminControls = `
-      <button class="small" id="tplBtn">🗓️ Horaire type</button>
+      <button class="small" id="tplBtn"><span class="ic ic-horloge" aria-hidden="true"></span> Horaire type</button>
       <button class="small ${month.status === 'validated' ? 'gray' : 'green'}" id="validBtn">
-        ${month.status === 'validated' ? '↩︎ Repasser en cours' : '✓ Valider le mois'}</button>`;
+        ${month.status === 'validated' ? '<span class="ic ic-annuler" aria-hidden="true"></span> Repasser en cours' : '✓ Valider le mois'}</button>`;
   }
 
   app.innerHTML = `${await toolbar(true)}
@@ -1051,7 +1052,7 @@ async function viewSheet() {
     <div class="card">
       <div class="row-between">
         <h2 style="margin:0">Feuille mensuelle ${statusBadge}</h2>
-        <div>${adminControls} <button class="small" id="pdfBtn" title="Télécharge en PDF la feuille de prestations de ${echapper((editableProf && editableProf.full_name) || '')} pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Prestations de ${echapper((editableProf && editableProf.full_name) || '')}, ${monthName(CUR.y, CUR.m)}</button></div>
+        <div>${adminControls} <button class="small" id="pdfBtn" title="Télécharge en PDF la feuille de prestations de ${echapper((editableProf && editableProf.full_name) || '')} pour ${monthName(CUR.y, CUR.m)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Prestations de ${echapper((editableProf && editableProf.full_name) || '')}, ${monthName(CUR.y, CUR.m)}</button></div>
       </div>
       <div class="msg error" id="warnBanner" ${warnings ? '' : 'style="display:none"'}>${warnings} jour(s) avec un écart non justifié.</div>
       ${!monthEditable && empId === ME.id && ME.role === 'employee'
@@ -1317,7 +1318,7 @@ function templateCardHTML(tpl, month) {
       <tbody>${rows}</tbody></table></div>
     <div id="tplMsg"></div>
     <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap">
-      <button id="tplSave">💾 Enregistrer l'horaire type</button>
+      <button id="tplSave"><span class="ic ic-disquette" aria-hidden="true"></span> Enregistrer l'horaire type</button>
       <button class="green" id="tplApply" ${month.status !== 'open' ? 'disabled title="Mois validé"' : ''}>
         ⤵️ Appliquer au mois affiché</button>
     </div>
@@ -1404,7 +1405,7 @@ async function viewRecap() {
       <td class="${s.closing >= 0 ? 'pos' : 'neg'}"><strong>${fmtDelta(s.closing)}</strong></td>
       <td>${{ open: 'En cours', validated: '✓ Validé' }[mo.status] || 'En cours'}</td>
     </tr>`).join('');
-  const pdfBtn = ME.role === 'admin' ? `<button class="small" id="recapPdfBtn" title="Télécharge en PDF le récapitulatif des heures de toutes les employées pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Récapitulatif des heures, ${monthName(CUR.y, CUR.m)}</button>` : '';
+  const pdfBtn = ME.role === 'admin' ? `<button class="small" id="recapPdfBtn" title="Télécharge en PDF le récapitulatif des heures de toutes les employées pour ${monthName(CUR.y, CUR.m)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Récapitulatif des heures, ${monthName(CUR.y, CUR.m)}</button>` : '';
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <div class="row-between"><h2 style="margin:0">Récapitulatif — ${monthName(CUR.y, CUR.m)}</h2>${pdfBtn}</div>
@@ -1449,7 +1450,7 @@ function carteperiodesHTML(periodes) {
   const liste = periodes.length
     ? periodes.map((p) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
         <span class="periode-tag${classePeriode(p)}">${p.type === 'stage' ? '🏕️' : '🚪'} ${echapper(libellePeriode(p))}</span>
-        <button class="rowbtn danger" data-delper="${echapper(p.id)}" title="Supprimer cette période" aria-label="Supprimer ${echapper(libellePeriode(p))}">🗑️</button>
+        <button class="rowbtn danger" data-delper="${echapper(p.id)}" title="Supprimer cette période" aria-label="Supprimer ${echapper(libellePeriode(p))}"><span class="ic ic-poubelle" aria-hidden="true"></span> </button>
       </div>`).join('')
     : '<p class="muted small" style="margin:6px 0 0">Aucune période déclarée.</p>';
   return `<div class="card sub hidden" id="perCard">
@@ -1492,6 +1493,16 @@ function brancherPeriodes() {
     catch (e) { toast('Suppression impossible : ' + e.message, 'error'); }
   });
 }
+
+/* Hauteur de la barre du haut (logo, Déconnexion), qui reste collée en haut de
+ * l'écran : les en-têtes des grilles se collent JUSTE DESSOUS (voir --entete
+ * dans styles.css). Mesurée plutôt qu'écrite en dur : elle dépend de la police
+ * et du zoom de Windows. */
+function majHauteurEntete() {
+  const barre = document.querySelector('.topbar');
+  if (barre) document.documentElement.style.setProperty('--entete', barre.offsetHeight + 'px');
+}
+window.addEventListener('resize', majHauteurEntete);
 
 /* Repères de semaine des grilles Enfants et Bénévoles : `lundi` porte le trait
  * qui sépare deux semaines, `weekend` met en retrait le samedi et le dimanche
@@ -1631,8 +1642,8 @@ async function viewChildren() {
             ${lignes}${habituels}
           </div>
           ${ME.role === 'admin' ? `<div class="kidacts">
-            <button class="iconbtn edit" data-editkid="${k.id}" aria-label="Modifier ${esc}" title="Modifier (nom, école, année, naissance, jours)">✏️</button>
-            <button class="iconbtn del" data-arch="${k.id}" aria-label="Retirer ${esc} de la liste" title="Retirer de la liste">🗑️</button>
+            <button class="iconbtn edit" data-editkid="${k.id}" aria-label="Modifier ${esc}" title="Modifier (nom, école, année, naissance, jours)"><span class="ic ic-crayon" aria-hidden="true"></span> </button>
+            <button class="iconbtn del" data-arch="${k.id}" aria-label="Retirer ${esc} de la liste" title="Retirer de la liste"><span class="ic ic-poubelle" aria-hidden="true"></span> </button>
           </div>` : ''}
         </div>
       </th>
@@ -1672,9 +1683,9 @@ async function viewChildren() {
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
   const actionsEnfants = ME.role === 'admin'
-    ? '<button class="small" id="listePdfBtn" title="Télécharge en PDF la liste des enfants inscrits, leur école et leurs jours habituels">📄 PDF — Liste des enfants</button>'
-      + ` <button class="small" id="onePdfBtn" title="Télécharge en PDF le nombre d'enfants présents chaque jour de ${monthName(CUR.y, CUR.m)}, sans aucun nom, pour l'encodage sur le site de l'ONE">📄 PDF — ONE, ${monthName(CUR.y, CUR.m)}</button>`
-      + ' <button class="small" id="perToggle" title="Déclarer un stage ou une fermeture (congé, jour férié)">🏕️ Stages et fermetures</button>'
+    ? '<button class="small" id="listePdfBtn" title="Télécharge en PDF la liste des enfants inscrits, leur école et leurs jours habituels"><span class="ic ic-document" aria-hidden="true"></span> PDF — Liste des enfants</button>'
+      + ` <button class="small" id="onePdfBtn" title="Télécharge en PDF le nombre d'enfants présents chaque jour de ${monthName(CUR.y, CUR.m)}, sans aucun nom, pour l'encodage sur le site de l'ONE"><span class="ic ic-document" aria-hidden="true"></span> PDF — ONE, ${monthName(CUR.y, CUR.m)}</button>`
+      + ' <button class="small" id="perToggle" title="Déclarer un stage ou une fermeture (congé, jour férié)"><span class="ic ic-tente" aria-hidden="true"></span> Stages et fermetures</button>'
       + ' <button id="kToggle" class="addkid">+ Ajouter un enfant</button>'
     : '';
   app.innerHTML = `${await toolbar(false, actionsEnfants)}
@@ -1712,7 +1723,7 @@ async function viewChildren() {
           <div class="daychks">${WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="ek" data-w="${w}"/> ${DOW[w]}</label>`).join(' ')}</div></div>
         <div id="eMsg"></div>
         <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap">
-          <button class="green" id="eSave">💾 Enregistrer</button>
+          <button class="green" id="eSave"><span class="ic ic-disquette" aria-hidden="true"></span> Enregistrer</button>
           <button class="gray" id="eCancel">Annuler</button>
         </div>
       </div>` : `
@@ -1748,12 +1759,12 @@ async function viewChildren() {
       <div id="archList" class="card sub hidden" style="margin-top:8px">
         <p class="muted small" style="margin-top:0">Ces fiches sont conservées ; leurs présences déjà encodées ne sont
           pas perdues. « Réactiver » remet la fiche dans la grille ci-dessus.
-          « 🗑️ » l'efface <strong>définitivement</strong>, avec toutes ses présences.</p>
+          « <span class="ic ic-poubelle" aria-hidden="true"></span> » l'efface <strong>définitivement</strong>, avec toutes ses présences.</p>
         ${archives.map((k) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
           <span class="avatar" style="background:${avatarColor(kidLabel(k))}" aria-hidden="true">${echapper(initials(k))}</span>
           <span style="flex:1">${echapper(kidLabel(k))}${k.school ? ` <span class="muted small">— ${echapper(k.school)}</span>` : ''}</span>
           <button class="small green" data-reactkid="${k.id}">Réactiver</button>
-          <button class="rowbtn danger" data-delkid="${k.id}" title="Effacer définitivement ${echapper(kidLabel(k))} et toutes ses présences" aria-label="Effacer définitivement ${echapper(kidLabel(k))}">🗑️</button>
+          <button class="rowbtn danger" data-delkid="${k.id}" title="Effacer définitivement ${echapper(kidLabel(k))} et toutes ses présences" aria-label="Effacer définitivement ${echapper(kidLabel(k))}"><span class="ic ic-poubelle" aria-hidden="true"></span> </button>
         </div>`).join('')}
       </div>` : ''}
       <p class="muted small">« Prés. » = jours de présence de l'enfant ce mois-ci.${
@@ -1924,7 +1935,7 @@ async function viewChildren() {
       <div class="row-between">
         <h3 style="margin:0">📄 ${echapper(kidLabel(k))} — ${monthName(CUR.y, CUR.m)}</h3>
         <div style="display:flex; gap:8px">
-          <button class="small" id="fichePdf" title="Télécharge en PDF la fiche de présence de ${echapper(kidLabel(k))} pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Fiche de présence, ${monthName(CUR.y, CUR.m)}</button>
+          <button class="small" id="fichePdf" title="Télécharge en PDF la fiche de présence de ${echapper(kidLabel(k))} pour ${monthName(CUR.y, CUR.m)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Fiche de présence, ${monthName(CUR.y, CUR.m)}</button>
           <button class="small gray" id="ficheClose">Fermer</button>
         </div>
       </div>
@@ -1940,7 +1951,7 @@ async function viewChildren() {
       <p style="margin:12px 0 0"><strong class="small">Détail des absences :</strong><br>${ligneAbs}</p>
       <p class="muted small" style="margin-top:8px">« Attendus » = jours habituels de l'enfant sur le mois affiché.</p>
       ${ME.role === 'admin' ? `<div style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px">
-        <button class="small red" id="ficheDel">🗑️ Effacer définitivement cet enfant</button>
+        <button class="small red" id="ficheDel"><span class="ic ic-poubelle" aria-hidden="true"></span> Effacer définitivement cet enfant</button>
         <span class="muted small"> — sa fiche et TOUTES ses présences, sans retour possible.
         Pour retirer l'enfant en gardant l'historique, utilisez ✕ dans la liste.</span>
       </div>` : ''}`;
@@ -2099,8 +2110,8 @@ async function viewBenevoles() {
             ${contact}${habituels}
           </div>
           ${ME.role === 'admin' ? `<div class="kidacts">
-            <button class="iconbtn edit" data-editben="${b.id}" aria-label="Modifier ${esc}" title="Modifier (nom, contact, jours)">✏️</button>
-            <button class="iconbtn del" data-archben="${b.id}" aria-label="Retirer ${esc} de la liste" title="Retirer de la liste">🗑️</button>
+            <button class="iconbtn edit" data-editben="${b.id}" aria-label="Modifier ${esc}" title="Modifier (nom, contact, jours)"><span class="ic ic-crayon" aria-hidden="true"></span> </button>
+            <button class="iconbtn del" data-archben="${b.id}" aria-label="Retirer ${esc} de la liste" title="Retirer de la liste"><span class="ic ic-poubelle" aria-hidden="true"></span> </button>
           </div>` : ''}
         </div>
       </th>
@@ -2120,7 +2131,7 @@ async function viewBenevoles() {
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
   app.innerHTML = `${await toolbar(false, ME.role === 'admin'
-      ? `<button class="small" id="benPdfBtn" title="Télécharge en PDF les présences et absences de chaque bénévole pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Présences des bénévoles, ${monthName(CUR.y, CUR.m)}</button>`
+      ? `<button class="small" id="benPdfBtn" title="Télécharge en PDF les présences et absences de chaque bénévole pour ${monthName(CUR.y, CUR.m)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Présences des bénévoles, ${monthName(CUR.y, CUR.m)}</button>`
         + ' <button id="bToggle" class="addkid">+ Ajouter un bénévole</button>' : '')}
     <div class="card">
       <h2 style="margin:0 0 4px">🙋 Présences des bénévoles — ${monthName(CUR.y, CUR.m)}</h2>
@@ -2152,7 +2163,7 @@ async function viewBenevoles() {
           <div class="daychks">${WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="ebd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ')}</div></div>
         <div id="ebMsg"></div>
         <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap">
-          <button class="green" id="ebSave">💾 Enregistrer</button>
+          <button class="green" id="ebSave"><span class="ic ic-disquette" aria-hidden="true"></span> Enregistrer</button>
           <button class="gray" id="ebCancel">Annuler</button>
         </div>
       </div>` : `
@@ -2188,12 +2199,12 @@ async function viewBenevoles() {
       <div id="archListBen" class="card sub hidden" style="margin-top:8px">
         <p class="muted small" style="margin-top:0">Ces fiches sont conservées ; leurs présences déjà encodées ne sont
           pas perdues. « Réactiver » remet la fiche dans la grille ci-dessus.
-          « 🗑️ » l'efface <strong>définitivement</strong>, avec toutes ses présences.</p>
+          « <span class="ic ic-poubelle" aria-hidden="true"></span> » l'efface <strong>définitivement</strong>, avec toutes ses présences.</p>
         ${archives.map((b) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
           <span class="avatar" style="background:${avatarColor(benevoleLabel(b))}" aria-hidden="true">${echapper(initials(b))}</span>
           <span style="flex:1">${echapper(benevoleLabel(b))}${b.email ? ` <span class="muted small">— ${echapper(b.email)}</span>` : ''}</span>
           <button class="small green" data-reactben="${b.id}">Réactiver</button>
-          <button class="rowbtn danger" data-delben="${b.id}" title="Effacer définitivement ${echapper(benevoleLabel(b))} et toutes ses présences" aria-label="Effacer définitivement ${echapper(benevoleLabel(b))}">🗑️</button>
+          <button class="rowbtn danger" data-delben="${b.id}" title="Effacer définitivement ${echapper(benevoleLabel(b))} et toutes ses présences" aria-label="Effacer définitivement ${echapper(benevoleLabel(b))}"><span class="ic ic-poubelle" aria-hidden="true"></span> </button>
         </div>`).join('')}
       </div>` : ''}
       <p class="muted small">« Prés. » = jours de présence du bénévole ce mois-ci. Ces présences ne comptent
@@ -2321,9 +2332,9 @@ async function viewBenevoles() {
         <div class="stat"><div class="num">${encodes}/${c.attendus || '—'}</div><div class="lbl">Jours encodés / attendus</div></div>
       </div>
       ${ME.role === 'admin' ? `<div style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px">
-        <button class="small red" id="ficheDelBen">🗑️ Effacer définitivement ce bénévole</button>
+        <button class="small red" id="ficheDelBen"><span class="ic ic-poubelle" aria-hidden="true"></span> Effacer définitivement ce bénévole</button>
         <span class="muted small"> — sa fiche et TOUTES ses présences, sans retour possible.
-        Pour retirer le bénévole en gardant l'historique, utilisez 🗑️ dans la liste (retrait simple).</span>
+        Pour retirer le bénévole en gardant l'historique, utilisez <span class="ic ic-poubelle" aria-hidden="true"></span> dans la liste (retrait simple).</span>
       </div>` : ''}`;
     fiche.classList.remove('hidden');
     document.getElementById('ficheCloseBen').onclick = () => fiche.classList.add('hidden');
@@ -2523,7 +2534,7 @@ async function viewStats() {
     <div class="card">
       <div class="row-between">
         <h2 style="margin:0">📈 Statistiques — année scolaire ${libelleAnnee(ANNEE)}</h2>
-        <button class="small" id="statsPdfBtn" title="Télécharge en PDF les statistiques de fréquentation et les critères d'agrément de l'année ${libelleAnnee(ANNEE)}">📄 PDF — Statistiques ${libelleAnnee(ANNEE)}</button>
+        <button class="small" id="statsPdfBtn" title="Télécharge en PDF les statistiques de fréquentation et les critères d'agrément de l'année ${libelleAnnee(ANNEE)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Statistiques ${libelleAnnee(ANNEE)}</button>
       </div>
       <div class="hero-stat">
         <div class="big">${dailyYear.toFixed(1)}</div>
@@ -2589,7 +2600,7 @@ async function effacerEnfant(k) {
     + `Seront supprimées : sa fiche et ${n.kid_attendance} présence(s)/absence(s) enregistrée(s), `
     + `sur toutes les années.\n\n`
     + `Les statistiques déjà calculées en tiendront compte : les moyennes changeront.\n`
-    + `Cette action est irréversible — faites une sauvegarde (💾) avant.`)) return false;
+    + `Cette action est irréversible — faites une sauvegarde (bouton disquette, en haut à droite) avant.`)) return false;
   const saisi = prompt(`Confirmation : tapez le prénom « ${k.first_name} » pour effacer.`);
   if (saisi == null) return false;
   if (saisi.trim() !== (k.first_name || '').trim()) {
@@ -2957,13 +2968,13 @@ async function viewEmployees() {
      * les rappelle. */
     const activeBtn = p.role === 'employee'
       ? (p.active
-          ? `<button class="rowbtn" data-arch="${p.id}" title="Archiver — retire de la liste en conservant l'historique" aria-label="Archiver ${echapper(p.full_name)}">📥</button>`
-          : `<button class="rowbtn ok" data-react="${p.id}" title="Réactiver ce compte" aria-label="Réactiver ${echapper(p.full_name)}">↩️</button>`)
+          ? `<button class="rowbtn" data-arch="${p.id}" title="Archiver — retire de la liste en conservant l'historique" aria-label="Archiver ${echapper(p.full_name)}"><span class="ic ic-archiver" aria-hidden="true"></span> </button>`
+          : `<button class="rowbtn ok" data-react="${p.id}" title="Réactiver ce compte" aria-label="Réactiver ${echapper(p.full_name)}"><span class="ic ic-annuler" aria-hidden="true"></span></button>`)
       : '';
     // Suppression définitive. Interdite sur son propre compte (on se couperait
     // l'accès) et sur le dernier administrateur (plus personne pour gérer).
     const suppr = (p.id === ME.id || isLastAdmin) ? ''
-      : `<button class="rowbtn danger" data-del="${p.id}" title="Supprimer définitivement ce compte et ses données" aria-label="Supprimer ${echapper(p.full_name)}">🗑️</button>`;
+      : `<button class="rowbtn danger" data-del="${p.id}" title="Supprimer définitivement ce compte et ses données" aria-label="Supprimer ${echapper(p.full_name)}"><span class="ic ic-poubelle" aria-hidden="true"></span> </button>`;
     // Sélecteur de rôle. On empêche de retirer le dernier administrateur (sinon
     // plus personne ne pourrait gérer les utilisateurs).
     const roleSel = `<select class="rolesel" data-role="${p.id}" ${isLastAdmin ? 'disabled title="Dernier administrateur"' : ''}>
@@ -2977,13 +2988,13 @@ async function viewEmployees() {
            aria-label="Solde de départ de ${echapper(p.full_name)}" /></td>`
       : '<td class="muted">—</td>';
     return `<tr>
-      <td class="nowrap">${echapper(p.full_name)} <button class="rowbtn" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${echapper(p.full_name)}">✏️</button></td>
-      <td class="nowrap">${p.email ? echapper(p.email) : '—'} <button class="rowbtn" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${echapper(p.full_name)}">✏️</button></td>
+      <td class="nowrap">${echapper(p.full_name)} <button class="rowbtn" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${echapper(p.full_name)}"><span class="ic ic-crayon" aria-hidden="true"></span> </button></td>
+      <td class="nowrap">${p.email ? echapper(p.email) : '—'} <button class="rowbtn" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${echapper(p.full_name)}"><span class="ic ic-crayon" aria-hidden="true"></span> </button></td>
       <td>${roleSel}</td>
       ${soldeCell}
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
       <td class="actions">
-        <button class="rowbtn" data-reset="${p.id}" title="Envoyer un email de réinitialisation du mot de passe" aria-label="Réinitialiser le mot de passe de ${echapper(p.full_name)}">✉️</button>
+        <button class="rowbtn" data-reset="${p.id}" title="Envoyer un email de réinitialisation du mot de passe" aria-label="Réinitialiser le mot de passe de ${echapper(p.full_name)}"><span class="ic ic-courriel" aria-hidden="true"></span> </button>
         ${activeBtn}
         ${suppr}
       </td>
@@ -3046,7 +3057,7 @@ async function viewEmployees() {
           Le <strong>solde reporté au 1<sup>er</sup> août ${ANNEE}</strong> a été figé à l'ouverture de l'année :
           il ne bouge pas tout seul. Si vous corrigez une année close, remettez-le à jour ici.
         </p>
-        <button class="small" id="recalcSoldes">🔄 Recalculer les soldes reportés</button>
+        <button class="small" id="recalcSoldes"><span class="ic ic-recalculer" aria-hidden="true"></span> Recalculer les soldes reportés</button>
       </div>
       ${aCorriger.length ? `<div class="msg error" style="margin-top:8px">
         ⚠️ ${aCorriger.length === 1 ? 'Un solde reporté ne correspond plus' : `${aCorriger.length} soldes reportés ne correspondent plus`}
@@ -3065,7 +3076,7 @@ async function viewEmployees() {
                sont conservées et réapparaîtront si vous la rouvrez.`
             : `Aucune donnée n'a encore été encodée en ${libelleAnnee(ANNEE)}.`}
         </p>
-        <button class="small gray" id="retourAnnee">↩ Revenir à ${libelleAnnee(ANNEE - 1)}</button>
+        <button class="small gray" id="retourAnnee"><span class="ic ic-annuler" aria-hidden="true"></span> Revenir à ${libelleAnnee(ANNEE - 1)}</button>
       </div>` : ''}
     </div>
     <div class="card">
@@ -3084,10 +3095,10 @@ async function viewEmployees() {
       </div>
       <p class="muted small">
         Le <strong>rôle</strong> se change directement dans la liste (le dernier administrateur ne peut pas être rétrogradé).
-        « ✏️ » modifie le nom ou l'email ; « ✉️ » envoie un email de réinitialisation du mot de passe.
-        <strong>Actions :</strong> ✏️ modifier · ✉️ envoyer un email de réinitialisation du mot de passe ·
-        📥 archiver (retire de la liste en conservant l'historique) · ↩️ réactiver ·
-        🗑️ <strong>supprimer définitivement</strong> le compte et son historique.
+        « <span class="ic ic-crayon" aria-hidden="true"></span> » modifie le nom ou l'email ; « <span class="ic ic-courriel" aria-hidden="true"></span> » envoie un email de réinitialisation du mot de passe.
+        <strong>Actions :</strong> <span class="ic ic-crayon" aria-hidden="true"></span> modifier · <span class="ic ic-courriel" aria-hidden="true"></span> envoyer un email de réinitialisation du mot de passe ·
+        <span class="ic ic-archiver" aria-hidden="true"></span> archiver (retire de la liste en conservant l'historique) · <span class="ic ic-annuler" aria-hidden="true"></span> réactiver ·
+        <span class="ic ic-poubelle" aria-hidden="true"></span> <strong>supprimer définitivement</strong> le compte et son historique.
         ${isCloud() ? "L'email modifié sert de contact/réinitialisation." : ''}
       </p>
     </div>
@@ -3109,9 +3120,9 @@ async function viewEmployees() {
         en cas de perte ou de fausse manipulation.</p>
       <h3 style="margin-bottom:6px">Sauvegarde / export</h3>
       <div class="row" style="flex-wrap:wrap; gap:10px">
-        <button class="small" id="expJson" title="Sauvegarde complète de toutes les données, pour une restauration">⬇️ Sauvegarde complète (JSON)</button>
-        <button class="small" id="expCsvPresta" title="Tableau Excel de toutes les prestations encodées, une ligne par jour et par employée">⬇️ Excel (CSV) — Prestations des employées</button>
-        <button class="small" id="expCsvKids" title="Tableau Excel de toutes les présences et absences des enfants, une ligne par enfant et par jour">⬇️ Excel (CSV) — Présences des enfants</button>
+        <button class="small" id="expJson" title="Sauvegarde complète de toutes les données, pour une restauration"><span class="ic ic-telecharger" aria-hidden="true"></span> Sauvegarde complète (JSON)</button>
+        <button class="small" id="expCsvPresta" title="Tableau Excel de toutes les prestations encodées, une ligne par jour et par employée"><span class="ic ic-telecharger" aria-hidden="true"></span> Excel (CSV) — Prestations des employées</button>
+        <button class="small" id="expCsvKids" title="Tableau Excel de toutes les présences et absences des enfants, une ligne par enfant et par jour"><span class="ic ic-telecharger" aria-hidden="true"></span> Excel (CSV) — Présences des enfants</button>
       </div>
       <h3 style="margin:16px 0 6px">Restauration</h3>
       <p class="muted small" style="margin-top:0">Réimporte une sauvegarde <strong>JSON</strong>. ${isCloud()
@@ -3121,7 +3132,7 @@ async function viewEmployees() {
         : `Les données existantes sont <strong>remplacées</strong>.`} Faites d'abord un export.</p>
       <div class="row" style="flex-wrap:wrap; gap:10px">
         <input id="impFile" type="file" accept="application/json,.json" aria-label="Fichier de sauvegarde JSON à restaurer" style="max-width:100%"/>
-        <button class="small red" id="impBtn">⬆️ Restaurer</button>
+        <button class="small red" id="impBtn"><span class="ic ic-envoyer" aria-hidden="true"></span> Restaurer</button>
       </div>
     </div>`;
 
@@ -3293,7 +3304,7 @@ async function viewEmployees() {
       + `Seront effacés : ${detail}.\n\n`
       + `Cette action est irréversible. Si vous souhaitez seulement retirer la personne `
       + `sans perdre son historique, utilisez « Archiver » à la place.\n\n`
-      + `Faites une sauvegarde (💾) avant de continuer.`)) return;
+      + `Faites une sauvegarde (bouton disquette, en haut à droite) avant de continuer.`)) return;
     const saisi = prompt(`Confirmation : tapez le nom exact « ${p.full_name} » pour supprimer.`);
     if (saisi == null) return;
     if (saisi.trim() !== (p.full_name || '').trim()) { toast('Nom incorrect — suppression annulée.', 'error'); return; }

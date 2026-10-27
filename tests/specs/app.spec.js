@@ -2242,3 +2242,59 @@ test('grilles : les semaines sont séparées et le week-end est en retrait', asy
   await caseWE.click();
   await expect(caseWE).toHaveClass(/pres-p/);
 });
+
+/* Sur ordinateur, la grille des enfants n'a plus son propre cadre defilant : on
+ * ne voyait qu'une partie des enfants (mesure : 518 px visibles sur 839 avec 12
+ * enfants, ecran de 760 px). La page defile ; l'en-tete des jours reste colle
+ * sous la barre du haut. */
+test('enfants : sur ordinateur, tous les enfants sont visibles sans cadre défilant', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await loginAdmin(page);
+  await page.evaluate(async () => { for (let i = 0; i < 9; i++) await STORE.addKid('Enfant' + i, 'Test', '', '', [1, 2, 4], ''); });
+  for (const vue of ['children', 'benevoles']) {
+    await page.locator(`.navbtn[data-v="${vue}"]`).click();
+    await expect(page.locator('table.attend')).toBeVisible();
+    const g = await page.evaluate(() => { const w = document.querySelector('.attend-wrap'); return { vu: w.clientHeight, total: w.scrollHeight }; });
+    expect(g.vu, `${vue} : la grille ne défile plus dans un cadre`).toBe(g.total);
+  }
+  await page.locator('.navbtn[data-v="children"]').click();
+  await page.mouse.wheel(0, 500);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(100);
+  const pos = await page.evaluate(() => ({
+    entete: Math.round(document.querySelector('table.attend thead tr:first-child th').getBoundingClientRect().top),
+    barre: Math.round(document.querySelector('.topbar').getBoundingClientRect().bottom),
+  }));
+  expect(pos.entete, 'l’en-tête des jours reste collé sous la barre du haut').toBe(pos.barre);
+});
+
+/* Barre de defilement permanente : sa presence ne doit plus changer la largeur
+ * utile d'un onglet a l'autre (decalage d'environ 21 px observe sous Windows). */
+test('mise en page : la barre de défilement de la page est permanente', async ({ page }) => {
+  await loginAdmin(page);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflowY)).toBe('scroll');
+});
+
+/* Icones dessinees : plus d'emoji dans les onglets ni dans les boutons. */
+test('icônes : onglets et boutons utilisent les icônes dessinées, plus d’emoji', async ({ page }) => {
+  await loginAdmin(page);
+  const r = await page.evaluate(() => {
+    const emoji = /\p{Extended_Pictographic}/u;
+    const onglets = [...document.querySelectorAll('.navbtn')];
+    return {
+      onglets: onglets.length,
+      avecIcone: onglets.filter((b) => b.querySelector('.ic')).length,
+      emojisOnglets: onglets.filter((b) => emoji.test(b.textContent)).length,
+      enTete: [...document.querySelectorAll('.topbar button')].filter((b) => b.offsetParent && emoji.test(b.textContent)).length,
+    };
+  });
+  expect(r.avecIcone).toBe(r.onglets);
+  expect(r.emojisOnglets).toBe(0);
+  expect(r.enTete).toBe(0);
+  for (const v of ['sheet', 'children', 'benevoles', 'stats', 'employees']) {
+    await page.locator(`.navbtn[data-v="${v}"]`).click();
+    await expect(page.locator('#app > .card:not(.hidden)').first()).toBeVisible();
+    const restes = await page.evaluate(() => [...document.querySelectorAll('#app button, .toolbar button')]
+      .filter((b) => b.offsetParent && /\p{Extended_Pictographic}/u.test(b.textContent)).map((b) => b.textContent.trim()));
+    expect(restes, `${v} : boutons avec emoji`).toEqual([]);
+  }
+});

@@ -30,9 +30,12 @@ html {
      pages courtes (Enfants, Recapitulatif) n'en ont pas et le contenu centre
      se decale horizontalement d'un onglet a l'autre. */
   scrollbar-gutter:stable;
-}
-@supports not (scrollbar-gutter:stable) {
-  html { overflow-y:scroll; }   /* repli pour les navigateurs plus anciens */
+  /* Barre de defilement PERMANENTE, et plus seulement en repli. Avec la seule
+     reservation de place ci-dessus, un decalage d'environ 21 px subsistait chez
+     l'utilisatrice (Windows a 125 %) en passant d'un onglet long a un onglet
+     court : la barre apparaissait puis disparaissait. Toujours presente, elle ne
+     peut plus changer la largeur utile. */
+  overflow-y:scroll;
 }
 body {
   margin:0; color:var(--text);
@@ -198,6 +201,19 @@ input[type=checkbox] { width:auto; min-height:0; padding:0; }
 /* Le total du bas reste accroché au bas du cadre : les totaux sont donc lisibles
    au-dessus ET en dessous de la grille, sans avoir à faire défiler. */
 .attend tfoot tr.totrow > * { position:sticky; bottom:0; z-index:3; }
+/* SUR ORDINATEUR, PLUS DE CADRE DEFILANT : la grille prend toute sa hauteur et
+   c'est la page qui defile. Avec le cadre (hauteur d'ecran moins 240 px), on ne
+   voyait qu'une partie des enfants — mesure : 518 px visibles sur 839 avec 12
+   enfants sur un ecran de 760 px. Plus aucun ancetre ne defilant, les en-tetes
+   collants le restent par rapport a la FENETRE : la ligne des jours se cale
+   sous la barre du haut (hauteur mesuree par le code, --entete), le total du bas
+   au bas de l'ecran. Sous 1100 px, la grille de 31 colonnes ne tient pas en
+   largeur : le cadre defilant y est conserve. */
+@media (min-width:1100px) {
+  .attend-wrap { max-height:none; overflow:visible; }
+  .attend thead tr:first-child > * { top:var(--entete, 66px); }
+  .attend thead tr.totrow > *      { top:calc(var(--entete, 66px) + 38px); }
+}
 /* Coins : à la fois collés en haut/bas ET à gauche → doivent passer au-dessus. */
 .attend thead .kidname, .attend tfoot .kidname { left:0; z-index:5; }
 .attend .totrow > * { background:#f2ead9; font-weight:700; }
@@ -419,3 +435,39 @@ select.rolesel { min-width:165px; }
 .periode-tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; border: 1px solid var(--border); }
 .periode-tag.periode-stage { background: #e3f1e3; }
 .periode-tag.periode-fermee { background: #efe9df; }
+
+/* ---------- Icônes dessinées ----------
+   Dessins du jeu Lucide (https://lucide.dev, licence ISC), au trait, d'UNE couleur
+   qui suit celle du texte. Elles remplacent les emojis des onglets et des
+   boutons, dont le dessin changeait d'un ordinateur à l'autre (Windows, Mac) et
+   jurait avec le reste de l'interface. Utilisées comme masques : aucun fichier
+   à charger, et la couleur suit le bouton (blanc sur bouton plein, rouge sur un
+   bouton de suppression…). */
+.ic {
+  display:inline-block; width:1.15em; height:1.15em; vertical-align:-0.2em;
+  flex-shrink:0; background-color:currentColor;
+  -webkit-mask:var(--ic) center / contain no-repeat; mask:var(--ic) center / contain no-repeat;
+}
+button .ic + *, .navbtn .ic { margin-right:.1em; }
+.ic-calendrier { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01'/%3E%3C/svg%3E"); }
+.ic-aujourdhui { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18m-12 6 2 2 4-4'/%3E%3C/svg%3E"); }
+.ic-graphique { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3v18h18M18 17V9M13 17V5M8 17v-3'/%3E%3C/svg%3E"); }
+.ic-enfant { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01'/%3E%3C/svg%3E"); }
+.ic-main { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 11V6a2 2 0 0 0-4 0M14 10V4a2 2 0 0 0-4 0v2M10 10.5V6a2 2 0 0 0-4 0v8M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15'/%3E%3C/svg%3E"); }
+.ic-courbe { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 7l-8.5 8.5-5-5L2 17M16 7h6v6'/%3E%3C/svg%3E"); }
+.ic-personnes { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75'/%3E%3Ccircle cx='9' cy='7' r='4'/%3E%3C/svg%3E"); }
+.ic-horloge { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 6v6l4 2'/%3E%3C/svg%3E"); }
+.ic-document { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4M16 13H8M16 17H8M10 9H8'/%3E%3C/svg%3E"); }
+.ic-tente { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 21 14 3M20.5 21 10 3M15.5 21 12 15l-3.5 6M2 21h20'/%3E%3C/svg%3E"); }
+.ic-telecharger { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3'/%3E%3C/svg%3E"); }
+.ic-envoyer { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12'/%3E%3C/svg%3E"); }
+.ic-disquette { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z'/%3E%3Cpath d='M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7M7 3v4a1 1 0 0 0 1 1h7'/%3E%3C/svg%3E"); }
+.ic-installer { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='3' width='20' height='14' rx='2'/%3E%3Cpath d='M12 21v-4M8 21h8M12 6v6M9 9l3 3 3-3'/%3E%3C/svg%3E"); }
+.ic-archiver { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='3' width='20' height='5' rx='1'/%3E%3Cpath d='M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4'/%3E%3C/svg%3E"); }
+.ic-crayon { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5zM15 5l4 4'/%3E%3C/svg%3E"); }
+.ic-poubelle { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6'/%3E%3C/svg%3E"); }
+.ic-courriel { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='4' width='20' height='16' rx='2'/%3E%3Cpath d='m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7'/%3E%3C/svg%3E"); }
+.ic-recalculer { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5'/%3E%3C/svg%3E"); }
+.ic-annuler { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11'/%3E%3C/svg%3E"); }
+.ic-precedent { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m15 18-6-6 6-6'/%3E%3C/svg%3E"); }
+.ic-suivant { --ic:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E"); }
