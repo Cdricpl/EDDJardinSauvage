@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-6';
+const APP_VERSION = 'v2026.10.27-7';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -2474,12 +2474,22 @@ async function viewStats() {
   const schoolsPresent = new Set();
   presentKidIds.forEach((id) => { const s = (kidById[id] || {}).school; if (s) schoolsPresent.add(s); });
   const missingSchools = REQUIRED_SCHOOLS.filter((s) => !schoolsPresent.has(s));
-  // Semaines d'ouverture : semaines ISO avec ≥ 2h de prestation (heures d'ouverture).
-  const entriesYear = prestationsAnnee;   // déjà borné à la période par la lecture
-  const weekMinutes = {};
-  entriesYear.forEach((e) => {
+  /* Semaines d'ouverture : semaines ISO totalisant au moins 2 h d'ouverture.
+   * Un jour ne compte QUE SI DES ENFANTS ÉTAIENT PRÉSENTS (grille ou stage) :
+   * l'équipe peut être à l'EDD sans aucun enfant (réunion, préparation), ce
+   * n'est pas une ouverture. La durée d'un jour ouvert est la plus longue
+   * présence d'une travailleuse ce jour-là : additionner les heures de deux
+   * travailleuses présentes en même temps doublait la durée d'ouverture. */
+  const joursAvecEnfants = new Set(inYear.filter((c) => Number(c.children) > 0).map((c) => c.entry_date));
+  const dureeJour = {};
+  prestationsAnnee.forEach((e) => {   // déjà borné à la période par la lecture
+    if (!joursAvecEnfants.has(e.entry_date)) return;
     const w = effectiveWorked(e); if (!w) return;
-    const key = isoWeekKey(e.entry_date); weekMinutes[key] = (weekMinutes[key] || 0) + w;
+    dureeJour[e.entry_date] = Math.max(dureeJour[e.entry_date] || 0, w);
+  });
+  const weekMinutes = {};
+  Object.entries(dureeJour).forEach(([date, min]) => {
+    const key = isoWeekKey(date); weekMinutes[key] = (weekMinutes[key] || 0) + min;
   });
   const openWeeks = Object.values(weekMinutes).filter((min) => min >= 120).length;
   const kidsNoBirth = kidsAll.filter((k) => k.active && !k.birthdate).length;
@@ -2499,7 +2509,7 @@ async function viewStats() {
     { ok: openWeeks >= 20,
       label: 'Ouvert ≥ 2 h/semaine sur au moins 20 semaines',
       val: `${openWeeks} semaine(s) ≥ 2 h`,
-      note: '' },
+      note: 'seuls comptent les jours où des enfants étaient présents' },
   ];
   }
   stats.crit = crit;   // le PDF doit contenir tout ce que l'écran affiche

@@ -2164,3 +2164,28 @@ test('statistiques : les jours de stage comptent, critère des 6-15 ans compris'
     .reduce((s, x) => s + x.children, 0));
   expect(total).toBe(60);
 });
+
+/* Une semaine ne compte comme ouverte que si des enfants etaient la : l'equipe
+ * peut etre a l'EDD sans aucun enfant (reunion, preparation). */
+test('statistiques : une semaine sans enfants ne compte pas comme ouverte', async ({ page }) => {
+  await loginAdmin(page);
+  const semaines = async () => {
+    await page.locator('.navbtn[data-v="sheet"]').click();
+    await page.locator('.navbtn[data-v="stats"]').click();
+    const c = page.locator('table tbody tr', { hasText: 'Ouvert' });
+    await expect(c).toContainText('seuls comptent les jours où des enfants étaient présents');
+    return parseInt(await c.locator('td').nth(1).innerText(), 10);
+  };
+  const avant = await semaines();
+  // Les travailleuses ont presté la semaine du 31/08 (données de démonstration) ;
+  // on retire tous les enfants de cette semaine-là.
+  const prestees = await page.evaluate(async () => {
+    const jours = ['2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04'];
+    const att = await STORE.kidAttendanceEntre('2026-08-31', '2026-09-04');
+    await STORE.setKidAttendances(att.map((a) => ({ kid_id: a.kid_id, entry_date: a.entry_date, status: null })));
+    const ent = await STORE.allEntriesEntre('2026-08-31', '2026-09-04');
+    return ent.reduce((s, e) => s + effectiveWorked(e), 0) >= 120 && jours.length;
+  });
+  expect(prestees, 'il faut des heures prestées cette semaine-là').toBeTruthy();
+  expect(await semaines()).toBe(avant - 1);
+});
