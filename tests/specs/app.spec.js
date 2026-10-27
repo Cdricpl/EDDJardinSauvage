@@ -2298,3 +2298,55 @@ test('icônes : onglets et boutons utilisent les icônes dessinées, plus d’em
     expect(restes, `${v} : boutons avec emoji`).toEqual([]);
   }
 });
+
+/* Bouton « Aujourd'hui » : plus l'aspect gris d'un bouton en panne ; actif des
+ * qu'on quitte le mois en cours, et il y ramene. */
+test('barre du mois : « Aujourd’hui » est un bouton secondaire qui ramène au mois en cours', async ({ page }) => {
+  await loginAdmin(page);
+  const today = page.locator('#todayM');
+  await expect(today).not.toHaveClass(/\bgray\b/);
+  await expect(today).toHaveClass(/\bsecondaire\b/);
+  const mois = page.locator('.toolbar strong').first();
+  const courant = await mois.textContent();
+  await expect(today).toBeDisabled();
+  await expect(today).toHaveAttribute('title', /déjà sur le mois en cours/);
+  await page.locator('#prevM').click();
+  await expect(mois).not.toHaveText(courant);
+  await expect(today).toBeEnabled();
+  await today.click();
+  await expect(mois).toHaveText(courant);
+});
+
+/* Icones en couleur sur fond clair, blanches sur un bouton plein. */
+test('icônes : couleur propre sur les onglets inactifs, blanche sur l’onglet actif', async ({ page }) => {
+  await loginAdmin(page);
+  const c = await page.evaluate(() => {
+    const coul = (el) => getComputedStyle(el).backgroundColor;
+    const actif = document.querySelector('.navbtn.active');
+    const inactif = document.querySelector('.navbtn:not(.active)');
+    return {
+      actifIc: coul(actif.querySelector('.ic')), actifTexte: getComputedStyle(actif).color,
+      inactifIc: coul(inactif.querySelector('.ic')), inactifTexte: getComputedStyle(inactif).color,
+    };
+  });
+  expect(c.actifIc).toBe(c.actifTexte);
+  expect(c.inactifIc).not.toBe(c.inactifTexte);
+});
+
+/* Pas de saut vertical d'un onglet a l'autre : la barre du mois a partout la
+ * meme hauteur et la carte commence au meme endroit. */
+test('mise en page : la barre du mois a la même hauteur et position sur tous les onglets', async ({ page }) => {
+  await page.setViewportSize({ width: 1536, height: 864 }); // ecran 1920 px a 125 %, le poste reel
+  await loginAdmin(page);
+  const mesures = {};
+  for (const v of ['sheet', 'recap', 'children', 'benevoles', 'stats']) {
+    await page.locator(`.navbtn[data-v="${v}"]`).click();
+    await expect(page.locator('.toolbar').first()).toBeVisible();
+    mesures[v] = await page.evaluate(() => {
+      const t = document.querySelector('.toolbar').getBoundingClientRect();
+      return { haut: Math.round(t.top), hauteur: Math.round(t.height), fleche: Math.round(document.querySelector('#prevM').getBoundingClientRect().top) };
+    });
+  }
+  const ref = mesures.sheet;
+  for (const [v, m] of Object.entries(mesures)) expect(m, v).toEqual(ref);
+});

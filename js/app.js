@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-10';
+const APP_VERSION = 'v2026.10.27-11';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -814,7 +814,7 @@ async function toolbar(showEmployee, actionHTML) {
     <button class="small" id="prevM" ${atOrBeforeMin() ? `disabled title="${monthName(bas.y, bas.m)} = premier mois de l'année"` : ''}><span class="ic ic-precedent" aria-hidden="true"></span></button>
     <strong style="min-width:170px;text-align:center;text-transform:capitalize">${monthName(CUR.y, CUR.m)}</strong>
     <button class="small" id="nextM" ${atOrAfterMax() ? `disabled title="${monthName(haut.y, haut.m)} = dernier mois de l'année"` : ''}><span class="ic ic-suivant" aria-hidden="true"></span></button>
-    <button class="small gray" id="todayM" ${onCurrentMonth ? 'disabled' : ''} title="Aller au mois en cours"><span class="ic ic-aujourdhui" aria-hidden="true"></span> Aujourd'hui</button>
+    <button class="small secondaire" id="todayM" ${onCurrentMonth ? 'disabled title="Vous êtes déjà sur le mois en cours"' : 'title="Revenir au mois en cours"'}><span class="ic ic-aujourdhui" aria-hidden="true"></span> Aujourd'hui</button>
     ${anneeSel}
     ${empSel}
     <span style="flex:1"></span>
