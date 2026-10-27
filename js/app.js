@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-4';
+const APP_VERSION = 'v2026.10.27-6';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -2115,7 +2115,8 @@ async function viewBenevoles() {
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
   app.innerHTML = `${await toolbar(false, ME.role === 'admin'
-      ? '<button id="bToggle" class="addkid">+ Ajouter un bénévole</button>' : '')}
+      ? `<button class="small" id="benPdfBtn" title="Télécharge en PDF les présences et absences de chaque bénévole pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Présences des bénévoles, ${monthName(CUR.y, CUR.m)}</button>`
+        + ' <button id="bToggle" class="addkid">+ Ajouter un bénévole</button>' : '')}
     <div class="card">
       <h2 style="margin:0 0 4px">🙋 Présences des bénévoles — ${monthName(CUR.y, CUR.m)}</h2>
       ${ME.role === 'admin' ? `
@@ -2194,6 +2195,18 @@ async function viewBenevoles() {
         pas dans l'onglet 📈 Statistiques (réservé aux enfants).</p>
     </div>`;
   wireToolbar();
+
+  // PDF du mois (administration) : lu au moment du clic, donc à jour des cases
+  // modifiées depuis l'affichage.
+  const benPdf = document.getElementById('benPdfBtn');
+  if (benPdf) benPdf.onclick = () => avecBarre(() => exportBenevolesPDF(
+    bens.map((b) => {
+      const pres = days.filter((day) => getSt(b.id, day.date) === 'present');
+      const abs = days.filter((day) => getSt(b.id, day.date) === 'absent');
+      return { nom: benevoleLabel(b), pres, abs };
+    }),
+    days.map((day) => ({ ...day, n: bens.filter((b) => getSt(b.id, day.date) === 'present').length }))))
+    .catch((e) => toast('Export impossible : ' + e.message, 'error'));
 
   const addCard = document.getElementById('addBenCard');
   const bToggle = document.getElementById('bToggle');
@@ -2382,12 +2395,13 @@ async function viewStats() {
   const auj = todayISO();
   const debut = debutAnnee(ANNEE) > MIN_ISO ? debutAnnee(ANNEE) : MIN_ISO;
   const fin = finAnnee(ANNEE) < auj ? finAnnee(ANNEE) : auj;
-  const [all, kidsAll, attAnnee, prestationsAnnee, periodesStats] = await Promise.all([
+  const [all, kidsAll, attAnnee, prestationsAnnee, periodesStats, effectifsStats] = await Promise.all([
     STORE.allChildrenEntre(debut, fin),
     estAdmin ? STORE.listKids(true) : Promise.resolve([]),
     estAdmin ? STORE.kidAttendanceEntre(debut, fin) : Promise.resolve([]),
     estAdmin ? STORE.allEntriesEntre(debut, fin) : Promise.resolve([]),
     STORE.listPeriodes(),
+    estAdmin ? STORE.stageEffectifsEntre(debut, fin) : Promise.resolve([]),
   ]);
   // Rien avant le premier jour d'accueil : sinon des jours d'ouverture fictifs
   // (issus d'un pré-encodage antérieur) tireraient la moyenne vers le bas.
@@ -2426,9 +2440,9 @@ async function viewStats() {
   let crit = null;
   if (ME.role === 'admin') {
   const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
-  /* Les jours de stage ou de fermeture sont écartés : la grille habituelle y est
-   * suspendue, et les enfants d'un stage, sans fiche, n'ont pas d'âge connu —
-   * ils comptent dans les totaux, pas dans ce critère d'âge. */
+  /* Les présences de la grille sont écartées les jours de stage ou de fermeture
+   * (la grille y est suspendue) ; les jours de stage sont ajoutés juste après,
+   * avec le nombre encodé pour le stage. */
   const att = attAnnee.filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO
     && !Util.periodeDu(periodesStats, a.entry_date));
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
@@ -2439,6 +2453,18 @@ async function viewStats() {
     (byDay[a.entry_date] = byDay[a.entry_date] || { total: 0, eligible: 0 }).total++;
     const age = ageAt(k.birthdate, a.entry_date);
     if (age == null || (age >= 6 && age <= 15)) byDay[a.entry_date].eligible++;
+  });
+  /* LES STAGES COMPTENT (décision de l'administration). Leurs enfants n'ont pas
+   * de fiche, donc pas d'âge connu : ils sont comptés par défaut parmi les 6 à
+   * 15 ans, exactement comme un enfant inscrit sans date de naissance. */
+  let joursStageComptes = 0;
+  effectifsStats.forEach((x) => {
+    const per = Util.periodeDu(periodesStats, x.entry_date);
+    const n = Number(x.count) || 0;
+    if (!per || per.type !== 'stage' || n <= 0) return;
+    if (x.entry_date < KIDS_MIN_ISO || x.entry_date > auj) return;
+    byDay[x.entry_date] = { total: n, eligible: n };
+    joursStageComptes++;
   });
   const openDays = Object.keys(byDay);
   const avgEligible = openDays.length
@@ -2463,7 +2489,9 @@ async function viewStats() {
     { ok: avgEligible >= 8,
       label: 'Au moins 8 enfants de 6 à 15 ans par jour (moyenne annuelle)',
       val: `${avgEligible.toFixed(1)} enfant(s)/jour`,
-      note: kidsNoBirth ? `${kidsNoBirth} enfant(s) sans date de naissance (comptés par défaut)` : '' },
+      note: [kidsNoBirth ? `${kidsNoBirth} enfant(s) sans date de naissance (comptés par défaut)` : '',
+        joursStageComptes ? `dont ${joursStageComptes} jour(s) de stage (enfants comptés par défaut)` : '']
+        .filter(Boolean).join(' · ') },
     { ok: missingSchools.length === 0,
       label: 'Enfants d’au moins deux implantations (Saint-Remacle et ARAHF)',
       val: schoolsPresent.size ? [...schoolsPresent].join(', ') : 'aucune renseignée',
@@ -2663,6 +2691,50 @@ async function exportPresencesONEPDF(jours) {
   doc.autoTable({ startY: y, head: [['Bilan du mois', '']], body: lignesPdf(bilan),
     styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] }, columnStyles: { 1: { halign: 'center' } } });
   enregistrerPdf(doc, `presences_ONE_${CUR.y}-${pad(CUR.m)}.pdf`);
+}
+
+/* ---------------- Export PDF : présences des bénévoles du mois ----------------
+ * Une ligne par bénévole (jours de présence, nombre de présences et d'absences),
+ * puis le nombre de bénévoles présents chaque jour où il y en a eu. */
+async function exportBenevolesPDF(lignesBen, jours) {
+  const titre = 'Présences des bénévoles';
+  const sousTitre = monthName(CUR.y, CUR.m);
+  const liste = (js) => (js.length ? js.map((j) => pad(j.d)).join(', ') : '—');
+  const corps = lignesBen.length
+    ? lignesBen.map((l) => [l.nom, liste(l.pres), String(l.pres.length), String(l.abs.length)])
+    : [['Aucun bénévole', '', '', '']];
+  const actifs = jours.filter((j) => j.n > 0);
+  const parJour = actifs.length
+    ? actifs.map((j) => [`${DOW[j.dow]} ${pad(j.d)}/${pad(CUR.m)}`, String(j.n)])
+    : [['—', 'Aucune présence ce mois-ci']];
+  const total = lignesBen.reduce((s, l) => s + l.pres.length, 0);
+  const bilan = [['Total des présences du mois', String(total)],
+    ['Jours avec au moins un bénévole', String(actifs.length)],
+    ['Bénévoles venus au moins une fois', String(lignesBen.filter((l) => l.pres.length).length)]];
+
+  if (!(await assurerPdf())) {
+    const w = feuilleImpression();
+    const tab = (h, l) => `<table border=1 cellpadding=5 style="border-collapse:collapse"><tr>${h.map((x) => `<th>${x}</th>`).join('')}</tr>`
+      + l.map((r) => '<tr>' + r.map((c) => `<td>${echapper(c)}</td>`).join('') + '</tr>').join('') + '</table>';
+    w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${titre} — ${echapper(sousTitre)}</h2>
+      ${tab(['Bénévole', 'Jours de présence', 'Présences', 'Absences'], corps)}
+      <h3>Bénévoles présents par jour</h3>${tab(['Jour', 'Bénévoles'], parJour)}
+      <h3>Bilan</h3>${tab(['', ''], bilan)}`);
+    w.imprimer(); return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let y = await pdfHeader(doc, titre, sousTitre);
+  const bleu = { fillColor: [59, 91, 219] };
+  doc.autoTable({ startY: y, head: [['Bénévole', 'Jours de présence', 'Présences', 'Absences']], body: lignesPdf(corps),
+    styles: { fontSize: 10 }, headStyles: bleu, columnStyles: { 2: { halign: 'center' }, 3: { halign: 'center' } } });
+  y = doc.lastAutoTable.finalY + 8;
+  doc.autoTable({ startY: y, head: [['Jour', 'Bénévoles présents']], body: lignesPdf(parJour),
+    styles: { fontSize: 10 }, headStyles: bleu, columnStyles: { 1: { halign: 'center' } } });
+  y = doc.lastAutoTable.finalY + 8;
+  doc.autoTable({ startY: y, head: [['Bilan du mois', '']], body: lignesPdf(bilan),
+    styles: { fontSize: 10 }, headStyles: bleu, columnStyles: { 1: { halign: 'center' } } });
+  enregistrerPdf(doc, `presences_benevoles_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
 async function exportListeEnfantsPDF(kids) {
