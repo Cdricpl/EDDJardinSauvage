@@ -1702,7 +1702,7 @@ test('bibliothèques : hébergées avec l’application, versions figées dans l
 /* Le chemin REEL des PDF n'etait jamais teste : la suite coupait le CDN. Les
  * bibliotheques etant desormais servies par l'application, chaque export doit
  * produire un vrai fichier PDF. */
-test('exports : les cinq PDF sortent pour de vrai', async ({ page }) => {
+test('exports : les six PDF sortent pour de vrai', async ({ page }) => {
   await loginAdmin(page);
   const exports = [
     ['sheet', '#pdfBtn', /^prestations_.+\.pdf$/],
@@ -1710,6 +1710,7 @@ test('exports : les cinq PDF sortent pour de vrai', async ({ page }) => {
     ['children', '#listePdfBtn', /^liste_enfants_.+\.pdf$/],
     ['children', 'fiche', /^fiche_.+\.pdf$/],
     ['stats', '#statsPdfBtn', /^statistiques_.+\.pdf$/],
+    ['children', '#onePdfBtn', /^presences_ONE_\d{4}-\d{2}\.pdf$/],
   ];
   for (const [vue, bouton, nom] of exports) {
     await page.locator(`.navbtn[data-v="${vue}"]`).click();
@@ -2062,4 +2063,49 @@ test('périodes : avant publication des règles Firestore, rien ne casse', async
   expect(r.periodes).toEqual([]);
   expect(r.effectifs).toEqual([]);
   expect(r.signal).toBe(true);
+});
+
+/* Tableau pour l'ONE : un nombre par jour ecoule, aucun nom, et les memes
+ * comptes que la grille (stage = nombre encode, fermeture = personne). */
+test('ONE : le PDF du mois donne un nombre par jour, sans aucun nom', async ({ page }) => {
+  await loginAdmin(page);
+  await page.evaluate(async () => {
+    await STORE.savePeriode({ type: 'stage', debut: '2026-09-07', fin: '2026-09-08', intitule: 'Stage nature' });
+    await STORE.savePeriode({ type: 'fermeture', debut: '2026-09-09', fin: '2026-09-09', intitule: 'Journée pédagogique' });
+    await STORE.setStageEffectif('2026-09-07', 9);
+  });
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('#onePdfBtn')).toContainText("Présences par jour pour l'ONE, septembre 2026");
+  const grille = {};
+  for (const d of [1, 2, 3, 4, 7, 8, 9, 10]) grille[d] = Number(await page.locator(`[data-daytot="${d}"]`).first().innerText());
+  const noms = await page.evaluate(async () => (await STORE.listKids()).flatMap((k) => [k.first_name, k.last_name]));
+  await page.evaluate(() => {
+    window.__pdf = { tables: [], textes: [], nom: null };
+    class FauxDoc {
+      constructor() { this.lastAutoTable = { finalY: 60 }; this.internal = { pageSize: { getHeight: () => 297, getWidth: () => 210 } }; }
+      addImage() {} setFontSize() {} setTextColor() {}
+      text(t) { window.__pdf.textes.push(String(t)); }
+      autoTable(o) { window.__pdf.tables.push({ head: o.head, body: o.body }); }
+      save(n) { window.__pdf.nom = n; }
+    }
+    window.jspdf = { jsPDF: FauxDoc };
+  });
+  await page.locator('#onePdfBtn').click();
+  await expect.poll(() => page.evaluate(() => window.__pdf.nom)).toBe('presences_ONE_2026-09.pdf');
+  const pdf = await page.evaluate(() => window.__pdf);
+  const lignes = pdf.tables[0].body;
+  // Les jours de semaine écoulés au 10/09 (date figée des tests), week-ends exclus.
+  expect(lignes.map((l) => l[0])).toEqual(['Mar 01/09', 'Mer 02/09', 'Jeu 03/09', 'Ven 04/09',
+    'Lun 07/09', 'Mar 08/09', 'Mer 09/09', 'Jeu 10/09']);
+  const parJour = Object.fromEntries(lignes.map((l) => [Number(l[0].slice(-5, -3)), l]));
+  expect(parJour[7][1]).toBe('9');  expect(parJour[7][2]).toBe('Stage - Stage nature');
+  expect(parJour[8][1]).toBe('0');  expect(parJour[8][2]).toBe('Stage - Stage nature');
+  expect(parJour[9][1]).toBe('-');  expect(parJour[9][2]).toBe('Fermé - Journée pédagogique');
+  // Mêmes comptes que la ligne « Total présents / jour » de la grille.
+  for (const d of [1, 2, 3, 4, 7, 8, 10]) expect(Number(parJour[d][1]), `jour ${d}`).toBe(grille[d]);
+  const total = [1, 2, 3, 4, 7, 8, 10].reduce((s, d) => s + grille[d], 0);
+  expect(pdf.tables[1].body[0]).toEqual(['Total des présences du mois', String(total)]);
+  // Aucun nom d'enfant nulle part dans le document.
+  const tout = JSON.stringify(pdf);
+  for (const n of noms.filter(Boolean)) expect(tout).not.toContain(n);
 });

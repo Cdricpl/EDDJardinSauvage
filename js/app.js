@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-3';
+const APP_VERSION = 'v2026.10.27-4';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -1668,6 +1668,7 @@ async function viewChildren() {
 
   const actionsEnfants = ME.role === 'admin'
     ? '<button class="small" id="listePdfBtn" title="Télécharge en PDF la liste des enfants inscrits, leur école et leurs jours habituels">📄 PDF — Liste des enfants et jours habituels</button>'
+      + ` <button class="small" id="onePdfBtn" title="Télécharge en PDF le nombre d'enfants présents chaque jour de ${monthName(CUR.y, CUR.m)}, sans aucun nom, pour l'encodage sur le site de l'ONE">📄 PDF — Présences par jour pour l'ONE, ${monthName(CUR.y, CUR.m)}</button>`
       + ' <button class="small" id="perToggle" title="Déclarer un stage ou une fermeture (congé, jour férié)">🏕️ Stages et fermetures</button>'
       + ' <button id="kToggle" class="addkid">+ Ajouter un enfant</button>'
     : '';
@@ -1786,6 +1787,12 @@ async function viewChildren() {
     inp.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); } };
   });
   brancherPeriodes();
+
+  // Tableau pour l'ONE : un nombre par jour, sans aucun nom (administration seule).
+  const oneBtn = document.getElementById('onePdfBtn');
+  if (oneBtn) oneBtn.onclick = () => avecBarre(() => exportPresencesONEPDF(
+    days.map((day) => ({ ...day, periode: periodeJour(day.date), n: dayPresentCount(day) }))))
+    .catch((e) => toast('Export impossible : ' + e.message, 'error'));
 
   // Liste imprimable des enfants (administration seule).
   const listeBtn = document.getElementById('listePdfBtn');
@@ -2607,6 +2614,57 @@ async function exportFichePDF(k, c, absences) {
  * quels jours on l'attend. Réservé à l'administration, comme les fiches.
  * Seuls les enfants ACTIFS y figurent : ceux qui ont été retirés de la liste
  * n'ont plus à être attendus. */
+/* ---------------- Export PDF : présences par jour pour l'ONE ----------------
+ * Ce que l'administration recopie sur le site de l'ONE : pour le mois affiché, le
+ * NOMBRE d'enfants présents chaque jour de semaine — aucun nom. Mêmes comptes que
+ * la ligne « Total présents / jour » de la grille : présences réelles un jour
+ * ordinaire, nombre encodé un jour de stage, zéro un jour de fermeture.
+ * Seuls les jours ÉCOULÉS sont repris, comme dans les statistiques : un mois en
+ * cours contient déjà les présences pré-encodées des jours à venir, une prévision
+ * qui n'a rien à faire dans une déclaration. */
+async function exportPresencesONEPDF(jours) {
+  const auj = todayISO();
+  const retenus = jours.filter((j) => !j.weekend && j.date >= KIDS_MIN_ISO && j.date <= auj);
+  const lignes = retenus.map((j) => [
+    `${DOW[j.dow]} ${pad(j.d)}/${pad(CUR.m)}`,
+    j.periode && j.periode.type === 'fermeture' ? '—' : String(j.n),
+    j.periode ? (j.periode.type === 'stage' ? 'Stage' : 'Fermé')
+      + (j.periode.intitule ? ' — ' + j.periode.intitule : '') : '',
+  ]);
+  const ouverts = retenus.filter((j) => j.n > 0);
+  const total = ouverts.reduce((s, j) => s + j.n, 0);
+  const moyenne = ouverts.length ? (total / ouverts.length).toFixed(1).replace('.', ',') : '—';
+  const dernier = jours[jours.length - 1];
+  const titre = "Présences par jour — déclaration ONE";
+  const sousTitre = monthName(CUR.y, CUR.m) + (dernier && dernier.date > auj && retenus.length
+    ? ` (jusqu'au ${dateCourte(retenus[retenus.length - 1].date)})` : '');
+  const bilan = [
+    ["Total des présences du mois", String(total)],
+    ["Jours d'ouverture (au moins un enfant)", String(ouverts.length)],
+    ['Moyenne par jour d\'ouverture', moyenne],
+  ];
+  if (!lignes.length) { toast("Aucun jour écoulé à déclarer pour ce mois.", 'error'); return; }
+
+  if (!(await assurerPdf())) {
+    const w = feuilleImpression();
+    const tab = (h, l) => `<table border=1 cellpadding=5 style="border-collapse:collapse"><tr>${h.map((x) => `<th>${x}</th>`).join('')}</tr>`
+      + l.map((r) => '<tr>' + r.map((c) => `<td>${echapper(c)}</td>`).join('') + '</tr>').join('') + '</table>';
+    w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${titre} — ${echapper(sousTitre)}</h2>
+      ${tab(['Jour', "Enfants présents", 'Remarque'], lignes)}<h3>Bilan</h3>${tab(['', ''], bilan)}`);
+    w.imprimer(); return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let y = await pdfHeader(doc, pourPdf(titre), pourPdf(sousTitre));
+  doc.autoTable({ startY: y, head: [['Jour', 'Enfants présents', 'Remarque']], body: lignesPdf(lignes),
+    styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] },
+    columnStyles: { 1: { halign: 'center', fontStyle: 'bold' } } });
+  y = doc.lastAutoTable.finalY + 8;
+  doc.autoTable({ startY: y, head: [['Bilan du mois', '']], body: lignesPdf(bilan),
+    styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] }, columnStyles: { 1: { halign: 'center' } } });
+  enregistrerPdf(doc, `presences_ONE_${CUR.y}-${pad(CUR.m)}.pdf`);
+}
+
 async function exportListeEnfantsPDF(kids) {
   const titre = 'Liste des enfants';
   const sousTitre = `Au ${new Date().toLocaleDateString('fr-FR')} · ${kids.length} enfant${kids.length > 1 ? 's' : ''}`;
