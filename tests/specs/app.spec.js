@@ -2336,7 +2336,10 @@ test('icônes : couleur propre sur les onglets inactifs, blanche sur l’onglet 
 /* Pas de saut vertical d'un onglet a l'autre : la barre du mois a partout la
  * meme hauteur et la carte commence au meme endroit. */
 test('mise en page : la barre du mois a la même hauteur et position sur tous les onglets', async ({ page }) => {
-  await page.setViewportSize({ width: 1536, height: 864 }); // ecran 1920 px a 125 %, le poste reel
+  // Assez large pour que la barre de l'onglet Enfants (4 boutons) tienne sur une
+  // ligne quelle que soit la police installee : plus etroit, elle passe a la
+  // ligne, ce qui est voulu ; la CI (polices Linux plus larges) le fait des 1536 px.
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await loginAdmin(page);
   const mesures = {};
   for (const v of ['sheet', 'recap', 'children', 'benevoles', 'stats']) {
