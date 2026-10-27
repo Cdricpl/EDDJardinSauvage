@@ -1681,17 +1681,107 @@ test('accès : un compte authentifié sans fiche est refusé, pas provisionné',
   expect(ecran.shell).toBe('none');
 });
 
-/* `chart.js@4` suivait toutes les versions 4.x à venir : le graphique pouvait se
- * casser sans aucun déploiement de notre côté. Toute adresse de CDN doit porter
- * une version exacte — c'est ce que ce test empêche de perdre. */
-test('bibliothèques externes : les versions du CDN sont figées à l’unité près', async ({ page }) => {
+/* Les bibliotheques sont HEBERGEES avec l'application (js/vendor) : un CDN
+ * bloque ou lent empechait tout PDF (mesure d'octobre). Ce test empeche de
+ * revenir a une adresse exterieure, et garde la version exacte dans le nom du
+ * fichier — le service worker sert ces fichiers sur leur adresse exacte. */
+test('bibliothèques : hébergées avec l’application, versions figées dans le nom', async ({ page }) => {
   const source = await (await page.request.get('/js/app.js')).text();
-  const urls = source.match(/https:\/\/cdn\.jsdelivr\.net\/npm\/[^']+/g) || [];
-  expect(urls.length).toBeGreaterThan(0);
-  for (const u of urls) {
-    expect(u, `version non figée : ${u}`).toMatch(/@\d+\.\d+\.\d+(\/|$)/);
+  expect(source).not.toMatch(/https:\/\/cdn\.jsdelivr\.net\/npm\//);
+  const urls = source.match(/'js\/vendor\/[^']+'/g) || [];
+  expect(urls.length).toBe(3);
+  for (const u of urls.map((x) => x.slice(1, -1))) {
+    expect(u, `version non figée : ${u}`).toMatch(/-\d+\.\d+\.\d+\./);
+    const r = await page.request.get('/' + u);
+    expect(r.status(), `fichier absent : ${u}`).toBe(200);
   }
-  expect(urls.some((u) => u.includes('chart.js@4.5.1'))).toBe(true);
+  expect(urls.some((u) => u.includes('chart-4.5.1'))).toBe(true);
+  expect(urls.some((u) => u.includes('jspdf-2.5.1'))).toBe(true);
+});
+
+/* Le chemin REEL des PDF n'etait jamais teste : la suite coupait le CDN. Les
+ * bibliotheques etant desormais servies par l'application, chaque export doit
+ * produire un vrai fichier PDF. */
+test('exports : les six PDF sortent pour de vrai', async ({ page }) => {
+  await loginAdmin(page);
+  const exports = [
+    ['sheet', '#pdfBtn', /^prestations_.+\.pdf$/],
+    ['recap', '#recapPdfBtn', /^recapitulatif_\d{4}-\d{2}\.pdf$/],
+    ['children', '#listePdfBtn', /^liste_enfants_.+\.pdf$/],
+    ['children', 'fiche', /^fiche_.+\.pdf$/],
+    ['stats', '#statsPdfBtn', /^statistiques_.+\.pdf$/],
+    ['children', '#onePdfBtn', /^presences_ONE_\d{4}-\d{2}\.pdf$/],
+  ];
+  for (const [vue, bouton, nom] of exports) {
+    await page.locator(`.navbtn[data-v="${vue}"]`).click();
+    let sel = bouton;
+    if (bouton === 'fiche') { await page.locator('[data-fiche]').first().click(); sel = '#fichePdf'; }
+    await expect(page.locator(sel)).toBeVisible();
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.locator(sel).click()]);
+    expect(dl.suggestedFilename()).toMatch(nom);
+    const debut = require('fs').readFileSync(await dl.path()).subarray(0, 5).toString('latin1');
+    expect(debut, `${sel} : ce n'est pas un PDF`).toBe('%PDF-');
+  }
+});
+
+/* Trois boutons s'appelaient « Export PDF » : on ne savait pas ce qu'on
+ * telechargeait. Chaque libelle nomme le document et sa periode, et un message
+ * nomme le fichier arrive. */
+test('exports : chaque bouton dit ce qu’il télécharge, et le fichier est nommé', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await expect(page.locator('#pdfBtn')).toContainText(/PDF — Prestations de .+, septembre 2026/);
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#pdfBtn').click()]);
+  await expect(page.locator('#toast')).toContainText(`PDF téléchargé : ${dl.suggestedFilename()}`);
+  await page.locator('.navbtn[data-v="recap"]').click();
+  await expect(page.locator('#recapPdfBtn')).toContainText('Récapitulatif des heures, septembre 2026');
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('#listePdfBtn')).toContainText('Liste des enfants et jours habituels');
+  await page.locator('[data-fiche]').first().click();
+  await expect(page.locator('#fichePdf')).toContainText('Fiche de présence, septembre 2026');
+  await page.locator('.navbtn[data-v="stats"]').click();
+  await expect(page.locator('#statsPdfBtn')).toContainText('Statistiques 2026');
+  // Plus aucun bouton anonyme « Export PDF ».
+  await expect(page.locator('button', { hasText: /^🖨️ Export PDF$/ })).toHaveCount(0);
+});
+
+/* Le bouton des statistiques n'etait branche qu'une fois les graphiques charges :
+ * pendant ce temps, un clic ne faisait rien, sans message. */
+test('statistiques : l’export PDF répond même pendant le chargement du graphique', async ({ page }) => {
+  let relacher;
+  const bloque = new Promise((ok) => { relacher = ok; });
+  await page.route(/\/js\/vendor\/chart-/, async (route) => { await bloque; await route.continue(); });
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="stats"]').click();
+  await expect(page.locator('#statsPdfBtn')).toBeVisible();
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#statsPdfBtn').click()]);
+  expect(dl.suggestedFilename()).toMatch(/^statistiques_/);
+  relacher();
+});
+
+/* Repli quand jsPDF reste introuvable : il ouvrait une fenetre surgissante apres
+ * un `await`, que Chrome bloquait. Il imprime maintenant depuis un cadre de la
+ * page : aucune fenetre ne s'ouvre. */
+test('exports : sans jsPDF, le repli imprime sans fenêtre surgissante', async ({ page }) => {
+  await page.route(/\/js\/vendor\/jspdf/, (route) => route.abort());
+  await loginAdmin(page);
+  await page.evaluate(() => { window.__imprime = 0; });
+  let fenetres = 0;
+  page.on('popup', () => { fenetres++; });
+  await page.locator('.navbtn[data-v="recap"]').click();
+  // On intercepte l'impression du cadre (la vraie boite d'impression bloquerait le test).
+  await page.evaluate(() => {
+    const ajout = Node.prototype.appendChild;
+    Node.prototype.appendChild = function (n) {
+      const r = ajout.call(this, n);
+      if (n.tagName === 'IFRAME') n.contentWindow.print = () => { window.__imprime++; };
+      return r;
+    };
+  });
+  await page.locator('#recapPdfBtn').click();
+  await expect.poll(() => page.evaluate(() => window.__imprime)).toBe(1);
+  expect(fenetres).toBe(0);
+  await expect(page.locator('#toast')).not.toContainText('bloquée');
 });
 
 /* Le pré-remplissage écrit le mois entier : un mois à venir s'affichait
@@ -1851,4 +1941,171 @@ test('bénévoles : une employée encode les présences mais ne modifie aucune f
   await expect(page.locator('[data-editben]')).toHaveCount(0);
   await expect(page.locator('[data-archben]')).toHaveCount(0);
   await expect(page.locator('#app .msg')).toContainText('administration');
+});
+
+/* ================================================================
+ * Stages et fermetures
+ * Le pre-encodage marquait « present » tous les enfants a leurs jours habituels,
+ * conges et jours feries compris (mesure : 3 enfants « presents » le 11 novembre).
+ * Une periode suspend la grille habituelle ; un stage compte un NOMBRE par jour.
+ * ================================================================ */
+async function joursHabituelsLundiJeudi(page) {
+  await page.evaluate(async () => {
+    for (const k of await STORE.listKids()) await STORE.setKidInfo(k.id, { ...k, days: [1, 2, 3, 4] });
+  });
+}
+async function allerEnNovembre(page) {
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('table.attend')).toBeVisible();
+  await page.locator('#nextM').click();
+  await page.locator('#nextM').click();
+  await expect(page.locator('.toolbar strong').first()).toHaveText(/novembre 2026/i);
+}
+
+test('fermeture : un jour férié déclaré n’est plus pré-encodé ni compté', async ({ page }) => {
+  await loginAdmin(page);
+  await joursHabituelsLundiJeudi(page);
+  // Déclarée par l'interface, comme le fera l'administration.
+  await page.locator('.navbtn[data-v="children"]').click();
+  await page.locator('#perToggle').click();
+  await page.locator('#perType').selectOption('fermeture');
+  await page.locator('#perDebut').fill('2026-11-11');
+  await page.locator('#perFin').fill('2026-11-11');
+  await page.locator('#perIntitule').fill('Armistice');
+  await page.locator('#perAdd').click();
+  await expect(page.locator('#toast')).toContainText('Période enregistrée');
+
+  await allerEnNovembre(page);
+  const r = await page.evaluate(async () => {
+    const att = await STORE.kidAttendanceForMonth(2026, 11);
+    const n = (d) => att.filter((a) => a.entry_date === d).length;
+    return { mer11: n('2026-11-11'), mer18: n('2026-11-18') };
+  });
+  expect(r.mer11).toBe(0);    // le jour férié n'est pas pré-encodé
+  expect(r.mer18).toBe(3);    // un mercredi ordinaire l'est toujours
+  await expect(page.locator('[data-daytot="11"]').first()).toHaveText('0');
+  await expect(page.locator('[data-daytot="18"]').first()).toHaveText('3');
+  await expect(page.locator('button.presbtn[data-date="2026-11-11"]')).toHaveCount(0);   // cases neutralisées
+  await expect(page.locator('.periodes-mois')).toContainText('Fermé — Armistice');
+});
+
+test('stage : un nombre par jour remplace la grille, et revient après suppression', async ({ page }) => {
+  await loginAdmin(page);
+  await joursHabituelsLundiJeudi(page);
+  // Novembre pré-encodé AVANT la déclaration du stage : ces présences existent déjà.
+  await allerEnNovembre(page);
+  await expect(page.locator('[data-daytot="2"]').first()).toHaveText('3');
+  await page.evaluate(() => STORE.savePeriode({ type: 'stage', debut: '2026-11-02', fin: '2026-11-06', intitule: "Stage d'automne" }));
+  await page.locator('#prevM').click(); await page.locator('#nextM').click();
+  await expect(page.locator('tr.stagerow')).toBeVisible();
+  // Les présences déjà encodées sont ignorées, pas effacées.
+  await expect(page.locator('[data-daytot="2"]').first()).toHaveText('0');
+  const champ = page.locator('input.stagecnt[data-date="2026-11-02"]');
+  await champ.fill('12'); await champ.press('Enter');
+  await expect(page.locator('[data-daytot="2"]').first()).toHaveText('12');
+  await expect(page.locator('#stageTot')).toHaveText('12');
+  const stats = await page.evaluate(async () => (await STORE.allChildrenEntre('2026-11-01', '2026-11-30'))
+    .filter((x) => x.entry_date <= '2026-11-06'));
+  expect(stats).toEqual([{ entry_date: '2026-11-02', children: 12 }]);
+  // Le nombre est bien enregistré (survit à un nouvel affichage).
+  await page.locator('#prevM').click(); await page.locator('#nextM').click();
+  await expect(page.locator('input.stagecnt[data-date="2026-11-02"]')).toHaveValue('12');
+  // Suppression de la période : la grille habituelle et ses présences reviennent.
+  page.on('dialog', (d) => d.accept());
+  await page.locator('#perToggle').click();
+  await page.locator('[data-delper]').first().click();
+  await expect(page.locator('#toast')).toContainText('Période supprimée');
+  await expect(page.locator('tr.stagerow')).toHaveCount(0);
+  await expect(page.locator('[data-daytot="2"]').first()).toHaveText('3');
+});
+
+test('stage : une employée encode le nombre, mais ne déclare pas de période', async ({ page }) => {
+  await page.goto('/index.html');
+  await page.evaluate(async () => {
+    await new DemoStore().savePeriode({ type: 'stage', debut: '2026-09-21', fin: '2026-09-25', intitule: 'Stage' });
+  });
+  await loginEmployee(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('tr.stagerow')).toBeVisible();
+  await expect(page.locator('#perToggle')).toHaveCount(0);
+  await expect(page.locator('#perCard')).toHaveCount(0);
+  const champ = page.locator('input.stagecnt[data-date="2026-09-22"]');
+  await champ.fill('8'); await champ.press('Enter');
+  await expect(page.locator('[data-daytot="22"]').first()).toHaveText('8');
+});
+
+test('périodes : une déclaration incohérente est refusée avec un message clair', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="children"]').click();
+  await page.locator('#perToggle').click();
+  await page.locator('#perDebut').fill('2026-11-10');
+  await page.locator('#perFin').fill('2026-11-05');
+  await page.locator('#perAdd').click();
+  await expect(page.locator('#toast')).toContainText('La date de fin précède la date de début');
+  const n = await page.evaluate(async () => (await STORE.listPeriodes()).length);
+  expect(n).toBe(0);
+});
+
+/* Tant que les regles Firestore des deux nouvelles collections ne sont pas
+ * publiees, toute lecture est refusee : l'onglet Enfants ne doit pas tomber. */
+test('périodes : avant publication des règles Firestore, rien ne casse', async ({ page }) => {
+  await page.goto('/index.html');
+  const r = await page.evaluate(async () => {
+    const refus = () => Promise.reject(Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }));
+    const requete = { where() { return requete; }, get: refus };
+    const db = { collection: () => ({ get: refus, where: () => requete }) };
+    const store = new FirebaseStore({ auth: () => ({ setPersistence: async () => {}, onAuthStateChanged: () => () => {} }),
+      firestore: () => db });
+    const periodes = await store.listPeriodes();
+    const effectifs = await store.stageEffectifsEntre('2026-11-01', '2026-11-30');
+    return { periodes, effectifs, signal: store.periodesIndisponibles };
+  });
+  expect(r.periodes).toEqual([]);
+  expect(r.effectifs).toEqual([]);
+  expect(r.signal).toBe(true);
+});
+
+/* Tableau pour l'ONE : un nombre par jour ecoule, aucun nom, et les memes
+ * comptes que la grille (stage = nombre encode, fermeture = personne). */
+test('ONE : le PDF du mois donne un nombre par jour, sans aucun nom', async ({ page }) => {
+  await loginAdmin(page);
+  await page.evaluate(async () => {
+    await STORE.savePeriode({ type: 'stage', debut: '2026-09-07', fin: '2026-09-08', intitule: 'Stage nature' });
+    await STORE.savePeriode({ type: 'fermeture', debut: '2026-09-09', fin: '2026-09-09', intitule: 'Journée pédagogique' });
+    await STORE.setStageEffectif('2026-09-07', 9);
+  });
+  await page.locator('.navbtn[data-v="children"]').click();
+  await expect(page.locator('#onePdfBtn')).toContainText("Présences par jour pour l'ONE, septembre 2026");
+  const grille = {};
+  for (const d of [1, 2, 3, 4, 7, 8, 9, 10]) grille[d] = Number(await page.locator(`[data-daytot="${d}"]`).first().innerText());
+  const noms = await page.evaluate(async () => (await STORE.listKids()).flatMap((k) => [k.first_name, k.last_name]));
+  await page.evaluate(() => {
+    window.__pdf = { tables: [], textes: [], nom: null };
+    class FauxDoc {
+      constructor() { this.lastAutoTable = { finalY: 60 }; this.internal = { pageSize: { getHeight: () => 297, getWidth: () => 210 } }; }
+      addImage() {} setFontSize() {} setTextColor() {}
+      text(t) { window.__pdf.textes.push(String(t)); }
+      autoTable(o) { window.__pdf.tables.push({ head: o.head, body: o.body }); }
+      save(n) { window.__pdf.nom = n; }
+    }
+    window.jspdf = { jsPDF: FauxDoc };
+  });
+  await page.locator('#onePdfBtn').click();
+  await expect.poll(() => page.evaluate(() => window.__pdf.nom)).toBe('presences_ONE_2026-09.pdf');
+  const pdf = await page.evaluate(() => window.__pdf);
+  const lignes = pdf.tables[0].body;
+  // Les jours de semaine écoulés au 10/09 (date figée des tests), week-ends exclus.
+  expect(lignes.map((l) => l[0])).toEqual(['Mar 01/09', 'Mer 02/09', 'Jeu 03/09', 'Ven 04/09',
+    'Lun 07/09', 'Mar 08/09', 'Mer 09/09', 'Jeu 10/09']);
+  const parJour = Object.fromEntries(lignes.map((l) => [Number(l[0].slice(-5, -3)), l]));
+  expect(parJour[7][1]).toBe('9');  expect(parJour[7][2]).toBe('Stage - Stage nature');
+  expect(parJour[8][1]).toBe('0');  expect(parJour[8][2]).toBe('Stage - Stage nature');
+  expect(parJour[9][1]).toBe('-');  expect(parJour[9][2]).toBe('Fermé - Journée pédagogique');
+  // Mêmes comptes que la ligne « Total présents / jour » de la grille.
+  for (const d of [1, 2, 3, 4, 7, 8, 10]) expect(Number(parJour[d][1]), `jour ${d}`).toBe(grille[d]);
+  const total = [1, 2, 3, 4, 7, 8, 10].reduce((s, d) => s + grille[d], 0);
+  expect(pdf.tables[1].body[0]).toEqual(['Total des présences du mois', String(total)]);
+  // Aucun nom d'enfant nulle part dans le document.
+  const tout = JSON.stringify(pdf);
+  for (const n of noms.filter(Boolean)) expect(tout).not.toContain(n);
 });

@@ -113,6 +113,21 @@ service cloud.firestore {
       allow write: if isActive();
     }
 
+    // ---- STAGES ET FERMETURES : periodes declarees par l'administration ----
+    // Une periode suspend la grille habituelle des enfants (conge, jour ferie,
+    // stage). La declarer change ce qui est compte : reservee a l'admin.
+    match /periodes/{id} {
+      allow read:  if membre();
+      allow write: if isAdmin();
+    }
+
+    // ---- ENFANTS AU STAGE : un nombre par jour, encode par l'equipe ----
+    // Meme geste que les presences : toute personne active de l'equipe.
+    match /stage_effectifs/{id} {
+      allow read:  if membre();
+      allow write: if isActive();
+    }
+
     // ---- BENEVOLES : fiche (nom, contact, jours habituels) reservee a l'admin ----
     // Contrairement aux enfants, l'equipe ne cree ni ne modifie une fiche
     // benevole : seule l'administration gere ces informations.

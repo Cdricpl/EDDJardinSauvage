@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.15-1';
+const APP_VERSION = 'v2026.10.27-4';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -367,8 +367,9 @@ const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${pad(
 async function backupJSON() {
   try {
     const data = await STORE.exportAll();
-    downloadFile(`edd-sauvegarde_${todayISO()}.json`, JSON.stringify(data, null, 2), 'application/json');
-    toast('Sauvegarde JSON téléchargée');
+    const nom = `edd-sauvegarde_${todayISO()}.json`;
+    downloadFile(nom, JSON.stringify(data, null, 2), 'application/json');
+    toast(`Sauvegarde téléchargée : ${nom} (dossier Téléchargements)`);
   } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
 }
 
@@ -383,19 +384,23 @@ async function backupJSON() {
  * On les télécharge donc au moment où elles servent réellement.
  *
  * Les replis existants (« Graphique indisponible », impression navigateur)
- * restent en place et prennent le relais si le téléchargement échoue —
- * typiquement hors ligne : le comportement est alors exactement celui d'avant.
+ * restent en place et prennent le relais si le chargement échoue malgré tout.
  * ================================================================ */
-/* Versions FIGÉES à l'unité près. `chart.js@4` suivait toutes les versions 4.x à
- * venir : le graphique des statistiques pouvait se casser un matin sans qu'aucun
- * déploiement n'ait eu lieu ici, donc sans que le numéro de version affiché le
- * laisse deviner. 4.5.1 est la version que le CDN servait déjà (relevée dans le
- * navigateur avec `Chart.version`) : rien ne change aujourd'hui, on empêche
- * seulement le changement de demain. La forme de l'adresse est inchangée. */
+/* Bibliothèques HÉBERGÉES AVEC L'APPLICATION (dossier js/vendor), et non plus
+ * demandées à un CDN au moment du clic. Mesuré en octobre : quand
+ * cdn.jsdelivr.net était bloqué (filtre réseau, bloqueur de publicité) AUCUN
+ * PDF ne sortait, 5 fois sur 5 ; quand il était lent, le PDF arrivait après
+ * 12 s, hors de l'activation utilisateur, et Chrome le classait en
+ * téléchargement « automatique » — le suivant déclenchait « Ce site tente de
+ * télécharger plusieurs fichiers », et un refus bloquait ensuite tout en silence.
+ * Mêmes bibliothèques, mêmes versions qu'avant (licence MIT), fichiers copiés tels
+ * que publiés : seule l'adresse change. La version figure dans le NOM du fichier :
+ * le service worker sert ces fichiers « cache d'abord » sur leur adresse exacte,
+ * une montée de version doit donc changer l'adresse. */
 const CDN = {
-  chart:     'https://cdn.jsdelivr.net/npm/chart.js@4.5.1',
-  jspdf:     'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
-  autotable: 'https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js',
+  chart:     'js/vendor/chart-4.5.1.umd.min.js',
+  jspdf:     'js/vendor/jspdf-2.5.1.umd.min.js',
+  autotable: 'js/vendor/jspdf.plugin.autotable-3.8.2.min.js',
 };
 // On mémorise la PROMESSE : deux clics rapprochés ne téléchargent qu'une fois.
 const SCRIPTS = new Map();
@@ -434,6 +439,38 @@ async function avecBarre(travail) {
   if (bar) bar.classList.add('on');
   try { return await travail(); }
   finally { if (bar) bar.classList.remove('on'); }
+}
+/* Enregistre le PDF et DIT ce qui vient d'être téléchargé : les boutons
+ * s'appelaient tous « Export PDF », et rien n'indiquait ensuite quel fichier
+ * était arrivé, ni où. */
+function enregistrerPdf(doc, nom) {
+  doc.save(nom);
+  toast(`PDF téléchargé : ${nom} (dossier Téléchargements)`);
+}
+/* Repli d'impression quand jsPDF reste indisponible. Il ouvrait une NOUVELLE
+ * FENÊTRE après un `await` : hors de l'activation utilisateur, Chrome la bloquait
+ * comme pop-up (« Impression bloquée par le navigateur »). On écrit désormais le
+ * document dans un cadre invisible de la page et on lance l'impression de ce
+ * cadre : aucun bloqueur de fenêtres surgissantes ne s'en mêle. */
+function feuilleImpression() {
+  const cadre = document.createElement('iframe');
+  cadre.setAttribute('aria-hidden', 'true');
+  cadre.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(cadre);
+  const d = cadre.contentWindow.document;
+  d.open();
+  return {
+    document: d,
+    async imprimer() {
+      d.close();
+      // Le logo doit être chargé, sinon il manque sur la page imprimée.
+      await Promise.all([...d.images].map((i) => (i.complete ? null
+        : new Promise((ok) => { i.onload = i.onerror = ok; }))));
+      cadre.contentWindow.focus();
+      cadre.contentWindow.print();
+      setTimeout(() => cadre.remove(), 60000);   // laissé le temps de la boîte d'impression
+    },
+  };
 }
 
 /* Relit l'année scolaire ouverte (réglage partagé). Par défaut : la première. */
@@ -1014,7 +1051,7 @@ async function viewSheet() {
     <div class="card">
       <div class="row-between">
         <h2 style="margin:0">Feuille mensuelle ${statusBadge}</h2>
-        <div>${adminControls} <button class="small" id="pdfBtn">🖨️ Export PDF</button></div>
+        <div>${adminControls} <button class="small" id="pdfBtn" title="Télécharge en PDF la feuille de prestations de ${echapper((editableProf && editableProf.full_name) || '')} pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Prestations de ${echapper((editableProf && editableProf.full_name) || '')}, ${monthName(CUR.y, CUR.m)}</button></div>
       </div>
       <div class="msg error" id="warnBanner" ${warnings ? '' : 'style="display:none"'}>${warnings} jour(s) avec un écart non justifié.</div>
       ${!monthEditable && empId === ME.id && ME.role === 'employee'
@@ -1367,7 +1404,7 @@ async function viewRecap() {
       <td class="${s.closing >= 0 ? 'pos' : 'neg'}"><strong>${fmtDelta(s.closing)}</strong></td>
       <td>${{ open: 'En cours', validated: '✓ Validé' }[mo.status] || 'En cours'}</td>
     </tr>`).join('');
-  const pdfBtn = ME.role === 'admin' ? '<button class="small" id="recapPdfBtn">🖨️ Export PDF récap</button>' : '';
+  const pdfBtn = ME.role === 'admin' ? `<button class="small" id="recapPdfBtn" title="Télécharge en PDF le récapitulatif des heures de toutes les employées pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Récapitulatif des heures, ${monthName(CUR.y, CUR.m)}</button>` : '';
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <div class="row-between"><h2 style="margin:0">Récapitulatif — ${monthName(CUR.y, CUR.m)}</h2>${pdfBtn}</div>
@@ -1384,15 +1421,96 @@ async function viewRecap() {
 }
 
 /* ---------------- Vue : Enfants (liste nominative + présences) ---------------- */
+/* ---------------- Stages et fermetures ----------------
+ * Une période suspend la grille habituelle des enfants inscrits. Sans elle, le
+ * pré-encodage marquait « présent » tous les enfants à leurs jours habituels,
+ * congés et jours fériés compris (mesuré : les 3 enfants de démonstration
+ * « présents » le 11 novembre) — et ces présences fictives gonflaient les
+ * statistiques et les chiffres déclarés à l'ONE. */
+const PERIODE_LIB = { stage: 'Stage', fermeture: 'Fermé' };
+const dateCourte = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+const libellePeriode = (p) => `${PERIODE_LIB[p.type]}${p.intitule ? ' — ' + p.intitule : ''} (du ${dateCourte(p.debut)} au ${dateCourte(p.fin)})`;
+const classePeriode = (p) => (p ? (p.type === 'stage' ? ' periode-stage' : ' periode-fermee') : '');
+const titrePeriode = (p) => (p ? ` title="${echapper(libellePeriode(p))}"` : '');
+// Rappel, sous le titre de la grille, des périodes qui touchent le mois affiché.
+function periodesDuMoisHTML(periodes, debutMois, finMois) {
+  const du = periodes.filter((p) => p.debut <= finMois && p.fin >= debutMois);
+  const indispo = STORE.periodesIndisponibles && ME.role === 'admin'
+    ? `<div class="msg error">Les stages et fermetures ne peuvent pas encore être lus : les nouvelles
+        règles Firestore (« periodes » et « stage_effectifs ») doivent être publiées dans la console
+        Firebase.</div>` : '';
+  if (!du.length) return indispo;
+  return indispo + `<p class="periodes-mois">${du.map((p) =>
+    `<span class="periode-tag${classePeriode(p)}">${p.type === 'stage' ? '🏕️' : '🚪'} ${echapper(libellePeriode(p))}</span>`).join(' ')}
+    <span class="muted small">— la grille habituelle est suspendue ces jours-là.</span></p>`;
+}
+// Carte de l'administration : déclarer, voir et supprimer les périodes.
+function carteperiodesHTML(periodes) {
+  const liste = periodes.length
+    ? periodes.map((p) => `<div class="row" style="align-items:center; gap:10px; margin-top:6px">
+        <span class="periode-tag${classePeriode(p)}">${p.type === 'stage' ? '🏕️' : '🚪'} ${echapper(libellePeriode(p))}</span>
+        <button class="rowbtn danger" data-delper="${echapper(p.id)}" title="Supprimer cette période" aria-label="Supprimer ${echapper(libellePeriode(p))}">🗑️</button>
+      </div>`).join('')
+    : '<p class="muted small" style="margin:6px 0 0">Aucune période déclarée.</p>';
+  return `<div class="card sub hidden" id="perCard">
+      <h3 style="margin-top:0">🏕️ Stages et fermetures</h3>
+      <p class="muted small" style="margin-top:0">Pendant une période, la grille habituelle des enfants est suspendue
+        et rien n'y est pré-encodé. <strong>Stage</strong> : on encode le <strong>nombre</strong> d'enfants présents
+        chaque jour. <strong>Fermeture</strong> (congé, jour férié) : personne n'est compté.
+        Supprimer une période fait réapparaître les présences déjà encodées ces jours-là.</p>
+      <div class="row" style="align-items:end">
+        <div style="flex:0 0 150px"><label for="perType">Type</label>
+          <select id="perType"><option value="stage">Stage</option><option value="fermeture">Fermeture</option></select></div>
+        <div style="flex:0 0 160px"><label for="perDebut">Du</label><input id="perDebut" type="date"/></div>
+        <div style="flex:0 0 160px"><label for="perFin">Au</label><input id="perFin" type="date"/></div>
+        <div><label for="perIntitule">Intitulé (facultatif)</label><input id="perIntitule" maxlength="80" placeholder="Stage d'automne, Toussaint, 11 novembre…"/></div>
+        <div style="flex:0 0 auto"><button class="green" id="perAdd">+ Ajouter</button></div>
+      </div>
+      <div id="perList" style="margin-top:10px">${liste}</div>
+    </div>`;
+}
+function brancherPeriodes() {
+  const carte = document.getElementById('perCard');
+  const bouton = document.getElementById('perToggle');
+  if (!carte || !bouton) return;
+  bouton.onclick = () => carte.classList.toggle('hidden');
+  const debut = document.getElementById('perDebut');
+  const fin = document.getElementById('perFin');
+  debut.onchange = () => { if (!fin.value || fin.value < debut.value) fin.value = debut.value; };
+  document.getElementById('perAdd').onclick = async () => {
+    try {
+      await STORE.savePeriode({ type: document.getElementById('perType').value,
+        debut: debut.value, fin: fin.value, intitule: document.getElementById('perIntitule').value });
+      toast('Période enregistrée');
+      PREFILLED_KIDS.clear();
+      render();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  carte.querySelectorAll('[data-delper]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Supprimer cette période ? Les présences déjà encodées ces jours-là réapparaîtront dans la grille.')) return;
+    try { await STORE.deletePeriode(b.dataset.delper); toast('Période supprimée'); render(); }
+    catch (e) { toast('Suppression impossible : ' + e.message, 'error'); }
+  });
+}
+
 async function viewChildren() {
   const app = document.getElementById('app');
   // Lectures independantes : groupees pour n'attendre qu'un aller-retour.
   // L'administration lit AUSSI les fiches archivees, pour pouvoir en réactiver
   // une retirée par erreur ; la grille, elle, ne montre que les enfants actifs.
-  const [tousKids, att] = await Promise.all([
+  const debutMois = `${CUR.y}-${pad(CUR.m)}-01`;
+  const finMois = `${CUR.y}-${pad(CUR.m)}-${pad(daysInMonth(CUR.y, CUR.m))}`;
+  const [tousKids, att, periodes, effectifsMois] = await Promise.all([
     STORE.listKids(ME.role === 'admin'),
     STORE.kidAttendanceForMonth(CUR.y, CUR.m),
+    STORE.listPeriodes(),
+    STORE.stageEffectifsEntre(debutMois, finMois),
   ]);
+  /* Stages et fermetures : ces jours-là, la grille des enfants inscrits est
+   * suspendue (voir Util.periodeDu). Un jour de stage compte le NOMBRE encodé
+   * pour le stage ; un jour de fermeture ne compte personne. */
+  const periodeJour = (date) => Util.periodeDu(periodes, date);
+  const effectif = new Map(effectifsMois.map((x) => [x.entry_date, Number(x.count) || 0]));
   const kids = tousKids.filter((k) => k.active !== false);
   const archives = tousKids.filter((k) => k.active === false);
   // Statut par (kid,date) : 'present' | 'absent'. Ancien enregistrement sans statut = présent.
@@ -1432,6 +1550,7 @@ async function viewChildren() {
       if (dejaFait.has(k.id)) return;               // mois déjà pré-encodé pour cet enfant
       days.forEach((day) => {
         if (day.date < KIDS_MIN_ISO) return;        // avant l'ouverture : aucun accueil
+        if (periodeJour(day.date)) return;          // stage ou fermeture : personne n'est attendu
         if (!isExpected(k, day.dow)) return;
         if (stat.get(k.id + '|' + day.date)) return; // déjà présent/absent → on ne touche pas
         toWrite.push({ kid_id: k.id, entry_date: day.date, status: 'present' });
@@ -1451,16 +1570,22 @@ async function viewChildren() {
     }
   }
 
-  // Un enregistrement antérieur à l'ouverture ne compte nulle part.
-  const compte = (kidId, date) => (date >= KIDS_MIN_ISO && getSt(kidId, date) === 'present') ? 1 : 0;
+  // Un enregistrement antérieur à l'ouverture ne compte nulle part, ni un
+  // enregistrement résiduel un jour de stage ou de fermeture.
+  const compte = (kidId, date) => (date >= KIDS_MIN_ISO && !periodeJour(date)
+    && getSt(kidId, date) === 'present') ? 1 : 0;
   const kidPresentCount = (kid) => days.reduce((n, day) => n + compte(kid.id, day.date), 0);
-  const dayPresentCount = (day) => kids.reduce((n, k) => n + compte(k.id, day.date), 0);
+  const dayPresentCount = (day) => {
+    const per = periodeJour(day.date);
+    if (per) return per.type === 'stage' ? (effectif.get(day.date) || 0) : 0;
+    return kids.reduce((n, k) => n + compte(k.id, day.date), 0);
+  };
   const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
 
   // En-tête : numéro du jour au-dessus de son initiale. Le dimanche est mis en
   // évidence, c'est le repère qui permet de compter les semaines d'un coup d'œil.
   const headDays = days.map((day) =>
-    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}"><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
+    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}${classePeriode(periodeJour(day.date))}"${titrePeriode(periodeJour(day.date))}><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
 
   const cellHtml = (k, day) => {
     // Avant le premier jour d'accueil, la case est neutralisée : on ne peut rien
@@ -1468,6 +1593,10 @@ async function viewChildren() {
     if (day.date < KIDS_MIN_ISO) {
       return `<td class="daycell${day.weekend ? ' weekend' : ''}"><span class="presbtn pres-off"
         title="Aucun accueil avant le ${KIDS_MIN_LISIBLE}"></span></td>`;
+    }
+    const per = periodeJour(day.date);
+    if (per) {
+      return `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(per)}"><span class="presbtn pres-off"${titrePeriode(per)}></span></td>`;
     }
     const st = getSt(k.id, day.date);
     const expected = isExpected(k, day.dow);
@@ -1511,9 +1640,25 @@ async function viewChildren() {
   // et 31 colonnes, il faut pouvoir lire le total sans remonter jusqu'au pied.
   // Repérage par attribut (et non par id) puisque chaque total existe en double.
   const totalCells = () => days.map((day) =>
-    `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong data-daytot="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+    `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(periodeJour(day.date))}"><strong data-daytot="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
   const totalRow = `<tr class="totrow"><th scope="row" class="kidname">Total présents / jour</th>
     ${totalCells()}<td class="kidtot"><strong data-grandtot>${totalPresent}</strong></td></tr>`;
+  /* Ligne « Enfants au stage » : n'apparaît que si le mois compte un jour de
+   * stage. Un champ par jour de stage, encodé par l'équipe comme les présences. */
+  const joursStage = days.filter((day) => (periodeJour(day.date) || {}).type === 'stage');
+  const peutEncoder = !(anneeClose() && ME.role !== 'admin');
+  const ligneStage = joursStage.length ? `<tr class="stagerow">
+      <th scope="row" class="kidname">🏕️ Enfants au stage</th>
+      ${days.map((day) => {
+        const per = periodeJour(day.date);
+        if (!per || per.type !== 'stage') return `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(per)}"></td>`;
+        const v = effectif.has(day.date) ? effectif.get(day.date) : '';
+        return `<td class="daycell periode-stage"><input type="number" class="stagecnt" min="0" max="999" step="1" inputmode="numeric"
+          data-date="${day.date}" value="${v}" ${peutEncoder ? '' : 'disabled'}
+          aria-label="Nombre d'enfants au stage le ${day.d}/${pad(CUR.m)}" title="Nombre d'enfants présents au stage ce jour-là"/></td>`;
+      }).join('')}
+      <td class="kidtot"><strong id="stageTot">${joursStage.reduce((n, day) => n + (effectif.get(day.date) || 0), 0)}</strong></td>
+    </tr>` : '';
   const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="kd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
 
   const legende = `<span class="pres-leg"><span class="presbtn pres-p" aria-hidden="true">✓</span> Présent</span>
@@ -1522,12 +1667,16 @@ async function viewChildren() {
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
   const actionsEnfants = ME.role === 'admin'
-    ? '<button class="small" id="listePdfBtn" title="Télécharger la liste des enfants et leurs jours habituels">🖨️ Liste PDF</button>'
+    ? '<button class="small" id="listePdfBtn" title="Télécharge en PDF la liste des enfants inscrits, leur école et leurs jours habituels">📄 PDF — Liste des enfants et jours habituels</button>'
+      + ` <button class="small" id="onePdfBtn" title="Télécharge en PDF le nombre d'enfants présents chaque jour de ${monthName(CUR.y, CUR.m)}, sans aucun nom, pour l'encodage sur le site de l'ONE">📄 PDF — Présences par jour pour l'ONE, ${monthName(CUR.y, CUR.m)}</button>`
+      + ' <button class="small" id="perToggle" title="Déclarer un stage ou une fermeture (congé, jour férié)">🏕️ Stages et fermetures</button>'
       + ' <button id="kToggle" class="addkid">+ Ajouter un enfant</button>'
     : '';
   app.innerHTML = `${await toolbar(false, actionsEnfants)}
     <div class="card">
       <h2 style="margin:0 0 4px">🧒 Présences des enfants — ${monthName(CUR.y, CUR.m)}</h2>
+      ${periodesDuMoisHTML(periodes, debutMois, finMois)}
+      ${ME.role === 'admin' ? carteperiodesHTML(periodes) : ''}
       ${ME.role === 'admin' ? `
       <div class="card sub hidden" id="addKidCard">
         <div class="row" style="align-items:end">
@@ -1580,7 +1729,7 @@ async function viewChildren() {
           <tr><th scope="col" class="kidname">Enfant</th>${headDays}<th scope="col" class="kidtot">Prés.</th></tr>
           ${totalRow}
         </thead>
-        <tbody>${kidRows}</tbody>
+        <tbody>${ligneStage}${kidRows}</tbody>
         <tfoot>${totalRow}</tfoot>
       </table></div>
       <div class="legbar foot">
@@ -1606,6 +1755,44 @@ async function viewChildren() {
         ME.role === 'admin' ? ' La moyenne annuelle est dans l\'onglet 📈 Statistiques.' : ''}</p>
     </div>`;
   wireToolbar();
+
+  // Enfants au stage : enregistré à la sortie du champ (ou sur Entrée).
+  app.querySelectorAll('input.stagecnt').forEach((inp) => {
+    const enregistrer = async () => {
+      const date = inp.dataset.date;
+      const brut = inp.value.trim();
+      const avant = effectif.has(date) ? effectif.get(date) : null;
+      let n = null;
+      if (brut !== '') {
+        n = Number(brut);
+        if (!Number.isInteger(n) || n < 0 || n > 999) {
+          toast("Nombre d'enfants invalide (un entier de 0 à 999).", 'error');
+          inp.value = avant == null ? '' : avant; return;
+        }
+      }
+      if (n === avant) return;
+      if (n == null) effectif.delete(date); else effectif.set(date, n);
+      setTotal(`[data-daytot="${Number(date.slice(8))}"]`, n || 0);
+      setGrandTotal();
+      const st = document.getElementById('stageTot');
+      if (st) st.textContent = joursStage.reduce((s, day) => s + (effectif.get(day.date) || 0), 0);
+      try { await STORE.setStageEffectif(date, n); }
+      catch (e) {
+        if (avant == null) effectif.delete(date); else effectif.set(date, avant);
+        inp.value = avant == null ? '' : avant;
+        toast('Enregistrement impossible : ' + e.message, 'error');
+      }
+    };
+    inp.onchange = enregistrer;
+    inp.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); } };
+  });
+  brancherPeriodes();
+
+  // Tableau pour l'ONE : un nombre par jour, sans aucun nom (administration seule).
+  const oneBtn = document.getElementById('onePdfBtn');
+  if (oneBtn) oneBtn.onclick = () => avecBarre(() => exportPresencesONEPDF(
+    days.map((day) => ({ ...day, periode: periodeJour(day.date), n: dayPresentCount(day) }))))
+    .catch((e) => toast('Export impossible : ' + e.message, 'error'));
 
   // Liste imprimable des enfants (administration seule).
   const listeBtn = document.getElementById('listePdfBtn');
@@ -1711,6 +1898,7 @@ async function viewChildren() {
     const absences = [];
     days.forEach((day) => {
       if (day.date < KIDS_MIN_ISO) return;
+      if (periodeJour(day.date)) return;   // stage ou fermeture : ni attendu, ni compté
       const kk = kids.find((x) => x.id === kidId);
       if (kk && isExpected(kk, day.dow)) c.attendus++;
       const st = getSt(kidId, day.date);
@@ -1731,7 +1919,7 @@ async function viewChildren() {
       <div class="row-between">
         <h3 style="margin:0">📄 ${echapper(kidLabel(k))} — ${monthName(CUR.y, CUR.m)}</h3>
         <div style="display:flex; gap:8px">
-          <button class="small" id="fichePdf">🖨️ Export PDF</button>
+          <button class="small" id="fichePdf" title="Télécharge en PDF la fiche de présence de ${echapper(kidLabel(k))} pour ${monthName(CUR.y, CUR.m)}">📄 PDF — Fiche de présence, ${monthName(CUR.y, CUR.m)}</button>
           <button class="small gray" id="ficheClose">Fermer</button>
         </div>
       </div>
@@ -1768,7 +1956,7 @@ async function viewChildren() {
   // jour TOUTES les cellules portant le repère, pas seulement la première.
   const setTotal = (sel, valeur) => app.querySelectorAll(sel).forEach((el) => (el.textContent = valeur));
   const setGrandTotal = () => setTotal('[data-grandtot]',
-    days.reduce((s, day) => s + kids.reduce((n, k) => n + compte(k.id, day.date), 0), 0));
+    days.reduce((s, day) => s + dayPresentCount(day), 0));
   // Cellule à 3 états : présent (✓) → absent (✗) → vide. Mise à jour ciblée.
   // Écouteur unique délégué : le tableau compte jusqu'à ~1 100 cases, leur
   // attacher un gestionnaire chacune ralentissait l'ouverture de l'onglet.
@@ -2194,11 +2382,12 @@ async function viewStats() {
   const auj = todayISO();
   const debut = debutAnnee(ANNEE) > MIN_ISO ? debutAnnee(ANNEE) : MIN_ISO;
   const fin = finAnnee(ANNEE) < auj ? finAnnee(ANNEE) : auj;
-  const [all, kidsAll, attAnnee, prestationsAnnee] = await Promise.all([
+  const [all, kidsAll, attAnnee, prestationsAnnee, periodesStats] = await Promise.all([
     STORE.allChildrenEntre(debut, fin),
     estAdmin ? STORE.listKids(true) : Promise.resolve([]),
     estAdmin ? STORE.kidAttendanceEntre(debut, fin) : Promise.resolve([]),
     estAdmin ? STORE.allEntriesEntre(debut, fin) : Promise.resolve([]),
+    STORE.listPeriodes(),
   ]);
   // Rien avant le premier jour d'accueil : sinon des jours d'ouverture fictifs
   // (issus d'un pré-encodage antérieur) tireraient la moyenne vers le bas.
@@ -2237,7 +2426,11 @@ async function viewStats() {
   let crit = null;
   if (ME.role === 'admin') {
   const kidById = {}; kidsAll.forEach((k) => (kidById[k.id] = k));
-  const att = attAnnee.filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO);
+  /* Les jours de stage ou de fermeture sont écartés : la grille habituelle y est
+   * suspendue, et les enfants d'un stage, sans fiche, n'ont pas d'âge connu —
+   * ils comptent dans les totaux, pas dans ce critère d'âge. */
+  const att = attAnnee.filter((a) => (a.entry_date || '') >= KIDS_MIN_ISO
+    && !Util.periodeDu(periodesStats, a.entry_date));
   // Par jour d'ouverture : nombre d'enfants présents âgés de 6 à 15 ans.
   const byDay = {};
   att.forEach((a) => {
@@ -2287,7 +2480,7 @@ async function viewStats() {
     <div class="card">
       <div class="row-between">
         <h2 style="margin:0">📈 Statistiques — année scolaire ${libelleAnnee(ANNEE)}</h2>
-        <button class="small" id="statsPdfBtn">🖨️ Export PDF</button>
+        <button class="small" id="statsPdfBtn" title="Télécharge en PDF les statistiques de fréquentation et les critères d'agrément de l'année ${libelleAnnee(ANNEE)}">📄 PDF — Statistiques ${libelleAnnee(ANNEE)}</button>
       </div>
       <div class="hero-stat">
         <div class="big">${dailyYear.toFixed(1)}</div>
@@ -2317,10 +2510,16 @@ async function viewStats() {
     </div>`;
   wireToolbar();
 
+  /* Bouton branché DÈS LE RENDU. Il ne l'était qu'une fois la bibliothèque des
+   * graphiques chargée : pendant ce chargement, un clic sur l'export ne faisait
+   * rien, sans aucun message (mesuré). Le PDF part maintenant tout de suite,
+   * avec le graphique s'il est prêt, sans lui sinon. */
+  let graphique = null;
+  document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, graphique)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+
   if (!(await assurerChart())) {
     const c = document.getElementById('chartMonthly');
-    if (c) c.replaceWith(Object.assign(document.createElement('p'), { className: 'muted small', textContent: 'Graphique indisponible hors ligne — voir le tableau ci-dessous.' }));
-    document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, null)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+    if (c) c.replaceWith(Object.assign(document.createElement('p'), { className: 'muted small', textContent: 'Graphique indisponible — voir le tableau ci-dessous.' }));
     return;
   }
   if (CHART) { try { CHART.destroy(); } catch {} }   // libère le graphique précédent (évite une fuite mémoire)
@@ -2329,8 +2528,7 @@ async function viewStats() {
     data: { labels: months.map((m) => m.short), datasets: [{ label: 'Moyenne/jour', data: months.map((m) => +m.avg.toFixed(1)), backgroundColor: '#2f9e44' }] },
     options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
-  const chartMonthly = CHART;
-  document.getElementById('statsPdfBtn').onclick = () => avecBarre(() => exportStatsPDF(stats, chartMonthly)).catch((e) => toast('Export impossible : ' + e.message, 'error'));
+  graphique = CHART;
 }
 
 /* Effacement DÉFINITIF d'un enfant — procédure unique, utilisée depuis sa fiche
@@ -2387,15 +2585,14 @@ async function exportFichePDF(k, c, absences) {
     : [['—', 'Aucune absence ce mois-ci']];
 
   if (!(await assurerPdf())) {           // repli impression, comme les autres exports
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     const tab = (t, l) => `<h3>${t}</h3><table border=1 cellpadding=5 style="border-collapse:collapse">`
       + l.map((r) => '<tr>' + r.map((c2) => `<td>${echapper(c2)}</td>`).join('') + '</tr>').join('') + '</table>';
     w.document.write(`<img src="assets/logo.svg" style="height:60px">
       <h2>${echapper(titre)} — ${echapper(sousTitre)}</h2>
       ${tab('Fiche', infos)}${tab('Bilan du mois', bilan)}${tab('Détail des absences', detail)}
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
@@ -2408,7 +2605,7 @@ async function exportFichePDF(k, c, absences) {
   bloc(["Fiche de l'enfant", ''], infos);
   bloc(['Bilan du mois', 'Nombre'], bilan);
   bloc(['Détail des absences', 'Motif'], detail);
-  doc.save(`fiche_${(kidLabel(k) || 'enfant').replace(/[^\w-]+/g, '-')}_${CUR.y}-${pad(CUR.m)}.pdf`);
+  enregistrerPdf(doc, `fiche_${(kidLabel(k) || 'enfant').replace(/[^\w-]+/g, '-')}_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
 /* ---------------- Export PDF : liste des enfants et jours habituels ----------------
@@ -2417,6 +2614,57 @@ async function exportFichePDF(k, c, absences) {
  * quels jours on l'attend. Réservé à l'administration, comme les fiches.
  * Seuls les enfants ACTIFS y figurent : ceux qui ont été retirés de la liste
  * n'ont plus à être attendus. */
+/* ---------------- Export PDF : présences par jour pour l'ONE ----------------
+ * Ce que l'administration recopie sur le site de l'ONE : pour le mois affiché, le
+ * NOMBRE d'enfants présents chaque jour de semaine — aucun nom. Mêmes comptes que
+ * la ligne « Total présents / jour » de la grille : présences réelles un jour
+ * ordinaire, nombre encodé un jour de stage, zéro un jour de fermeture.
+ * Seuls les jours ÉCOULÉS sont repris, comme dans les statistiques : un mois en
+ * cours contient déjà les présences pré-encodées des jours à venir, une prévision
+ * qui n'a rien à faire dans une déclaration. */
+async function exportPresencesONEPDF(jours) {
+  const auj = todayISO();
+  const retenus = jours.filter((j) => !j.weekend && j.date >= KIDS_MIN_ISO && j.date <= auj);
+  const lignes = retenus.map((j) => [
+    `${DOW[j.dow]} ${pad(j.d)}/${pad(CUR.m)}`,
+    j.periode && j.periode.type === 'fermeture' ? '—' : String(j.n),
+    j.periode ? (j.periode.type === 'stage' ? 'Stage' : 'Fermé')
+      + (j.periode.intitule ? ' — ' + j.periode.intitule : '') : '',
+  ]);
+  const ouverts = retenus.filter((j) => j.n > 0);
+  const total = ouverts.reduce((s, j) => s + j.n, 0);
+  const moyenne = ouverts.length ? (total / ouverts.length).toFixed(1).replace('.', ',') : '—';
+  const dernier = jours[jours.length - 1];
+  const titre = "Présences par jour — déclaration ONE";
+  const sousTitre = monthName(CUR.y, CUR.m) + (dernier && dernier.date > auj && retenus.length
+    ? ` (jusqu'au ${dateCourte(retenus[retenus.length - 1].date)})` : '');
+  const bilan = [
+    ["Total des présences du mois", String(total)],
+    ["Jours d'ouverture (au moins un enfant)", String(ouverts.length)],
+    ['Moyenne par jour d\'ouverture', moyenne],
+  ];
+  if (!lignes.length) { toast("Aucun jour écoulé à déclarer pour ce mois.", 'error'); return; }
+
+  if (!(await assurerPdf())) {
+    const w = feuilleImpression();
+    const tab = (h, l) => `<table border=1 cellpadding=5 style="border-collapse:collapse"><tr>${h.map((x) => `<th>${x}</th>`).join('')}</tr>`
+      + l.map((r) => '<tr>' + r.map((c) => `<td>${echapper(c)}</td>`).join('') + '</tr>').join('') + '</table>';
+    w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${titre} — ${echapper(sousTitre)}</h2>
+      ${tab(['Jour', "Enfants présents", 'Remarque'], lignes)}<h3>Bilan</h3>${tab(['', ''], bilan)}`);
+    w.imprimer(); return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let y = await pdfHeader(doc, pourPdf(titre), pourPdf(sousTitre));
+  doc.autoTable({ startY: y, head: [['Jour', 'Enfants présents', 'Remarque']], body: lignesPdf(lignes),
+    styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] },
+    columnStyles: { 1: { halign: 'center', fontStyle: 'bold' } } });
+  y = doc.lastAutoTable.finalY + 8;
+  doc.autoTable({ startY: y, head: [['Bilan du mois', '']], body: lignesPdf(bilan),
+    styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] }, columnStyles: { 1: { halign: 'center' } } });
+  enregistrerPdf(doc, `presences_ONE_${CUR.y}-${pad(CUR.m)}.pdf`);
+}
+
 async function exportListeEnfantsPDF(kids) {
   const titre = 'Liste des enfants';
   const sousTitre = `Au ${new Date().toLocaleDateString('fr-FR')} · ${kids.length} enfant${kids.length > 1 ? 's' : ''}`;
@@ -2443,8 +2691,7 @@ async function exportListeEnfantsPDF(kids) {
   const entetes = ['Enfant', 'Année', 'École', 'Naissance', 'Jours habituels'];
 
   if (!(await assurerPdf())) {           // repli impression, comme les autres exports
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     const tab = (t, e, l) => `<h3>${echapper(t)}</h3><table border=1 cellpadding=5 style="border-collapse:collapse">`
       + `<tr>${e.map((h) => `<th>${echapper(h)}</th>`).join('')}</tr>`
       + l.map((r) => '<tr>' + r.map((c) => `<td>${echapper(c)}</td>`).join('') + '</tr>').join('') + '</table>';
@@ -2453,8 +2700,8 @@ async function exportListeEnfantsPDF(kids) {
       ${tab('Enfants inscrits', entetes, corps)}
       ${parJour.length ? tab('Effectif attendu par jour', ['Jour', 'Enfants attendus'], parJour) : ''}
       <p>Seuls les enfants actifs figurent dans cette liste.</p>
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
 
   const { jsPDF } = window.jspdf;
@@ -2488,7 +2735,7 @@ async function exportListeEnfantsPDF(kids) {
   }
   doc.setFontSize(9); doc.setTextColor(110);
   doc.text(pourPdf('Seuls les enfants actifs figurent dans cette liste.'), 14, y);
-  doc.save(`liste_enfants_${todayISO()}.pdf`);
+  enregistrerPdf(doc, `liste_enfants_${todayISO()}.pdf`);
 }
 
 /* ---------------- Export PDF des statistiques de l'année scolaire ----------------
@@ -2509,8 +2756,7 @@ async function exportStatsPDF(stats, chartMonthly) {
 
   // Repli impression si jsPDF reste indisponible (hors ligne).
   if (!(await assurerPdf())) {
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     const tableau = (entetes, lignes) =>
       `<table border=1 cellpadding=5 style="border-collapse:collapse">
         <tr>${entetes.map((h) => `<th>${h}</th>`).join('')}</tr>
@@ -2527,8 +2773,8 @@ async function exportStatsPDF(stats, chartMonthly) {
         stats.crit.map((c) => [c.label, c.val + (c.note ? ' — ' + c.note : ''), c.ok ? 'atteint' : 'non atteint']))}` : ''}
       ${chartMonthly ? `<h3>Moyenne d'enfants par jour, mois par mois</h3><img src="${chartMonthly.toBase64Image()}" style="max-width:100%"/>` : ''}
       <h3>Détail mensuel</h3>${tableau(['Mois', 'Moyenne / jour', 'Total', 'Jours'], lignesMois)}
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
 
   const { jsPDF } = window.jspdf;
@@ -2604,7 +2850,7 @@ async function exportStatsPDF(stats, chartMonthly) {
     headStyles: { fillColor: BLEU },
   });
 
-  doc.save(`statistiques_${stats.annee}.pdf`);
+  enregistrerPdf(doc, `statistiques_${stats.annee}.pdf`);
 }
 
 /* ---------------- Vue : Utilisateurs (admin) ---------------- */
@@ -2772,9 +3018,9 @@ async function viewEmployees() {
         en cas de perte ou de fausse manipulation.</p>
       <h3 style="margin-bottom:6px">Sauvegarde / export</h3>
       <div class="row" style="flex-wrap:wrap; gap:10px">
-        <button class="small" id="expJson">⬇️ Exporter tout (JSON)</button>
-        <button class="small" id="expCsvPresta">⬇️ CSV prestations</button>
-        <button class="small" id="expCsvKids">⬇️ CSV présences enfants</button>
+        <button class="small" id="expJson" title="Sauvegarde complète de toutes les données, pour une restauration">⬇️ Sauvegarde complète (JSON)</button>
+        <button class="small" id="expCsvPresta" title="Tableau Excel de toutes les prestations encodées, une ligne par jour et par employée">⬇️ Excel (CSV) — Prestations des employées</button>
+        <button class="small" id="expCsvKids" title="Tableau Excel de toutes les présences et absences des enfants, une ligne par enfant et par jour">⬇️ Excel (CSV) — Présences des enfants</button>
       </div>
       <h3 style="margin:16px 0 6px">Restauration</h3>
       <p class="muted small" style="margin-top:0">Réimporte une sauvegarde <strong>JSON</strong>. ${isCloud()
@@ -3025,8 +3271,9 @@ async function viewEmployees() {
             estJourType(e) ? 0 : breakMinutes(e), w, w - p,
             JOUR_TYPES[e.jour_type] || '', e.justification || '']);
         });
-      downloadFile(`prestations_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
-      toast('CSV prestations téléchargé');
+      const nom = `prestations_${todayISO()}.csv`;
+      downloadFile(nom, toCSV(rows), 'text/csv;charset=utf-8');
+      toast(`Tableau téléchargé : ${nom} (dossier Téléchargements)`);
     } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
   };
   document.getElementById('expCsvKids').onclick = async () => {
@@ -3044,8 +3291,9 @@ async function viewEmployees() {
           const k = kidById[a.kid_id] || {};
           rows.push([k.last_name || '', k.first_name || '', a.entry_date, MOTS[statutDe(a)]]);
         });
-      downloadFile(`presences_enfants_${todayISO()}.csv`, toCSV(rows), 'text/csv;charset=utf-8');
-      toast('CSV présences téléchargé');
+      const nom = `presences_enfants_${todayISO()}.csv`;
+      downloadFile(nom, toCSV(rows), 'text/csv;charset=utf-8');
+      toast(`Tableau téléchargé : ${nom} (dossier Téléchargements)`);
     } catch (e) { toast('Export impossible : ' + e.message, 'error'); }
   };
 }
@@ -3110,13 +3358,12 @@ async function exportRecapPDF(data) {
   ]);
 
   if (!(await assurerPdf())) { // repli impression
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${title} — ${sub}</h2>
       <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Employée</th><th>Prévu</th><th>Presté</th><th>Écart</th><th>Reporté</th><th>Cumulé</th><th>Statut</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
@@ -3126,7 +3373,7 @@ async function exportRecapPDF(data) {
     head: [['Employée', 'Prévu', 'Presté', 'Écart mois', 'Solde reporté', 'Solde cumulé', 'Statut']],
     body: lignesPdf(body), styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] },
   });
-  doc.save(`recapitulatif_${CUR.y}-${pad(CUR.m)}.pdf`);
+  enregistrerPdf(doc, `recapitulatif_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
 /* ---------------- Export PDF : fiche de prestations ---------------- */
@@ -3152,14 +3399,13 @@ async function exportSheetPDF(empId) {
   }
 
   if (!(await assurerPdf())) { // repli impression
-    const w = window.open('', '_blank');
-    if (!w) { toast("Impression bloquée par le navigateur. Autorisez les fenêtres surgissantes pour ce site.", 'error'); return; }
+    const w = feuilleImpression();
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>Prestations — ${prof.full_name} — ${monthName(CUR.y, CUR.m)}</h2>
       <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Date</th><th>Prévu début</th><th>Prévu fin</th><th>Réel début</th><th>Réel fin</th><th>Midi</th><th>Presté</th><th>Écart</th><th>Justif.</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
       <p><b>Total presté:</b> ${fmtHM(sum.worked)} — <b>Solde cumulé:</b> ${fmtHM(sum.closing)}</p>
-      <button onclick="print()">Imprimer</button>`);
-    w.document.close(); return;
+`);
+    w.imprimer(); return;
   }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
@@ -3174,7 +3420,7 @@ async function exportSheetPDF(empId) {
   doc.text(`Total prévu : ${fmtHM(sum.planned)}      Total presté : ${fmtHM(sum.worked)}`, 14, y);
   doc.text(`Écart du mois : ${fmtHM(sum.delta)}      Solde reporté : ${fmtHM(sum.carryIn)}      Solde cumulé : ${fmtHM(sum.closing)}`, 14, y + 7);
   doc.text('Signature employée : ______________        Signature responsable : ______________', 14, y + 24);
-  doc.save(`prestations_${prof.full_name.replace(/\s/g, '_')}_${CUR.y}-${pad(CUR.m)}.pdf`);
+  enregistrerPdf(doc, `prestations_${prof.full_name.replace(/\s/g, '_')}_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
 /* ---------------- Déconnexion ---------------- */

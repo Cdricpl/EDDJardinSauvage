@@ -27,6 +27,46 @@ const Util = {
     return (crypto && crypto.randomUUID) ? crypto.randomUUID()
       : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2);
   },
+
+  /* ---- Stages et fermetures ----
+   * Une PÉRIODE suspend la grille habituelle des enfants inscrits :
+   *  - « fermeture » (congé, jour férié) : personne n'est compté ce jour-là ;
+   *  - « stage » : on compte le NOMBRE d'enfants encodé pour le stage, ces
+   *    enfants n'étant pas forcément ceux de l'année.
+   * Rien n'est effacé : une présence déjà enregistrée un jour de période est
+   * simplement ignorée, et réapparaît si la période est supprimée. */
+  periodeDu(periodes, date) {
+    return (periodes || []).find((p) => p.debut <= date && date <= p.fin) || null;
+  },
+  periodeValide(p) {
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    const type = p && p.type;
+    if (type !== 'stage' && type !== 'fermeture') throw new Error('Choisissez « Stage » ou « Fermeture ».');
+    if (!iso.test(p.debut || '') || !iso.test(p.fin || '')) throw new Error('Indiquez la date de début et la date de fin.');
+    if (p.fin < p.debut) throw new Error('La date de fin précède la date de début.');
+    const out = { type, debut: p.debut, fin: p.fin, intitule: String(p.intitule || '').trim().slice(0, 80) };
+    if (p.id) out.id = String(p.id);
+    return out;
+  },
+  effectifValide(n) {
+    const v = Math.round(Number(n));
+    if (!Number.isFinite(v) || v < 0 || v > 999) throw new Error("Nombre d'enfants invalide (0 à 999).");
+    return v;
+  },
+  // Enfants PRÉSENTS par jour, périodes appliquées : [{ entry_date, children }].
+  presencesParJour(att, periodes, effectifs) {
+    const byDate = {};
+    (att || []).forEach((a) => {
+      if (a.status && a.status !== 'present') return;   // absence justifiée OU injustifiée
+      if (Util.periodeDu(periodes, a.entry_date)) return; // stage ou fermeture : grille suspendue
+      byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
+    });
+    (effectifs || []).forEach((x) => {
+      const p = Util.periodeDu(periodes, x.entry_date);
+      if (p && p.type === 'stage' && Number(x.count) > 0) byDate[x.entry_date] = Number(x.count);
+    });
+    return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
+  },
 };
 
 /* ================================================================
@@ -57,6 +97,8 @@ class DemoStore {
       ],
       kidatt: [],       // présences : { kid_id, entry_date }
       kidprefill: [],   // mois déjà pré-encodés : { kid_id, month }
+      periodes: [],     // stages et fermetures : { id, type, debut, fin, intitule }
+      effectifs: [],    // enfants au stage, par jour : { entry_date, count }
       benevoles: [      // liste nominative des bénévoles (nom, contact, jours habituels)
         { id: 'b1', first_name: 'Alice', last_name: 'Dupuis', email: '', phone: '', days: [2], active: true },
         { id: 'b2', first_name: 'Marc', last_name: 'Simon', email: '', phone: '', days: [4], active: true },
@@ -494,14 +536,36 @@ class DemoStore {
     this._save(db);
   }
 
+  /* ---- Périodes particulières : stages et fermetures ---- */
+  async listPeriodes() {
+    return (this._db().periodes || []).slice().sort((a, b) => a.debut.localeCompare(b.debut));
+  }
+  async savePeriode(p) {
+    const ok = Util.periodeValide(p);
+    const db = this._db(); db.periodes = db.periodes || [];
+    const i = ok.id ? db.periodes.findIndex((x) => x.id === ok.id) : -1;
+    if (i >= 0) db.periodes[i] = ok; else db.periodes.push({ ...ok, id: ok.id || 'per' + Date.now() });
+    this._save(db);
+  }
+  async deletePeriode(id) {
+    const db = this._db();
+    db.periodes = (db.periodes || []).filter((x) => x.id !== id);
+    this._save(db);
+  }
+  async stageEffectifsEntre(debut, fin) {
+    return (this._db().effectifs || []).filter((x) => x.entry_date >= debut && x.entry_date <= fin);
+  }
+  async setStageEffectif(entry_date, count) {
+    const db = this._db(); db.effectifs = (db.effectifs || []).filter((x) => x.entry_date !== entry_date);
+    if (count != null) db.effectifs.push({ entry_date, count: Util.effectifValide(count) });
+    this._save(db);
+  }
+
   // Comptes agrégés par jour (enfants PRÉSENTS) — pour les statistiques.
   async allChildrenEntre(debut, fin) {
-    const byDate = {};
-    (await this.kidAttendanceEntre(debut, fin)).forEach(a => {
-      if (a.status && a.status !== 'present') return; // absence justifiée OU injustifiée
-      byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
-    });
-    return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
+    const [att, periodes, effectifs] = await Promise.all([
+      this.kidAttendanceEntre(debut, fin), this.listPeriodes(), this.stageEffectifsEntre(debut, fin)]);
+    return Util.presencesParJour(att, periodes, effectifs);
   }
 
   /* ---- Export / sauvegarde ---- */
@@ -514,6 +578,7 @@ class DemoStore {
       schedule_templates: db.templates || [],
       kids: db.kids || [], kid_attendance: db.kidatt || [],
       kid_prefill: db.kidprefill || [],
+      periodes: db.periodes || [], stage_effectifs: db.effectifs || [],
       benevoles: db.benevoles || [], benevole_attendance: db.benatt || [],
       benevole_prefill: db.benprefill || [],
       settings: db.settings || {},
@@ -531,6 +596,8 @@ class DemoStore {
     if (Array.isArray(data.kids))               { db.kids = data.kids;                      counts.kids = db.kids.length; }
     if (Array.isArray(data.kid_attendance))     { db.kidatt = data.kid_attendance;          counts.kid_attendance = db.kidatt.length; }
     if (Array.isArray(data.kid_prefill))        { db.kidprefill = data.kid_prefill;          counts.kid_prefill = db.kidprefill.length; }
+    if (Array.isArray(data.periodes))           { db.periodes = data.periodes;                counts.periodes = db.periodes.length; }
+    if (Array.isArray(data.stage_effectifs))    { db.effectifs = data.stage_effectifs;        counts.stage_effectifs = db.effectifs.length; }
     if (Array.isArray(data.benevoles))          { db.benevoles = data.benevoles;              counts.benevoles = db.benevoles.length; }
     if (Array.isArray(data.benevole_attendance)){ db.benatt = data.benevole_attendance;        counts.benevole_attendance = db.benatt.length; }
     if (Array.isArray(data.benevole_prefill))   { db.benprefill = data.benevole_prefill;       counts.benevole_prefill = db.benprefill.length; }
@@ -1105,30 +1172,80 @@ class FirebaseStore {
     this._oublier('preremplissageBen:');
   }
 
+  /* ---- Périodes particulières : stages et fermetures ----
+   * Deux collections, pour que les règles disent exactement qui fait quoi :
+   * `periodes` (déclarées par l'administration) et `stage_effectifs/{date}`
+   * (le nombre d'enfants au stage, encodé par l'équipe comme les présences).
+   * LECTURE TOLÉRANTE : tant que les règles Firestore de ces deux collections
+   * n'ont pas été publiées dans la console, toute lecture est refusée. Sans
+   * repli, l'onglet Enfants et les statistiques tomberaient en erreur ; on fait
+   * donc comme s'il n'y avait aucune période, et `periodesIndisponibles` permet
+   * à l'écran de le signaler à l'administration. */
+  async listPeriodes() {
+    return this._cache('periodes', async () => {
+      try {
+        const snap = await this.db.collection('periodes').get();
+        this.periodesIndisponibles = false;
+        return this._docs(snap).sort((a, b) => (a.debut || '').localeCompare(b.debut || ''));
+      } catch (e) {
+        console.warn('[periodes]', e && e.message);
+        this.periodesIndisponibles = true;
+        return [];
+      }
+    });
+  }
+  async savePeriode(p) {
+    const ok = Util.periodeValide(p);
+    const col = this.db.collection('periodes');
+    const ref = ok.id ? col.doc(ok.id) : col.doc();
+    const { id, ...data } = ok;
+    await ref.set(data);
+    this._oublier('periodes');
+  }
+  async deletePeriode(id) {
+    await this.db.collection('periodes').doc(id).delete();
+    this._oublier('periodes');
+  }
+  async stageEffectifsEntre(debut, fin) {
+    return this._cache(`effectifs:${debut}_${fin}`, async () => {
+      try {
+        const snap = await this.db.collection('stage_effectifs')
+          .where('entry_date', '>=', debut).where('entry_date', '<=', fin).get();
+        return this._docs(snap);
+      } catch (e) { console.warn('[stage_effectifs]', e && e.message); return []; }
+    });
+  }
+  async setStageEffectif(entry_date, count) {
+    const ref = this.db.collection('stage_effectifs').doc(entry_date);
+    if (count == null) await ref.delete();
+    else await ref.set({ entry_date, count: Util.effectifValide(count) });
+    this._oublier('effectifs:');
+  }
+
   // Nombre d'enfants presents par jour, sur une periode. Le balayage complet de
   // la collection etait inutile et devenait de plus en plus lourd au fil des
-  // annees.
+  // annees. Les stages et fermetures y sont appliques (voir Util.presencesParJour).
   async allChildrenEntre(debut, fin) {
-    const att = await this.kidAttendanceEntre(debut, fin);
-    const byDate = {};
-    att.forEach((a) => {
-      if (a.status && a.status !== 'present') return;   // absence justifiée OU injustifiée
-      byDate[a.entry_date] = (byDate[a.entry_date] || 0) + 1;
-    });
-    return Object.entries(byDate).map(([entry_date, children]) => ({ entry_date, children }));
+    const [att, periodes, effectifs] = await Promise.all([
+      this.kidAttendanceEntre(debut, fin), this.listPeriodes(), this.stageEffectifsEntre(debut, fin)]);
+    return Util.presencesParJour(att, periodes, effectifs);
   }
 
   /* ---- Export / restauration ---- */
   async exportAll() {
     const get = async (c) => this._docs(await this.db.collection(c).get());
+    // Les deux collections des périodes sont lues à part, avec repli : avant la
+    // publication de leurs règles, elles feraient échouer TOUTE la sauvegarde.
+    const tolerant = (c) => get(c).catch(() => []);
     const [profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill,
-      benevoles, benevole_attendance, benevole_prefill] = await Promise.all(
-      ['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance', 'kid_prefill',
-       'benevoles', 'benevole_attendance', 'benevole_prefill'].map(get));
+      benevoles, benevole_attendance, benevole_prefill, periodes, stage_effectifs] = await Promise.all([
+      ...['profiles', 'months', 'day_entries', 'schedule_templates', 'kids', 'kid_attendance', 'kid_prefill',
+        'benevoles', 'benevole_attendance', 'benevole_prefill'].map(get),
+      tolerant('periodes'), tolerant('stage_effectifs')]);
     const settings = await this.getReglages();
     return { exported_at: new Date().toISOString(), mode: 'firebase',
       profiles, months, day_entries, schedule_templates, kids, kid_attendance, kid_prefill,
-      benevoles, benevole_attendance, benevole_prefill, settings };
+      periodes, stage_effectifs, benevoles, benevole_attendance, benevole_prefill, settings };
   }
   // Restaure une sauvegarde JSON (y compris une ancienne sauvegarde exportee).
   // Les identifiants d'employées diffèrent d'un hébergeur à l'autre : on les
@@ -1176,6 +1293,18 @@ class FirebaseStore {
       ref: this.db.collection('kid_prefill').doc(`${x.kid_id}_${x.month}`),
       data: { kid_id: String(x.kid_id), month: x.month },
     }));
+    // Stages et fermetures, et les nombres d'enfants des stages.
+    (data.periodes || []).forEach((x) => {
+      try {
+        const { id, ...d } = Util.periodeValide(x);
+        ops.push({ ref: this.db.collection('periodes').doc(String(x.id)), data: d });
+      } catch {}   // une période illisible n'empêche pas le reste de la restauration
+    });
+    (data.stage_effectifs || []).forEach((x) => {
+      if (!x || !/^\d{4}-\d{2}-\d{2}$/.test(x.entry_date || '')) return;
+      ops.push({ ref: this.db.collection('stage_effectifs').doc(x.entry_date),
+        data: { entry_date: x.entry_date, count: Util.effectifValide(x.count) } });
+    });
     // Bénévoles : même logique que les enfants (fiche complète + présences + pré-encodage).
     (data.benevoles || []).forEach((b) => ops.push({
       ref: this.db.collection('benevoles').doc(String(b.id)),
@@ -1292,9 +1421,10 @@ class FirebaseStore {
         day_entries: (col) => (estAdmin ? anneeScolaire(col) : col.where('employee_id', '==', user.uid)),
         kid_attendance: anneeScolaire,
         benevole_attendance: anneeScolaire,
+        stage_effectifs: anneeScolaire,
       };
       ['day_entries', 'months', 'kids', 'kid_attendance', 'kid_prefill', 'benevoles', 'benevole_attendance',
-       'benevole_prefill', 'profiles', 'schedule_templates', 'settings'].forEach((c) => {
+       'benevole_prefill', 'profiles', 'schedule_templates', 'settings', 'periodes', 'stage_effectifs'].forEach((c) => {
         const base = this.db.collection(c);
         /* PREMIER INSTANTANÉ IGNORÉ. `onSnapshot` commence par livrer TOUT le
          * contenu suivi : ce n'est pas un changement, c'est ce que l'application
@@ -1338,6 +1468,8 @@ class FirebaseStore {
             if (c === 'kids') this._oublier('enfants:');
             if (c === 'kid_attendance') this._oublier('presences:', 'presencesPeriode:');
             if (c === 'kid_prefill') this._oublier('preremplissage:');
+            if (c === 'periodes') this._oublier('periodes');
+            if (c === 'stage_effectifs') this._oublier('effectifs:');
             if (c === 'benevoles') this._oublier('benevoles:');
             if (c === 'benevole_attendance') this._oublier('presencesBen:', 'presencesBenPeriode:');
             if (c === 'benevole_prefill') this._oublier('preremplissageBen:');
