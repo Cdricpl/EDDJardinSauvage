@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-7';
+const APP_VERSION = 'v2026.10.27-8';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -2536,7 +2536,7 @@ async function viewStats() {
       </table></div>
       <p class="muted small" style="margin-top:8px">Renseignez l'<strong>école</strong> et la <strong>date de naissance</strong> de chaque enfant (onglet 🧒 Enfants) pour un calcul exact.</p>` : ''}
       <h3 class="muted" style="margin-top:22px">Moyenne d'enfants par jour, mois par mois</h3>
-      <canvas id="chartMonthly" height="130"></canvas>
+      <div style="position:relative; height:300px"><canvas id="chartMonthly"></canvas></div>
       <div class="table-wrap" style="margin-top:14px"><table>
         <thead><tr><th>Mois</th><th>Moyenne / jour</th><th>Total</th><th>Jours</th></tr></thead>
         <tbody>${months.map((m) => `<tr>
@@ -2564,7 +2564,9 @@ async function viewStats() {
   CHART = new Chart(document.getElementById('chartMonthly'), {
     type: 'bar',
     data: { labels: months.map((m) => m.short), datasets: [{ label: 'Moyenne/jour', data: months.map((m) => +m.avg.toFixed(1)), backgroundColor: '#2f9e44' }] },
-    options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+    /* Hauteur FIXE (300 px, voir le conteneur) : en gardant ses proportions, le
+     * graphique grandissait avec la largeur de l'écran et dépassait 500 px. */
+    options: { animation: false, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
   graphique = CHART;
 }
@@ -2914,7 +2916,9 @@ async function exportStatsPDF(stats, chartMonthly) {
 
   // 3. Graphique mensuel.
   if (chartMonthly) {
-    const hauteur = 180 * 0.42;
+    // Proportions RÉELLES du graphique affiché : une valeur fixe l'étirait.
+    const cv = chartMonthly.canvas;
+    const hauteur = Math.min(180 * 0.42, 180 * ((cv && cv.height && cv.width) ? cv.height / cv.width : 0.42));
     place(hauteur + 14);
     sousTitreBloc("Moyenne d'enfants par jour, mois par mois");
     doc.addImage(chartMonthly.toBase64Image('image/png', 1), 'PNG', 14, y, 180, hauteur);

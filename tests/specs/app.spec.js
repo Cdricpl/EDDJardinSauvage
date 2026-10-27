@@ -1032,10 +1032,31 @@ test('feuille : sur un écran d’ordinateur, la grille tient sans défilement',
   // Le champ de justification n'est plus écrasé à sa largeur minimale (131 px).
   expect(m.justification).toBeGreaterThan(200);
 
-  // Les onglets de lecture gardent la largeur de lecture, eux.
-  await page.locator('.navbtn[data-v="recap"]').click();
-  await expect(page.locator('#app table')).toBeVisible();
-  expect(await page.evaluate(() => Math.round(document.querySelector('.container').getBoundingClientRect().width))).toBe(1060);
+});
+
+/* Harmonisation demandée : Récapitulatif, Statistiques et Utilisateurs étaient
+ * bridés à 1060 px quand Feuille, Enfants et Bénévoles prenaient 1440 px — le
+ * contenu changeait de largeur et de bord gauche d'un onglet à l'autre, et la
+ * barre d'onglets ne tombait pas en face des grilles. */
+test('mise en page : tous les onglets ont la même largeur et le même alignement', async ({ page }) => {
+  await loginAdmin(page);
+  for (const largeur of [1440, 1920]) {
+    await page.setViewportSize({ width: largeur, height: 900 });
+    const mesures = new Set();
+    for (const v of ['sheet', 'recap', 'children', 'benevoles', 'stats', 'employees']) {
+      await page.locator(`.navbtn[data-v="${v}"]`).click();
+      await expect(page.locator('#app > .card:not(.hidden)').first()).toBeVisible();
+      mesures.add(await page.evaluate(() => {
+        const app = document.getElementById('app').getBoundingClientRect();
+        const carte = document.querySelector('#app > .card:not(.hidden)').getBoundingClientRect();
+        const onglet = document.querySelector('.navbtn').getBoundingClientRect();
+        return `${Math.round(app.x)}|${Math.round(app.width)}|${Math.round(carte.x)}|${Math.round(onglet.x)}`;
+      }));
+    }
+    expect([...mesures], `${largeur}px : une seule géométrie pour les six onglets`).toHaveLength(1);
+    const [, , carteX, ongletX] = [...mesures][0].split('|').map(Number);
+    expect(Math.abs(carteX - ongletX), 'la barre d\'onglets est en face des cartes').toBeLessThanOrEqual(1);
+  }
 });
 
 /* Le pré-remplissage était réservé à l'administration ET exigeait un mois vide.
