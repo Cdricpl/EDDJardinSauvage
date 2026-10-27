@@ -1032,10 +1032,31 @@ test('feuille : sur un écran d’ordinateur, la grille tient sans défilement',
   // Le champ de justification n'est plus écrasé à sa largeur minimale (131 px).
   expect(m.justification).toBeGreaterThan(200);
 
-  // Les onglets de lecture gardent la largeur de lecture, eux.
-  await page.locator('.navbtn[data-v="recap"]').click();
-  await expect(page.locator('#app table')).toBeVisible();
-  expect(await page.evaluate(() => Math.round(document.querySelector('.container').getBoundingClientRect().width))).toBe(1060);
+});
+
+/* Harmonisation demandée : Récapitulatif, Statistiques et Utilisateurs étaient
+ * bridés à 1060 px quand Feuille, Enfants et Bénévoles prenaient 1440 px — le
+ * contenu changeait de largeur et de bord gauche d'un onglet à l'autre, et la
+ * barre d'onglets ne tombait pas en face des grilles. */
+test('mise en page : tous les onglets ont la même largeur et le même alignement', async ({ page }) => {
+  await loginAdmin(page);
+  for (const largeur of [1440, 1920]) {
+    await page.setViewportSize({ width: largeur, height: 900 });
+    const mesures = new Set();
+    for (const v of ['sheet', 'recap', 'children', 'benevoles', 'stats', 'employees']) {
+      await page.locator(`.navbtn[data-v="${v}"]`).click();
+      await expect(page.locator('#app > .card:not(.hidden)').first()).toBeVisible();
+      mesures.add(await page.evaluate(() => {
+        const app = document.getElementById('app').getBoundingClientRect();
+        const carte = document.querySelector('#app > .card:not(.hidden)').getBoundingClientRect();
+        const onglet = document.querySelector('.navbtn').getBoundingClientRect();
+        return `${Math.round(app.x)}|${Math.round(app.width)}|${Math.round(carte.x)}|${Math.round(onglet.x)}`;
+      }));
+    }
+    expect([...mesures], `${largeur}px : une seule géométrie pour les six onglets`).toHaveLength(1);
+    const [, , carteX, ongletX] = [...mesures][0].split('|').map(Number);
+    expect(Math.abs(carteX - ongletX), 'la barre d\'onglets est en face des cartes').toBeLessThanOrEqual(1);
+  }
 });
 
 /* Le pré-remplissage était réservé à l'administration ET exigeait un mois vide.
@@ -1737,7 +1758,7 @@ test('exports : chaque bouton dit ce qu’il télécharge, et le fichier est nom
   await page.locator('.navbtn[data-v="recap"]').click();
   await expect(page.locator('#recapPdfBtn')).toContainText('Récapitulatif des heures, septembre 2026');
   await page.locator('.navbtn[data-v="children"]').click();
-  await expect(page.locator('#listePdfBtn')).toContainText('Liste des enfants et jours habituels');
+  await expect(page.locator('#listePdfBtn')).toContainText('PDF — Liste des enfants');
   await page.locator('[data-fiche]').first().click();
   await expect(page.locator('#fichePdf')).toContainText('Fiche de présence, septembre 2026');
   await page.locator('.navbtn[data-v="stats"]').click();
@@ -2076,7 +2097,7 @@ test('ONE : le PDF du mois donne un nombre par jour, sans aucun nom', async ({ p
     await STORE.setStageEffectif('2026-09-07', 9);
   });
   await page.locator('.navbtn[data-v="children"]').click();
-  await expect(page.locator('#onePdfBtn')).toContainText("Présences par jour pour l'ONE, septembre 2026");
+  await expect(page.locator('#onePdfBtn')).toContainText('PDF — ONE, septembre 2026');
   const grille = {};
   for (const d of [1, 2, 3, 4, 7, 8, 9, 10]) grille[d] = Number(await page.locator(`[data-daytot="${d}"]`).first().innerText());
   const noms = await page.evaluate(async () => (await STORE.listKids()).flatMap((k) => [k.first_name, k.last_name]));
@@ -2188,4 +2209,36 @@ test('statistiques : une semaine sans enfants ne compte pas comme ouverte', asyn
   });
   expect(prestees, 'il faut des heures prestées cette semaine-là').toBeTruthy();
   expect(await semaines()).toBe(avant - 1);
+});
+
+/* Les 31 colonnes se ressemblaient : rien ne separait les semaines. Un trait
+ * avant chaque lundi, et le week-end (EDD fermee sauf exception) en retrait,
+ * mais toujours cliquable. Meme traitement dans l'onglet Benevoles. */
+test('grilles : les semaines sont séparées et le week-end est en retrait', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await loginAdmin(page);
+  for (const vue of ['children', 'benevoles']) {
+    await page.locator(`.navbtn[data-v="${vue}"]`).click();
+    await expect(page.locator('table.attend')).toBeVisible();
+    const m = await page.evaluate(() => {
+      const ths = [...document.querySelectorAll('table.attend thead tr:first-child th.daycol')];
+      const lundis = ths.filter((th) => th.querySelector('.dini').textContent === 'L');
+      const larg = (th) => th.getBoundingClientRect().width;
+      const semaine = ths.find((th) => !th.classList.contains('weekend'));
+      const weekend = ths.find((th) => th.classList.contains('weekend'));
+      return {
+        lundis: lundis.length,
+        separes: lundis.filter((th) => parseFloat(getComputedStyle(th).borderLeftWidth) >= 2).length,
+        largSemaine: larg(semaine), largWeekend: larg(weekend),
+      };
+    });
+    expect(m.lundis).toBeGreaterThanOrEqual(4);
+    expect(m.separes, `${vue} : chaque lundi porte le trait de semaine`).toBe(m.lundis);
+    expect(m.largWeekend, `${vue} : le week-end est plus étroit`).toBeLessThan(m.largSemaine);
+  }
+  // Une case de week-end reste cliquable (grande exception).
+  await page.locator('.navbtn[data-v="children"]').click();
+  const caseWE = page.locator('td.daycell.weekend button.presbtn').first();
+  await caseWE.click();
+  await expect(caseWE).toHaveClass(/pres-p/);
 });

@@ -77,19 +77,21 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
   display:flex; gap:6px; flex-wrap:wrap;
   background:var(--paper-2); border-bottom:1px solid var(--border);
   /* Le fond occupe toute la largeur, mais les onglets s'alignent sur les cartes
-     (meme axe que .container : max-width 1060px centre + 16px de marge). */
-  padding:10px max(16px, calc((100% - 1060px) / 2 + 16px));
+     (meme axe que .container : max-width 1440px centre + 16px de marge). */
+  padding:10px max(16px, calc((100% - 1440px) / 2 + 16px));
 }
 .navbtn { background:transparent; color:var(--text); border-radius:999px; padding:9px 15px; font-weight:600; }
 .navbtn:hover { background:#fff6e9; }
 .navbtn.active { background:var(--primary); color:#fff; box-shadow:var(--shadow-sm); }
 
 /* ---------- Conteneur & cartes ---------- */
-.container { max-width:1060px; margin:24px auto; padding:0 16px; }
-/* Deux onglets ont besoin de plus large que la largeur de lecture : l'onglet
-   Enfants (31 colonnes de jours + la colonne des noms) et la feuille du mois
-   (11 colonnes depuis l'ajout de « Journée »). Sur ordinateur, l'écran est
-   large : le plafond de lecture faisait défiler la grille pour rien. */
+.container { max-width:1440px; margin:24px auto; padding:0 16px; }
+/* UNE SEULE LARGEUR pour tous les onglets. Trois d'entre eux (Feuille, Enfants,
+   Bénévoles) étaient élargis à 1440 px, les trois autres (Récapitulatif,
+   Statistiques, Utilisateurs) restaient à 1060 px : en passant d'un onglet à
+   l'autre, le contenu changeait de largeur et de bord gauche, et la barre des
+   onglets, alignée sur 1060 px, ne tombait plus en face des grilles larges.
+   Le programme sert sur ordinateur : la largeur disponible est pour tous. */
 .container.wide { max-width:1440px; }
 .card {
   background:var(--card); border:1px solid var(--border); border-radius:16px;
@@ -98,6 +100,9 @@ h1,h2,h3 { font-family:var(--serif); font-weight:700; letter-spacing:.2px; }
 .card h2 { margin:0 0 4px; font-size:21.5px; color:var(--ink); }
 .card h3 { color:var(--ink); }
 .row-between { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+/* Ligne de titre d'une carte (titre + boutons) : sans cette marge, les boutons
+   « PDF », « Valider le mois »… touchaient le tableau placé juste dessous. */
+.card > .row-between { margin-bottom:14px; }
 
 /* ---------- Boutons ---------- */
 button {
@@ -256,6 +261,19 @@ button.kidnom:focus-visible { outline:2px solid var(--primary); outline-offset:2
 .attend .daycol .dini { color:var(--muted); font-weight:400; }
 .attend .daycol.dim .dnum, .attend .daycol.dim .dini { color:var(--red); }  /* dimanche = repère de semaine */
 .attend .daycell { width:30px; padding:4px 1px; }
+/* REPÈRES DE SEMAINE. Les 31 colonnes se ressemblaient toutes : rien ne
+   séparait une semaine de la suivante. Un trait épais avant chaque lundi forme
+   des blocs d'une semaine, et le week-end — EDD fermée, sauf grande exception —
+   est mis en retrait : colonnes étroites et grisées, cases atténuées mais
+   toujours cliquables. */
+.attend th.lundi, .attend td.lundi { border-left:2px solid #8b7a66; }
+.attend .daycol.weekend, .attend .daycell.weekend { width:18px; background:#efe9df; }
+.attend .daycol.weekend .dnum, .attend .daycol.weekend .dini { font-size:11px; color:#a39683; }
+.attend .daycol.weekend.dim .dnum, .attend .daycol.weekend.dim .dini { color:#c98f86; }
+.attend .daycell.weekend .presbtn { width:16px; height:16px; font-size:10px; opacity:.6; }
+.attend .daycell.weekend .presbtn:hover { opacity:1; }
+.attend .daycell.weekend .presbtn.pres-v, .attend .daycell.weekend .presbtn.pres-exp { border:1px dashed #c9b9a4; background:transparent; }
+.attend .daycell.weekend strong { color:#a39683; font-weight:600; }
 .attend .kidtot { background:#faf5ec; width:42px; min-width:42px; border-left:1px solid var(--border); }
 .attend tfoot td { background:#f2ead9; font-weight:700; }
 
@@ -289,7 +307,7 @@ button.kidnom:focus-visible { outline:2px solid var(--primary); outline-offset:2
   border-radius:0 0 10px 10px; background:#fdfbf6;
 }
 .legtitle { font-weight:700; color:var(--primary); font-size:14.5px; }
-.pres-leg { display:inline-flex; align-items:center; gap:6px; font-size:14.5px; margin-right:12px; }
+.pres-leg { display:inline-flex; align-items:center; gap:6px; font-size:14.5px; margin-right:12px; vertical-align:middle; }
 .pres-leg .presbtn { cursor:default; width:24px; height:24px; font-size:14.5px; }
 .kidcount { font-size:14.5px; color:var(--text); }
 button.addkid { padding:9px 16px; font-weight:700; }

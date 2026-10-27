@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-7';
+const APP_VERSION = 'v2026.10.27-9';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -1493,6 +1493,11 @@ function brancherPeriodes() {
   });
 }
 
+/* Repères de semaine des grilles Enfants et Bénévoles : `lundi` porte le trait
+ * qui sépare deux semaines, `weekend` met en retrait le samedi et le dimanche
+ * (EDD fermée, sauf grande exception : les cases restent cliquables). */
+const jourCls = (day) => `${day.weekend ? ' weekend' : ''}${day.dow === 1 ? ' lundi' : ''}`;
+
 async function viewChildren() {
   const app = document.getElementById('app');
   // Lectures independantes : groupees pour n'attendre qu'un aller-retour.
@@ -1585,18 +1590,18 @@ async function viewChildren() {
   // En-tête : numéro du jour au-dessus de son initiale. Le dimanche est mis en
   // évidence, c'est le repère qui permet de compter les semaines d'un coup d'œil.
   const headDays = days.map((day) =>
-    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}${classePeriode(periodeJour(day.date))}"${titrePeriode(periodeJour(day.date))}><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
+    `<th scope="col" class="daycol${jourCls(day)}${day.dow === 0 ? ' dim' : ''}${classePeriode(periodeJour(day.date))}"${titrePeriode(periodeJour(day.date))}><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
 
   const cellHtml = (k, day) => {
     // Avant le premier jour d'accueil, la case est neutralisée : on ne peut rien
     // y cocher, et un éventuel enregistrement résiduel n'est pas affiché.
     if (day.date < KIDS_MIN_ISO) {
-      return `<td class="daycell${day.weekend ? ' weekend' : ''}"><span class="presbtn pres-off"
+      return `<td class="daycell${jourCls(day)}"><span class="presbtn pres-off"
         title="Aucun accueil avant le ${KIDS_MIN_LISIBLE}"></span></td>`;
     }
     const per = periodeJour(day.date);
     if (per) {
-      return `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(per)}"><span class="presbtn pres-off"${titrePeriode(per)}></span></td>`;
+      return `<td class="daycell${jourCls(day)}${classePeriode(per)}"><span class="presbtn pres-off"${titrePeriode(per)}></span></td>`;
     }
     const st = getSt(k.id, day.date);
     const expected = isExpected(k, day.dow);
@@ -1606,7 +1611,7 @@ async function viewChildren() {
     const cls = etat ? etat.cls : (expected ? 'pres-exp' : 'pres-v');
     const sym = etat ? etat.sym : '';
     const lbl = `${kidLabel(k)} le ${day.d}/${pad(CUR.m)} : ${etat ? etat.mot : 'non défini'}`;
-    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absence justifiée → absence injustifiée → non défini" aria-label="${echapper(lbl)}">${sym}</button></td>`;
+    return `<td class="daycell${jourCls(day)}"><button type="button" class="presbtn ${cls}" data-kid="${k.id}" data-date="${day.date}" title="Cliquer : présent → absence justifiée → absence injustifiée → non défini" aria-label="${echapper(lbl)}">${sym}</button></td>`;
   };
   const kidRows = kids.length ? kids.map((k) => {
     const cells = days.map((day) => cellHtml(k, day)).join('');
@@ -1640,7 +1645,7 @@ async function viewChildren() {
   // et 31 colonnes, il faut pouvoir lire le total sans remonter jusqu'au pied.
   // Repérage par attribut (et non par id) puisque chaque total existe en double.
   const totalCells = () => days.map((day) =>
-    `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(periodeJour(day.date))}"><strong data-daytot="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+    `<td class="daycell${jourCls(day)}${classePeriode(periodeJour(day.date))}"><strong data-daytot="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
   const totalRow = `<tr class="totrow"><th scope="row" class="kidname">Total présents / jour</th>
     ${totalCells()}<td class="kidtot"><strong data-grandtot>${totalPresent}</strong></td></tr>`;
   /* Ligne « Enfants au stage » : n'apparaît que si le mois compte un jour de
@@ -1651,9 +1656,9 @@ async function viewChildren() {
       <th scope="row" class="kidname">🏕️ Enfants au stage</th>
       ${days.map((day) => {
         const per = periodeJour(day.date);
-        if (!per || per.type !== 'stage') return `<td class="daycell${day.weekend ? ' weekend' : ''}${classePeriode(per)}"></td>`;
+        if (!per || per.type !== 'stage') return `<td class="daycell${jourCls(day)}${classePeriode(per)}"></td>`;
         const v = effectif.has(day.date) ? effectif.get(day.date) : '';
-        return `<td class="daycell periode-stage"><input type="number" class="stagecnt" min="0" max="999" step="1" inputmode="numeric"
+        return `<td class="daycell periode-stage${jourCls(day)}"><input type="number" class="stagecnt" min="0" max="999" step="1" inputmode="numeric"
           data-date="${day.date}" value="${v}" ${peutEncoder ? '' : 'disabled'}
           aria-label="Nombre d'enfants au stage le ${day.d}/${pad(CUR.m)}" title="Nombre d'enfants présents au stage ce jour-là"/></td>`;
       }).join('')}
@@ -1667,8 +1672,8 @@ async function viewChildren() {
     <span class="pres-leg"><span class="presbtn pres-v" aria-hidden="true"></span> Non défini</span>`;
 
   const actionsEnfants = ME.role === 'admin'
-    ? '<button class="small" id="listePdfBtn" title="Télécharge en PDF la liste des enfants inscrits, leur école et leurs jours habituels">📄 PDF — Liste des enfants et jours habituels</button>'
-      + ` <button class="small" id="onePdfBtn" title="Télécharge en PDF le nombre d'enfants présents chaque jour de ${monthName(CUR.y, CUR.m)}, sans aucun nom, pour l'encodage sur le site de l'ONE">📄 PDF — Présences par jour pour l'ONE, ${monthName(CUR.y, CUR.m)}</button>`
+    ? '<button class="small" id="listePdfBtn" title="Télécharge en PDF la liste des enfants inscrits, leur école et leurs jours habituels">📄 PDF — Liste des enfants</button>'
+      + ` <button class="small" id="onePdfBtn" title="Télécharge en PDF le nombre d'enfants présents chaque jour de ${monthName(CUR.y, CUR.m)}, sans aucun nom, pour l'encodage sur le site de l'ONE">📄 PDF — ONE, ${monthName(CUR.y, CUR.m)}</button>`
       + ' <button class="small" id="perToggle" title="Déclarer un stage ou une fermeture (congé, jour férié)">🏕️ Stages et fermetures</button>'
       + ' <button id="kToggle" class="addkid">+ Ajouter un enfant</button>'
     : '';
@@ -2061,11 +2066,11 @@ async function viewBenevoles() {
   const totalPresent = days.reduce((s, day) => s + dayPresentCount(day), 0);
 
   const headDays = days.map((day) =>
-    `<th scope="col" class="daycol${day.weekend ? ' weekend' : ''}${day.dow === 0 ? ' dim' : ''}"><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
+    `<th scope="col" class="daycol${jourCls(day)}${day.dow === 0 ? ' dim' : ''}"><div class="dnum">${day.d}</div><div class="dini">${DOW[day.dow][0]}</div></th>`).join('');
 
   const cellHtml = (b, day) => {
     if (day.date < MIN_ISO) {
-      return `<td class="daycell${day.weekend ? ' weekend' : ''}"><span class="presbtn pres-off"
+      return `<td class="daycell${jourCls(day)}"><span class="presbtn pres-off"
         title="Aucun encodage avant le ${new Date(MIN_ISO).toLocaleDateString('fr-FR')}"></span></td>`;
     }
     const st = getSt(b.id, day.date);
@@ -2074,7 +2079,7 @@ async function viewBenevoles() {
     const cls = etat ? etat.cls : (expected ? 'pres-exp' : 'pres-v');
     const sym = etat ? etat.sym : '';
     const lbl = `${benevoleLabel(b)} le ${day.d}/${pad(CUR.m)} : ${etat ? etat.mot : 'non défini'}`;
-    return `<td class="daycell${day.weekend ? ' weekend' : ''}"><button type="button" class="presbtn ${cls}" data-ben="${b.id}" data-date="${day.date}" title="Cliquer : présent → absent → non défini" aria-label="${echapper(lbl)}">${sym}</button></td>`;
+    return `<td class="daycell${jourCls(day)}"><button type="button" class="presbtn ${cls}" data-ben="${b.id}" data-date="${day.date}" title="Cliquer : présent → absent → non défini" aria-label="${echapper(lbl)}">${sym}</button></td>`;
   };
   const benRows = bens.length ? bens.map((b) => {
     const cells = days.map((day) => cellHtml(b, day)).join('');
@@ -2105,7 +2110,7 @@ async function viewBenevoles() {
   }).join('') : `<tr><td colspan="${dim + 2}" class="muted" style="padding:16px">Aucun bénévole. Cliquez sur « + Ajouter un bénévole ».</td></tr>`;
 
   const totalCells = () => days.map((day) =>
-    `<td class="daycell${day.weekend ? ' weekend' : ''}"><strong data-daytotben="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
+    `<td class="daycell${jourCls(day)}"><strong data-daytotben="${day.d}">${dayPresentCount(day)}</strong></td>`).join('');
   const totalRow = `<tr class="totrow"><th scope="row" class="kidname">Total présents / jour</th>
     ${totalCells()}<td class="kidtot"><strong data-grandtotben>${totalPresent}</strong></td></tr>`;
   const dayCheckboxes = WEEK_ORDER.map((w) => `<label class="daychk"><input type="checkbox" class="bd" data-w="${w}"/> ${DOW[w]}</label>`).join(' ');
@@ -2536,7 +2541,7 @@ async function viewStats() {
       </table></div>
       <p class="muted small" style="margin-top:8px">Renseignez l'<strong>école</strong> et la <strong>date de naissance</strong> de chaque enfant (onglet 🧒 Enfants) pour un calcul exact.</p>` : ''}
       <h3 class="muted" style="margin-top:22px">Moyenne d'enfants par jour, mois par mois</h3>
-      <canvas id="chartMonthly" height="130"></canvas>
+      <div style="position:relative; height:300px"><canvas id="chartMonthly"></canvas></div>
       <div class="table-wrap" style="margin-top:14px"><table>
         <thead><tr><th>Mois</th><th>Moyenne / jour</th><th>Total</th><th>Jours</th></tr></thead>
         <tbody>${months.map((m) => `<tr>
@@ -2564,7 +2569,9 @@ async function viewStats() {
   CHART = new Chart(document.getElementById('chartMonthly'), {
     type: 'bar',
     data: { labels: months.map((m) => m.short), datasets: [{ label: 'Moyenne/jour', data: months.map((m) => +m.avg.toFixed(1)), backgroundColor: '#2f9e44' }] },
-    options: { animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
+    /* Hauteur FIXE (300 px, voir le conteneur) : en gardant ses proportions, le
+     * graphique grandissait avec la largeur de l'écran et dépassait 500 px. */
+    options: { animation: false, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } },
   });
   graphique = CHART;
 }
@@ -2914,7 +2921,9 @@ async function exportStatsPDF(stats, chartMonthly) {
 
   // 3. Graphique mensuel.
   if (chartMonthly) {
-    const hauteur = 180 * 0.42;
+    // Proportions RÉELLES du graphique affiché : une valeur fixe l'étirait.
+    const cv = chartMonthly.canvas;
+    const hauteur = Math.min(180 * 0.42, 180 * ((cv && cv.height && cv.width) ? cv.height / cv.width : 0.42));
     place(hauteur + 14);
     sousTitreBloc("Moyenne d'enfants par jour, mois par mois");
     doc.addImage(chartMonthly.toBase64Image('image/png', 1), 'PNG', 14, y, 180, hauteur);
