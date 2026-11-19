@@ -502,3 +502,10 @@ button .ic + *, .navbtn .ic { margin-right:.1em; }
 .navbtn.active .ic,
 button:not(.secondaire):not(.navbtn):not(.rowbtn):not(.iconbtn):not(.kidnom) .ic,
 .topbar button .ic { --ic-couleur:currentColor; }
+/* Jour hors contrat (avant l'engagement ou après la fin) : rien à encoder. */
+.grid tr.hors-contrat td { background:#f3f1ec; color:var(--muted); font-style:italic; }
+/* Dates de contrat, l'une sous l'autre : la colonne reste étroite. */
+.contrat-cell label { display:flex; align-items:center; gap:6px; margin:0; font-weight:normal; }
+.contrat-cell label + label { margin-top:4px; }
+.contrat-cell .muted { width:16px; }
+input.contrat { width:140px; padding:4px 6px; }

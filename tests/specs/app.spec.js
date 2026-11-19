@@ -2360,3 +2360,115 @@ test('mise en page : la barre du mois a la même hauteur et position sur tous le
   const ref = mesures.sheet;
   for (const [v, m] of uneLigne) expect(m, v).toEqual(ref);
 });
+
+/* Dates de contrat : une employée engagée en cours d'année n'a rien à encoder
+ * avant son premier jour. Les jours déjà pré-remplis avant sont supprimés. */
+test('contrat : une date de début supprime les jours antérieurs et les grise', async ({ page }) => {
+  await loginAdmin(page);
+  await expect(page.locator('#sheetTable')).toBeVisible();   // septembre pré-rempli
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const debut = page.locator('input.contrat[data-contrat="u-flora"][data-bord="debut"]');
+  let message = '';
+  page.once('dialog', (d) => { message = d.message(); d.accept(); });
+  await debut.fill('2026-09-08');
+  await debut.blur();
+  await expect(page.locator('#toast')).toContainText('à partir du 8 septembre 2026');
+  expect(message).toMatch(/5 jour\(s\) déjà écrit\(s\).*seront supprimés/);
+  const avant = await page.evaluate(async () => (await STORE.entriesForEmployee('u-flora'))
+    .filter((e) => e.entry_date < '2026-09-08').length);
+  expect(avant).toBe(0);
+  // L'autre employée n'est pas touchée.
+  expect(await page.evaluate(async () => (await STORE.entriesForEmployee('u-sarah'))
+    .filter((e) => e.entry_date < '2026-09-08').length)).toBe(5);
+
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  const lignes = page.locator('#sheetTable tbody tr');
+  await expect(lignes.nth(6)).toHaveClass(/hors-contrat/);          // 07/09
+  await expect(lignes.nth(6)).toContainText('Hors contrat');
+  await expect(lignes.nth(6).locator('select')).toHaveCount(0);
+  await expect(lignes.nth(7)).not.toHaveClass(/hors-contrat/);      // 08/09
+  await expect(lignes.nth(7).locator('[data-k="start_time"]')).toBeEnabled();
+  // Données de démo : jours ouvrables du 1er au 10 septembre, à 4 h. Restent
+  // les 8, 9 et 10.
+  await expect(page.locator('#tPlanned')).toHaveText('12h00');
+
+  // Août : mois entièrement hors contrat, pas de grille.
+  await page.locator('#prevM').click();
+  await expect(page.locator('#horsContratMsg')).toContainText('à partir du 8 septembre 2026');
+  await expect(page.locator('#sheetTable')).toHaveCount(0);
+
+  // Récapitulatif d'août : « Hors contrat » au lieu du statut.
+  await page.locator('.navbtn[data-v="recap"]').click();
+  await expect(page.locator('#app tbody tr', { hasText: 'Employée 1' })).toContainText('Hors contrat');
+  await expect(page.locator('#app tbody tr', { hasText: 'Employée 2' })).not.toContainText('Hors contrat');
+});
+
+test('contrat : une date de fin grise les jours suivants sans archiver le compte', async ({ page }) => {
+  await loginAdmin(page);
+  await expect(page.locator('#sheetTable')).toBeVisible();
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const fin = page.locator('input.contrat[data-contrat="u-flora"][data-bord="fin"]');
+  page.once('dialog', (d) => d.accept());
+  await fin.fill('2026-09-20');
+  await fin.blur();
+  await expect(page.locator('#toast')).toContainText("jusqu'au 20 septembre 2026");
+  await expect(page.locator('#usersTable tr', { hasText: 'Employée 1' })).toContainText('Actif');
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  const lignes = page.locator('#sheetTable tbody tr');
+  await expect(lignes.nth(19)).not.toHaveClass(/hors-contrat/);     // 20/09
+  await expect(lignes.nth(20)).toHaveClass(/hors-contrat/);         // 21/09
+});
+
+test('contrat : refuser la confirmation ne change rien ; fin avant début refusée', async ({ page }) => {
+  await loginAdmin(page);
+  await expect(page.locator('#sheetTable')).toBeVisible();
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const debut = page.locator('input.contrat[data-contrat="u-flora"][data-bord="debut"]');
+  page.once('dialog', (d) => d.dismiss());
+  await debut.fill('2026-09-08');
+  await debut.blur();
+  await expect(debut).toHaveValue('');
+  expect(await page.evaluate(async () => (await STORE.listProfiles()).find((p) => p.id === 'u-flora').contrat_debut || ''))
+    .toBe('');
+  // Chaque date s'enregistre en quittant son champ : le début d'abord…
+  page.once('dialog', (d) => d.accept());
+  await debut.fill('2026-10-01');
+  await debut.blur();
+  await expect(page.locator('#toast')).toContainText('à partir du 1er octobre 2026');
+  // … puis une fin antérieure, refusée.
+  const fin = page.locator('input.contrat[data-contrat="u-flora"][data-bord="fin"]');
+  await fin.fill('2026-09-01');
+  await fin.blur();
+  await expect(page.locator('#toast')).toContainText('La fin du contrat précède son début');
+});
+
+test('contrat : la date de début se donne à la création du compte', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+  await page.locator('#addBtn').click();
+  await page.locator('#nName').fill('Nouvelle Recrue');
+  await page.locator('#nEmail').fill('recrue@ecole.be');
+  await page.locator('#nPwd').fill('secret123');
+  await page.locator('#nDebut').fill('2026-11-19');
+  await page.locator('#saveEmp').click();
+  const ligne = page.locator('#usersTable tr', { hasText: 'Nouvelle Recrue' });
+  await expect(ligne.locator('input.contrat[data-bord="debut"]')).toHaveValue('2026-11-19');
+  await expect(ligne.locator('input.contrat[data-bord="fin"]')).toHaveValue('');
+});
+
+test('contrat : le pré-remplissage d’un nouveau mois commence au premier jour du contrat', async ({ page }) => {
+  await loginAdmin(page);
+  await page.locator('.navbtn[data-v="employees"]').click();
+  const debut = page.locator('input.contrat[data-contrat="u-flora"][data-bord="debut"]');
+  page.once('dialog', (d) => d.accept());
+  await debut.fill('2026-10-19');
+  await debut.blur();
+  await expect(page.locator('#toast')).toContainText('19 octobre 2026');
+  await page.locator('.navbtn[data-v="sheet"]').click();
+  await page.locator('#nextM').click();
+  await expect(page.locator('.toolbar strong')).toContainText('octobre 2026');
+  // 10 jours ouvrables du 19 au 30 octobre, à 4 h ; rien d'écrit avant.
+  await expect(page.locator('#tPlanned')).toHaveText('40h00');
+  expect(await page.evaluate(async () => (await STORE.entriesForEmployee('u-flora'))
+    .filter((e) => e.entry_date >= '2026-10-01' && e.entry_date < '2026-10-19').length)).toBe(0);
+});
