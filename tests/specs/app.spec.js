@@ -2472,3 +2472,21 @@ test('contrat : le pré-remplissage d’un nouveau mois commence au premier jour
   expect(await page.evaluate(async () => (await STORE.entriesForEmployee('u-flora'))
     .filter((e) => e.entry_date >= '2026-10-01' && e.entry_date < '2026-10-19').length)).toBe(0);
 });
+
+/* Un homme a été engagé : l'interface dit « employé(e) », plus « employée ».
+ * (Les comptes de démonstration s'appellent encore « Employée 1 » et « 2 » :
+ * ce sont des noms, retirés du texte avant la vérification.) */
+test('vocabulaire : l’interface écrit « employé(e) », jamais « employée »', async ({ page }) => {
+  await loginAdmin(page);
+  for (const v of ['sheet', 'recap', 'children', 'benevoles', 'stats', 'employees']) {
+    await page.locator(`.navbtn[data-v="${v}"]`).click();
+    await expect(page.locator('#app > .card:not(.hidden)').first()).toBeVisible();
+    const restes = await page.evaluate(() => {
+      const texte = [document.body.innerText,
+        ...[...document.querySelectorAll('[title]')].map((e) => e.title),
+        ...[...document.querySelectorAll('option')].map((o) => o.textContent)].join('\n');
+      return (texte.replace(/Employée [12]/g, '').match(/[^\n]{0,30}employées?[^\n]{0,30}/gi) || []);
+    });
+    expect(restes, v).toEqual([]);
+  }
+});

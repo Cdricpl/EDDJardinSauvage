@@ -1397,7 +1397,7 @@ class FirebaseStore {
     await this._commit(ops);
     this._entriesCache = {}; this._profilesCache = null; this._memo.clear();
     if (missing.size) {
-      throw new Error(`Import effectué, mais ${missing.size} employée(s) de la sauvegarde n'ont pas de compte ici. `
+      throw new Error(`Import effectué, mais ${missing.size} employé(e)(s) de la sauvegarde n'ont pas de compte ici. `
         + 'Créez leurs comptes avec le MÊME email, puis relancez la restauration.');
     }
     return { total: ops.length };
