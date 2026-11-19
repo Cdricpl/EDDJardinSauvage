@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.11.19-1';
+const APP_VERSION = 'v2026.11.19-2';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -817,7 +817,7 @@ async function toolbar(showEmployee, actionHTML) {
   if (showEmployee && ME.role === 'admin') {
     const profs = (await STORE.listProfiles()).filter((p) => p.role === 'employee');
     empSel = `<select id="empSel">${profs.map((p) =>
-      `<option value="${p.id}" ${p.id === SEL_EMP ? 'selected' : ''}>${echapper(p.full_name)}${p.active ? '' : ' (archivée)'}</option>`).join('')}</select>`;
+      `<option value="${p.id}" ${p.id === SEL_EMP ? 'selected' : ''}>${echapper(p.full_name)}${p.active ? '' : ' (archivé(e))'}</option>`).join('')}</select>`;
   }
   const now = new Date();
   const onCurrentMonth = CUR.y === now.getFullYear() && CUR.m === now.getMonth() + 1;
@@ -844,7 +844,7 @@ async function toolbar(showEmployee, actionHTML) {
     ${actionHTML || ''}
   </div>
   ${anneeClose() ? `<div class="msg" style="margin:0 0 12px">📁 Année scolaire <strong>${libelleAnnee(ANNEE_VUE)}</strong> — close, en consultation.
-     ${ME.role === 'admin' ? "Vous pouvez encore la corriger ; les employées n'y ont plus accès en écriture."
+     ${ME.role === 'admin' ? "Vous pouvez encore la corriger ; les employé(e)s n'y ont plus accès en écriture."
                            : 'Cette année n\'est plus modifiable. Contactez l\'administration si une correction est nécessaire.'}</div>` : ''}
   ${(!anneeClose() && anneeAEcheance()) ? `<div class="msg error" style="margin:0 0 12px">📅 L'année scolaire <strong>${libelleAnnee(ANNEE)}</strong> est terminée depuis le ${finAnnee(ANNEE)}.
      ${ME.role === 'admin' ? "Ouvrez l'année suivante dans l'onglet 👥 <strong>Utilisateurs</strong> pour continuer à encoder."
@@ -1135,7 +1135,7 @@ async function viewSheet() {
       </p>` : ''}
       <p class="muted small">
         <span class="legend"><span class="sw grp-plan-h"></span> Horaire prévu (défini par l'admin)</span>
-        <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employée)</span>
+        <span class="legend"><span class="sw grp-real-h"></span> Horaire réel (encodé par l'employé(e))</span>
         <span class="legend"><span class="dot">●</span> jour modifié</span>
         <span class="legend"><span class="pos">▲ vert = heures supplémentaires</span> / <span class="neg">▼ rouge = heures récupérées</span></span><br>
         Heures par tranches de 15 min. Enregistrement automatique.<br>
@@ -1334,7 +1334,7 @@ async function currentEmpProfile(id) {
   // Le nom de repli évite un plantage des exports PDF si la fiche a disparu
   // (compte supprimé dans la console Firebase, sauvegarde partielle restaurée).
   return (await STORE.listProfiles()).find((p) => p.id === id)
-    || { active: true, full_name: 'Employée inconnue' };
+    || { active: true, full_name: 'Employé(e) inconnu(e)' };
 }
 
 /* ---------------- Horaire type (template hebdomadaire) ---------------- */
@@ -1356,7 +1356,7 @@ function templateCardHTML(tpl, month) {
   }).join('');
   return `<div class="card hidden" id="tplCard">
     <h3 style="margin-top:0">🗓️ Horaire type hebdomadaire</h3>
-    <p class="muted small">Définis l'horaire habituel de cette employée. Il sert à
+    <p class="muted small">Définis l'horaire habituel de cet(te) employé(e). Il sert à
       <strong>pré-remplir automatiquement les nouveaux mois</strong>. Laisse « --:-- » pour un jour non travaillé.</p>
     <div class="table-wrap"><table class="grid" style="max-width:420px">
       <thead><tr><th>Jour</th><th>Début</th><th>Fin</th></tr></thead>
@@ -1444,7 +1444,7 @@ async function viewRecap() {
     return { p, s, mo };
   }));
   const rows = data.map(({ p, s, mo }) => `<tr>
-      <td>${echapper(p.full_name)}${p.active ? '' : ' <span class="badge open">archivée</span>'}</td>
+      <td>${echapper(p.full_name)}${p.active ? '' : ' <span class="badge open">archivé(e)</span>'}</td>
       <td>${fmtHM(s.planned)}</td><td>${fmtHM(s.worked)}</td>
       <td class="${s.delta >= 0 ? 'pos' : 'neg'}">${fmtDelta(s.delta)}</td>
       <td>${fmtHM(s.carryIn)}</td>
@@ -1452,12 +1452,12 @@ async function viewRecap() {
       <td>${!moisSousContrat(p, CUR.y, CUR.m) ? '<span class="muted">Hors contrat</span>'
         : ({ open: 'En cours', validated: '✓ Validé' }[mo.status] || 'En cours')}</td>
     </tr>`).join('');
-  const pdfBtn = ME.role === 'admin' ? `<button class="small" id="recapPdfBtn" title="Télécharge en PDF le récapitulatif des heures de toutes les employées pour ${monthName(CUR.y, CUR.m)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Récapitulatif des heures, ${monthName(CUR.y, CUR.m)}</button>` : '';
+  const pdfBtn = ME.role === 'admin' ? `<button class="small" id="recapPdfBtn" title="Télécharge en PDF le récapitulatif des heures de tous les employé(e)s pour ${monthName(CUR.y, CUR.m)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Récapitulatif des heures, ${monthName(CUR.y, CUR.m)}</button>` : '';
   app.innerHTML = `${await toolbar(false)}
     <div class="card">
       <div class="row-between"><h2 style="margin:0">Récapitulatif — ${monthName(CUR.y, CUR.m)}</h2>${pdfBtn}</div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Employée</th><th>Prévu</th><th>Presté</th><th>Écart mois</th><th>Solde reporté</th><th>Solde cumulé</th><th>Statut</th></tr></thead>
+        <thead><tr><th>Employé(e)</th><th>Prévu</th><th>Presté</th><th>Écart mois</th><th>Solde reporté</th><th>Solde cumulé</th><th>Statut</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <p class="muted small">Le solde cumulé = solde reporté + écart du mois. Un solde positif = heures supplémentaires ; négatif = heures à récupérer.</p>
     </div>`;
@@ -3051,7 +3051,7 @@ async function viewEmployees() {
     // Sélecteur de rôle. On empêche de retirer le dernier administrateur (sinon
     // plus personne ne pourrait gérer les utilisateurs).
     const roleSel = `<select class="rolesel" data-role="${p.id}" ${isLastAdmin ? 'disabled title="Dernier administrateur"' : ''}>
-        <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employée</option>
+        <option value="employee" ${p.role === 'employee' ? 'selected' : ''}>Employé(e)</option>
         <option value="admin" ${p.role === 'admin' ? 'selected' : ''}>Administrateur</option>
       </select>`;
     // Solde de départ : uniquement pour les employées (un admin ne preste pas d'heures suivies ici).
@@ -3117,21 +3117,21 @@ async function viewEmployees() {
       </div>
       <p class="muted small" style="margin-top:8px">
         L'encodage est ouvert du <strong>1<sup>er</sup> août ${ANNEE}</strong> au <strong>31 juillet ${ANNEE + 1}</strong>.
-        ${ANNEE > MIN_YM.y ? `Les années précédentes restent consultables via le sélecteur d'année, en lecture seule pour les employées.` : ''}
+        ${ANNEE > MIN_YM.y ? `Les années précédentes restent consultables via le sélecteur d'année, en lecture seule pour les employé(e)s.` : ''}
       </p>
       ${anneeAEcheance() ? `<div class="msg error">Cette année scolaire est terminée depuis le ${finAnnee(ANNEE)}.
         Ouvrez la suivante pour continuer à encoder.</div>` : ''}
       <div class="table-wrap"><table>
-        <thead><tr><th>Employée</th><th>Solde au 31 juillet ${ANNEE + 1}</th></tr></thead>
+        <thead><tr><th>Employé(e)</th><th>Solde au 31 juillet ${ANNEE + 1}</th></tr></thead>
         <tbody>${soldesFin.map(({ p, cloture }) => `<tr>
           <td>${echapper(p.full_name)}</td>
           <td class="${cloture >= 0 ? 'pos' : 'neg'}"><strong>${fmtDelta(cloture)}</strong></td>
-        </tr>`).join('') || '<tr><td colspan="2" class="muted">Aucune employée active.</td></tr>'}</tbody>
+        </tr>`).join('') || '<tr><td colspan="2" class="muted">Aucun(e) employé(e) actif(ve).</td></tr>'}</tbody>
       </table></div>
       <p class="muted small" style="margin-top:8px">
         À l'ouverture de la nouvelle année, ces soldes deviennent le <strong>solde de départ</strong> du 1<sup>er</sup> août ${ANNEE + 1} :
         rien ne se perd. Les enfants et leurs jours habituels sont conservés — vous retirerez ceux qui partent
-        et ajouterez les nouveaux. L'année ${libelleAnnee(ANNEE)} passe alors en lecture seule pour les employées ;
+        et ajouterez les nouveaux. L'année ${libelleAnnee(ANNEE)} passe alors en lecture seule pour les employé(e)s ;
         vous pourrez encore la corriger.
       </p>
       ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:14px;gap:12px;flex-wrap:wrap;align-items:center">
@@ -3151,7 +3151,7 @@ async function viewEmployees() {
       ${ANNEE > MIN_YM.y ? `<div class="row-between" style="margin-top:16px;gap:12px;flex-wrap:wrap;align-items:center">
         <p class="muted small" style="margin:0;flex:1;min-width:220px">
           <strong>Ouverte par erreur ?</strong> Vous pouvez refermer ${libelleAnnee(ANNEE)} et revenir à
-          ${libelleAnnee(ANNEE - 1)} — les employées y encoderont de nouveau.
+          ${libelleAnnee(ANNEE - 1)} — les employé(e)s y encoderont de nouveau.
           ${(prestAnnee.length || presAnnee.length)
             ? `Rien n'est supprimé : les <strong>${prestAnnee.length} prestation(s)</strong> et
                <strong>${presAnnee.length} présence(s)</strong> déjà encodées en ${libelleAnnee(ANNEE)}
@@ -3170,7 +3170,7 @@ async function viewEmployees() {
           <th>Statut</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <div class="msg">
-        <strong>Solde de départ</strong> — heures supplémentaires (ou à récupérer) de chaque employée
+        <strong>Solde de départ</strong> — heures supplémentaires (ou à récupérer) de chaque employé(e)
         <strong>au 1<sup>er</sup> août 2026</strong>, reprises de votre ancien suivi.
         À saisir <strong>une seule fois</strong> : ensuite le programme cumule tout seul.
         Formats acceptés : <code>12h30</code>, <code>12:30</code>, <code>12</code>, et
@@ -3194,7 +3194,7 @@ async function viewEmployees() {
         <div><label for="nDebut">Début de contrat <span class="muted small">(facultatif)</span></label><input id="nDebut" type="date"/></div>
       </div>
       <div id="addMsg"></div>
-      <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employée</strong> ; vous pourrez ensuite changer leur rôle dans la liste.
+      <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employé(e)</strong> ; vous pourrez ensuite changer leur rôle dans la liste.
         ${MODE === 'firebase' ? 'La création ne vous déconnecte pas.' : ''}</p>
       <button id="saveEmp" style="margin-top:10px">Créer</button>
     </div>
@@ -3205,7 +3205,7 @@ async function viewEmployees() {
       <h3 style="margin-bottom:6px">Sauvegarde / export</h3>
       <div class="row" style="flex-wrap:wrap; gap:10px">
         <button class="small" id="expJson" title="Sauvegarde complète de toutes les données, pour une restauration"><span class="ic ic-telecharger" aria-hidden="true"></span> Sauvegarde complète (JSON)</button>
-        <button class="small" id="expCsvPresta" title="Tableau Excel de toutes les prestations encodées, une ligne par jour et par employée"><span class="ic ic-telecharger" aria-hidden="true"></span> Excel (CSV) — Prestations des employées</button>
+        <button class="small" id="expCsvPresta" title="Tableau Excel de toutes les prestations encodées, une ligne par jour et par employé(e)"><span class="ic ic-telecharger" aria-hidden="true"></span> Excel (CSV) — Prestations des employé(e)s</button>
         <button class="small" id="expCsvKids" title="Tableau Excel de toutes les présences et absences des enfants, une ligne par enfant et par jour"><span class="ic ic-telecharger" aria-hidden="true"></span> Excel (CSV) — Présences des enfants</button>
       </div>
       <h3 style="margin:16px 0 6px">Restauration</h3>
@@ -3230,9 +3230,9 @@ async function viewEmployees() {
     const detail = soldesFin.map(({ p, cloture }) => `  · ${p.full_name} : ${fmtDelta(cloture)}`).join('\n');
     if (!confirm(
       `Ouvrir l'année scolaire ${libelleAnnee(suivante)} ?\n\n`
-      + `Soldes reportés au 1er août ${suivante} :\n${detail || '  (aucune employée active)'}\n\n`
+      + `Soldes reportés au 1er août ${suivante} :\n${detail || '  (aucun(e) employé(e) actif(ve))'}\n\n`
       + `Les enfants et leurs jours habituels sont conservés.\n`
-      + `L'année ${libelleAnnee(ANNEE)} passera en lecture seule pour les employées ; `
+      + `L'année ${libelleAnnee(ANNEE)} passera en lecture seule pour les employé(e)s ; `
       + `vous pourrez encore la corriger.`)) return;
     nouvelle.disabled = true;
     try {
@@ -3287,7 +3287,7 @@ async function viewEmployees() {
     const precedente = ANNEE - 1;
     if (!confirm(
       `Revenir à l'année scolaire ${libelleAnnee(precedente)} ?\n\n`
-      + `${libelleAnnee(ANNEE)} sera refermée, et les employées encoderont de nouveau `
+      + `${libelleAnnee(ANNEE)} sera refermée, et les employé(e)s encoderont de nouveau `
       + `en ${libelleAnnee(precedente)}.\n\n`
       + `Aucune donnée n'est supprimée : ${prestAnnee.length} prestation(s) et `
       + `${presAnnee.length} présence(s) déjà encodées en ${libelleAnnee(ANNEE)} sont conservées, `
@@ -3325,7 +3325,7 @@ async function viewEmployees() {
       const debut = document.getElementById('nDebut').value;
       const cree = await STORE.addProfile({ full_name, email, password, role: 'employee' }); // rôle toujours employée
       if (debut) await STORE.setContrat(cree.id, debut, '');   // compte neuf : aucun jour à supprimer
-      toast('Employée ajoutée'); render();
+      toast('Employé(e) ajouté(e)'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
   app.querySelectorAll('[data-name]').forEach((b) => b.onclick = async () => {
@@ -3337,7 +3337,7 @@ async function viewEmployees() {
   });
   app.querySelectorAll('select.rolesel').forEach((s) => s.onchange = async () => {
     const p = profs.find((x) => x.id === s.dataset.role) || {};
-    const role = s.value, label = role === 'admin' ? 'administrateur' : 'employée';
+    const role = s.value, label = role === 'admin' ? 'administrateur' : 'employé(e)';
     if (!confirm(`Changer le rôle de ${p.full_name} en « ${label} » ?`)) { s.value = p.role; return; }
     try { await STORE.setRole(s.dataset.role, role); toast('Rôle mis à jour'); render(); }
     catch (e) { s.value = p.role; toast('Erreur : ' + e.message, 'error'); }
@@ -3431,11 +3431,11 @@ async function viewEmployees() {
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
   app.querySelectorAll('[data-arch]').forEach((b) => b.onclick = async () => {
-    try { if (confirm('Archiver cette employée ? Ses données restent consultables.')) { await STORE.setActive(b.dataset.arch, false); toast('Employée archivée'); render(); } }
+    try { if (confirm('Archiver cet(te) employé(e) ? Ses données restent consultables.')) { await STORE.setActive(b.dataset.arch, false); toast('Employé(e) archivé(e)'); render(); } }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
   app.querySelectorAll('[data-react]').forEach((b) => b.onclick = async () => {
-    try { await STORE.setActive(b.dataset.react, true); toast('Employée réactivée'); render(); }
+    try { await STORE.setActive(b.dataset.react, true); toast('Employé(e) réactivé(e)'); render(); }
     catch (e) { toast('Erreur : ' + e.message, 'error'); }
   });
 
@@ -3464,7 +3464,7 @@ async function viewEmployees() {
       // était incompréhensible : les 45 minutes déduites n'apparaissaient nulle part.
       /* La colonne « Motif » est indispensable depuis les journées entières :
        * sans elle, une journée récupérée apparaît à 0 minute sans explication. */
-      const rows = [['Employée', 'Date', 'Prévu début', 'Prévu fin', 'Réel début', 'Réel fin',
+      const rows = [['Employé(e)', 'Date', 'Prévu début', 'Prévu fin', 'Réel début', 'Réel fin',
         'Temps de midi (min)', 'Presté (min)', 'Écart (min)', 'Motif', 'Justification']];
       (data.day_entries || [])
         .slice().sort((a, b) => (a.entry_date + a.employee_id).localeCompare(b.entry_date + b.employee_id))
@@ -3557,7 +3557,7 @@ async function exportRecapPDF(data) {
   const sub = monthName(CUR.y, CUR.m);
   const statusLbl = (st) => ({ open: 'En cours', validated: 'Validé' }[st] || 'En cours');
   const body = data.map(({ p, s, mo }) => [
-    p.full_name + (p.active ? '' : ' (archivée)'),
+    p.full_name + (p.active ? '' : ' (archivé(e))'),
     fmtHM(s.planned), fmtHM(s.worked), fmtDelta(s.delta), fmtHM(s.carryIn), fmtDelta(s.closing),
     moisSousContrat(p, CUR.y, CUR.m) ? statusLbl(mo.status) : 'Hors contrat',
   ]);
@@ -3565,7 +3565,7 @@ async function exportRecapPDF(data) {
   if (!(await assurerPdf())) { // repli impression
     const w = feuilleImpression();
     w.document.write(`<img src="assets/logo.svg" style="height:60px"><h2>${title} — ${sub}</h2>
-      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Employée</th><th>Prévu</th><th>Presté</th><th>Écart</th><th>Reporté</th><th>Cumulé</th><th>Statut</th></tr>
+      <table border=1 cellpadding=5 style="border-collapse:collapse"><tr><th>Employé(e)</th><th>Prévu</th><th>Presté</th><th>Écart</th><th>Reporté</th><th>Cumulé</th><th>Statut</th></tr>
       ${body.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('')}</table>
 `);
     w.imprimer(); return;
@@ -3575,7 +3575,7 @@ async function exportRecapPDF(data) {
   const startY = await pdfHeader(doc, title, sub);
   doc.autoTable({
     startY,
-    head: [['Employée', 'Prévu', 'Presté', 'Écart mois', 'Solde reporté', 'Solde cumulé', 'Statut']],
+    head: [['Employé(e)', 'Prévu', 'Presté', 'Écart mois', 'Solde reporté', 'Solde cumulé', 'Statut']],
     body: lignesPdf(body), styles: { fontSize: 10 }, headStyles: { fillColor: [59, 91, 219] },
   });
   enregistrerPdf(doc, `recapitulatif_${CUR.y}-${pad(CUR.m)}.pdf`);
@@ -3624,7 +3624,7 @@ async function exportSheetPDF(empId) {
   doc.setFontSize(11); doc.setTextColor(0);
   doc.text(`Total prévu : ${fmtHM(sum.planned)}      Total presté : ${fmtHM(sum.worked)}`, 14, y);
   doc.text(`Écart du mois : ${fmtHM(sum.delta)}      Solde reporté : ${fmtHM(sum.carryIn)}      Solde cumulé : ${fmtHM(sum.closing)}`, 14, y + 7);
-  doc.text('Signature employée : ______________        Signature responsable : ______________', 14, y + 24);
+  doc.text('Signature employé(e) : ______________        Signature responsable : ______________', 14, y + 24);
   enregistrerPdf(doc, `prestations_${prof.full_name.replace(/\s/g, '_')}_${CUR.y}-${pad(CUR.m)}.pdf`);
 }
 
