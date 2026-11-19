@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.10.27-11';
+const APP_VERSION = 'v2026.11.19-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -490,6 +490,29 @@ async function chargerAnnee({ replacer = true } = {}) {
   clampMonth();
 }
 
+/* ---------------- Dates de contrat ----------------
+ * Facultatives (AAAA-MM-JJ). Une employée engagée en cours d'année n'a rien à
+ * encoder avant son premier jour, ni après une fin de contrat : ces jours ne
+ * sont ni pré-remplis, ni modifiables, ni comptés. Sans date : aucune limite. */
+const horsContrat = (prof, iso) => !!prof && (
+  (!!prof.contrat_debut && iso < prof.contrat_debut) || (!!prof.contrat_fin && iso > prof.contrat_fin));
+const dateLongue = (iso) => new Date(`${iso}T12:00:00`)
+  .toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }).replace(/^1 /, '1er ');
+function contratLibelle(prof) {
+  if (!prof) return '';
+  const { contrat_debut: d, contrat_fin: f } = prof;
+  if (d && f) return `du ${dateLongue(d)} au ${dateLongue(f)}`;
+  if (d) return `à partir du ${dateLongue(d)}`;
+  if (f) return `jusqu'au ${dateLongue(f)}`;
+  return '';
+}
+// Le mois (y, m) contient-il au moins un jour sous contrat ?
+function moisSousContrat(prof, y, m) {
+  const debut = `${y}-${pad(m)}-01`, fin = `${y}-${pad(m)}-${pad(daysInMonth(y, m))}`;
+  return !(prof && ((prof.contrat_debut && fin < prof.contrat_debut) || (prof.contrat_fin && debut > prof.contrat_fin)));
+}
+const profilDe = async (empId) => (await STORE.listProfiles()).find((x) => x.id === empId);
+
 /* ---------------- Calculs mensuels + solde reporté ---------------- */
 // Solde de départ d'une employée : les heures supplémentaires (ou à récupérer)
 // accumulées AVANT la mise en service du programme. Saisi une seule fois par
@@ -527,7 +550,7 @@ async function soldeRecalcule(empId, annee) {
   const all = await STORE.entriesForEmployee(empId);
   const fin = finAnnee(annee - 1);                        // tout ce qui précède l'année visée
   all.forEach((e) => {
-    if (e.entry_date < MIN_ISO || e.entry_date > fin) return;
+    if (e.entry_date < MIN_ISO || e.entry_date > fin || horsContrat(prof, e.entry_date)) return;
     solde += effectiveWorked(e) - plannedMinutes(e);
   });
   return solde;
@@ -538,7 +561,7 @@ async function monthSummary(empId, y, m) {
   // solde reporté. Les prestations des années précédentes sont déjà comprises
   // dans ce solde — les recompter ferait double emploi.
   const depart = debutAnnee(annee) > MIN_ISO ? debutAnnee(annee) : MIN_ISO;
-  const all = await STORE.entriesForEmployee(empId);
+  const [all, prof] = await Promise.all([STORE.entriesForEmployee(empId), profilDe(empId)]);
   const firstOfMonth = `${y}-${pad(m)}-01`;
   let planned = 0, worked = 0, carryIn = await openingMinutes(empId, annee);
   /* Le pré-remplissage écrit le MOIS ENTIER, jours à venir compris : les totaux
@@ -550,7 +573,7 @@ async function monthSummary(empId, y, m) {
   let workedToDate = 0, aVenir = false;
   all.forEach((e) => {
     const w = effectiveWorked(e), p = plannedMinutes(e);
-    if (e.entry_date < depart) return;
+    if (e.entry_date < depart || horsContrat(prof, e.entry_date)) return;
     if (e.entry_date < firstOfMonth) carryIn += (w - p);
     else if (e.entry_date.startsWith(`${y}-${pad(m)}`)) {
       planned += p; worked += w;
@@ -994,6 +1017,19 @@ async function viewSheet() {
     return render();
   }
 
+  /* Mois entièrement hors contrat (engagée plus tard, ou partie) : pas de
+   * grille vide à remplir, seulement l'explication. */
+  if (!moisSousContrat(editableProf, CUR.y, CUR.m)) {
+    app.innerHTML = `${await toolbar(true)}
+      <div class="card">
+        <h2 style="margin:0 0 8px">Feuille mensuelle</h2>
+        <div class="msg" id="horsContratMsg">Contrat de <strong>${echapper(editableProf.full_name || '')}</strong>
+          ${contratLibelle(editableProf)} : rien à encoder pour ${monthName(CUR.y, CUR.m)}.</div>
+      </div>`;
+    wireToolbar();
+    return;
+  }
+
   const byDate = {}; entries.forEach((e) => (byDate[e.entry_date] = e));
   const dim = daysInMonth(CUR.y, CUR.m);
 
@@ -1011,6 +1047,14 @@ async function viewSheet() {
   for (let d = 1; d <= dim; d++) {
     const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
     const dow = new Date(CUR.y, CUR.m - 1, d).getDay();
+    /* Jour hors contrat : rien à encoder, rien de compté. Aucune cellule
+     * modifiable sur la ligne, donc ni sauvegarde ni mise à jour possibles. */
+    if (horsContrat(editableProf, date)) {
+      rows += `<tr class="hors-contrat${(dow === 0 || dow === 6) ? ' weekend' : ''}">
+        <td class="nowrap">${pad(d)}/${pad(CUR.m)}</td><td>${DOW[dow]}</td>
+        <td colspan="9" class="small">Hors contrat</td></tr>`;
+      continue;
+    }
     const e = byDate[date] || { planned_start: '', planned_end: '', start_time: '', end_time: '', worked_touched: false, justification: '' };
     const planned = plannedMinutes(e);
     const worked = effectiveWorked(e);
@@ -1152,7 +1196,8 @@ async function viewSheet() {
   function refreshTotals() {
     let P = 0, W = 0, warn = 0;
     for (let d = 1; d <= dim; d++) {
-      const e = byDate[`${CUR.y}-${pad(CUR.m)}-${pad(d)}`]; if (!e) continue;
+      const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
+      const e = byDate[date]; if (!e || horsContrat(editableProf, date)) continue;
       const p = plannedMinutes(e), w = effectiveWorked(e); P += p; W += w;
       if (deltaAJustifier(e) !== 0 && !e.justification) warn++;
     }
@@ -1362,7 +1407,7 @@ function wireTemplateCard(empId, month) {
 // Remplit un mois avec l'horaire type. Ne touche jamais un mois validé,
 // ni l'horaire réel d'un jour déjà modifié (worked_touched).
 async function applyTemplate(empId, y, m, slots, silent) {
-  const month = await STORE.getMonth(empId, y, m);
+  const [month, prof] = await Promise.all([STORE.getMonth(empId, y, m), profilDe(empId)]);
   if (month.status !== 'open') { if (!silent) toast('Mois validé — non modifié', 'error'); return; }
   const existing = {};
   (await STORE.entriesForMonth(empId, y, m)).forEach((e) => (existing[e.entry_date] = e));
@@ -1374,6 +1419,7 @@ async function applyTemplate(empId, y, m, slots, silent) {
     const slot = slots[w];
     if (!slot || !slot.start || !slot.end) continue; // jour non travaillé → ignoré
     const date = `${y}-${pad(m)}-${pad(d)}`;
+    if (horsContrat(prof, date)) continue;            // pas encore (ou plus) sous contrat
     const dur = Math.max(0, timeToMin(slot.end) - timeToMin(slot.start));
     const ex = existing[date] || {};
     const patch = { employee_id: empId, entry_date: date, planned_start: slot.start, planned_end: slot.end, planned_minutes: dur };
@@ -1403,7 +1449,8 @@ async function viewRecap() {
       <td class="${s.delta >= 0 ? 'pos' : 'neg'}">${fmtDelta(s.delta)}</td>
       <td>${fmtHM(s.carryIn)}</td>
       <td class="${s.closing >= 0 ? 'pos' : 'neg'}"><strong>${fmtDelta(s.closing)}</strong></td>
-      <td>${{ open: 'En cours', validated: '✓ Validé' }[mo.status] || 'En cours'}</td>
+      <td>${!moisSousContrat(p, CUR.y, CUR.m) ? '<span class="muted">Hors contrat</span>'
+        : ({ open: 'En cours', validated: '✓ Validé' }[mo.status] || 'En cours')}</td>
     </tr>`).join('');
   const pdfBtn = ME.role === 'admin' ? `<button class="small" id="recapPdfBtn" title="Télécharge en PDF le récapitulatif des heures de toutes les employées pour ${monthName(CUR.y, CUR.m)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Récapitulatif des heures, ${monthName(CUR.y, CUR.m)}</button>` : '';
   app.innerHTML = `${await toolbar(false)}
@@ -2956,6 +3003,32 @@ async function exportStatsPDF(stats, chartMonthly) {
 }
 
 /* ---------------- Vue : Utilisateurs (admin) ---------------- */
+/* Enregistre les dates de contrat d'une employée. Les jours déjà écrits hors
+ * contrat (typiquement : mois pré-remplis avant l'engagement) sont supprimés,
+ * après confirmation. Renvoie false si rien n'a été enregistré. */
+async function enregistrerContrat(p, debut, fin) {
+  if (debut && fin && fin < debut) {
+    toast('La fin du contrat précède son début.', 'error');
+    return false;
+  }
+  const futur = { ...p, contrat_debut: debut, contrat_fin: fin };
+  const aSupprimer = (await STORE.entriesForEmployee(p.id))
+    .map((e) => e.entry_date).filter((d) => horsContrat(futur, d)).sort();
+  if (aSupprimer.length && !confirm(`${aSupprimer.length} jour(s) déjà écrit(s) sur la feuille de ${p.full_name} `
+      + `tombent hors contrat (${contratLibelle(futur)}) et seront supprimés. Continuer ?`)) return false;
+  try {
+    await STORE.setContrat(p.id, debut, fin);
+    if (aSupprimer.length) await STORE.deleteEntries(p.id, aSupprimer);
+    toast(`Contrat de ${p.full_name} : ${contratLibelle(futur) || 'sans date'}`
+      + (aSupprimer.length ? ` — ${aSupprimer.length} jour(s) supprimé(s)` : ''));
+    render();
+    return true;
+  } catch (e) {
+    toast('Erreur : ' + e.message, 'error');
+    return false;
+  }
+}
+
 async function viewEmployees() {
   const app = document.getElementById('app');
   const profs = await STORE.listProfiles();
@@ -2987,11 +3060,20 @@ async function viewEmployees() {
            value="${p.opening_minutes ? fmtDelta(p.opening_minutes) : ''}" placeholder="0h00"
            aria-label="Solde de départ de ${echapper(p.full_name)}" /></td>`
       : '<td class="muted">—</td>';
+    // Dates de contrat : uniquement pour les employées, la fin est facultative.
+    const contratCell = p.role === 'employee'
+      ? `<td class="nowrap contrat-cell">
+         <label><span class="muted small">du</span> <input type="date" class="contrat" data-contrat="${p.id}" data-bord="debut" value="${p.contrat_debut || ''}"
+           title="Début du contrat" aria-label="Début du contrat de ${echapper(p.full_name)}" /></label>
+         <label><span class="muted small">au</span> <input type="date" class="contrat" data-contrat="${p.id}" data-bord="fin" value="${p.contrat_fin || ''}"
+           title="Fin du contrat (facultative)" aria-label="Fin du contrat de ${echapper(p.full_name)}" /></label></td>`
+      : '<td class="muted">—</td>';
     return `<tr>
       <td class="nowrap">${echapper(p.full_name)} <button class="rowbtn" data-name="${p.id}" title="Modifier le nom" aria-label="Modifier le nom de ${echapper(p.full_name)}"><span class="ic ic-crayon" aria-hidden="true"></span> </button></td>
       <td class="nowrap">${p.email ? echapper(p.email) : '—'} <button class="rowbtn" data-email="${p.id}" title="Modifier l'email" aria-label="Modifier l'email de ${echapper(p.full_name)}"><span class="ic ic-crayon" aria-hidden="true"></span> </button></td>
       <td>${roleSel}</td>
       ${soldeCell}
+      ${contratCell}
       <td>${p.active ? '<span class="badge validated">Actif</span>' : '<span class="badge refused">Archivé</span>'}</td>
       <td class="actions">
         <button class="rowbtn" data-reset="${p.id}" title="Envoyer un email de réinitialisation du mot de passe" aria-label="Réinitialiser le mot de passe de ${echapper(p.full_name)}"><span class="ic ic-courriel" aria-hidden="true"></span> </button>
@@ -3084,6 +3166,7 @@ async function viewEmployees() {
       <div class="table-wrap"><table id="usersTable">
         <thead><tr><th>Nom</th><th>Email</th><th>Rôle</th>
           <th title="Heures supplémentaires (ou à récupérer) au 1er août 2026">Solde de départ</th>
+          <th title="Hors de ces dates, la feuille de prestations n'a rien à encoder">Contrat</th>
           <th>Statut</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <div class="msg">
@@ -3108,6 +3191,7 @@ async function viewEmployees() {
         <div><label for="nName">Nom complet</label><input id="nName" placeholder="Prénom Nom"/></div>
         <div><label for="nEmail">Email</label><input id="nEmail" type="email" placeholder="prenom@ecole.be"/></div>
         <div><label for="nPwd">Mot de passe initial</label><input id="nPwd" placeholder="au moins 6 caractères"/></div>
+        <div><label for="nDebut">Début de contrat <span class="muted small">(facultatif)</span></label><input id="nDebut" type="date"/></div>
       </div>
       <div id="addMsg"></div>
       <p class="muted small">Les nouveaux comptes sont créés comme <strong>Employée</strong> ; vous pourrez ensuite changer leur rôle dans la liste.
@@ -3238,7 +3322,9 @@ async function viewEmployees() {
       if (!full_name || !email || password.length < 6) {
         msg.innerHTML = '<div class="msg error">Nom, email et mot de passe (6+ caractères) requis.</div>'; return;
       }
-      await STORE.addProfile({ full_name, email, password, role: 'employee' }); // rôle toujours employée
+      const debut = document.getElementById('nDebut').value;
+      const cree = await STORE.addProfile({ full_name, email, password, role: 'employee' }); // rôle toujours employée
+      if (debut) await STORE.setContrat(cree.id, debut, '');   // compte neuf : aucun jour à supprimer
       toast('Employée ajoutée'); render();
     } catch (e) { msg.innerHTML = `<div class="msg error">${e.message}</div>`; }
   };
@@ -3279,6 +3365,22 @@ async function viewEmployees() {
       }
     };
     inp.onchange = enregistrer;
+    inp.onkeydown = (ev) => { if (ev.key === 'Enter') inp.blur(); };
+  });
+  /* Dates de contrat : enregistrées en QUITTANT le champ, pas à chaque
+   * « change » — en tapant l'année chiffre par chiffre, Chrome signale des
+   * dates intermédiaires (0002, 0020, 0202…) qui déclencheraient chacune une
+   * suppression. */
+  app.querySelectorAll('input.contrat').forEach((inp) => {
+    const p = profs.find((x) => x.id === inp.dataset.contrat) || {};
+    const initial = (inp.dataset.bord === 'debut' ? p.contrat_debut : p.contrat_fin) || '';
+    inp.onblur = async () => {
+      if (inp.value === initial) return;
+      const ligne = inp.closest('tr');
+      const debut = ligne.querySelector('input.contrat[data-bord="debut"]').value;
+      const fin = ligne.querySelector('input.contrat[data-bord="fin"]').value;
+      if (!(await enregistrerContrat(p, debut, fin))) inp.value = initial;
+    };
     inp.onkeydown = (ev) => { if (ev.key === 'Enter') inp.blur(); };
   });
   app.querySelectorAll('[data-email]').forEach((b) => b.onclick = async () => {
@@ -3456,7 +3558,8 @@ async function exportRecapPDF(data) {
   const statusLbl = (st) => ({ open: 'En cours', validated: 'Validé' }[st] || 'En cours');
   const body = data.map(({ p, s, mo }) => [
     p.full_name + (p.active ? '' : ' (archivée)'),
-    fmtHM(s.planned), fmtHM(s.worked), fmtDelta(s.delta), fmtHM(s.carryIn), fmtDelta(s.closing), statusLbl(mo.status),
+    fmtHM(s.planned), fmtHM(s.worked), fmtDelta(s.delta), fmtHM(s.carryIn), fmtDelta(s.closing),
+    moisSousContrat(p, CUR.y, CUR.m) ? statusLbl(mo.status) : 'Hors contrat',
   ]);
 
   if (!(await assurerPdf())) { // repli impression
@@ -3488,7 +3591,7 @@ async function exportSheetPDF(empId) {
   const body = [];
   for (let d = 1; d <= dim; d++) {
     const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
-    const e = byDate[date]; if (!e) continue;
+    const e = byDate[date]; if (!e || horsContrat(prof, date)) continue;
     const planned = plannedMinutes(e), worked = effectiveWorked(e);
     if (!planned && !worked) continue;
     body.push([`${pad(d)}/${pad(CUR.m)}`,

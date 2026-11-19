@@ -218,6 +218,20 @@ class DemoStore {
     const p = db.profiles.find(x => x.id === id);
     if (p) { p.opening_minutes = Math.round(Number(minutes) || 0); this._save(db); }
   }
+  /* Dates de contrat (AAAA-MM-JJ, vides si non renseignées). Hors de ces
+   * dates, la feuille de l'employée n'a rien à encoder (voir horsContrat). */
+  async setContrat(id, debut, fin) {
+    const db = this._db();
+    const p = db.profiles.find(x => x.id === id);
+    if (p) { p.contrat_debut = debut || ''; p.contrat_fin = fin || ''; this._save(db); }
+  }
+  // Supprime des journées de prestations (jours écrits hors contrat).
+  async deleteEntries(employee_id, dates) {
+    const db = this._db();
+    const set = new Set(dates || []);
+    db.entries = db.entries.filter(e => !(e.employee_id === employee_id && set.has(e.entry_date)));
+    this._save(db);
+  }
   // Compte ce qui serait supprimé avec le compte (pour l'annoncer AVANT d'agir).
   async countUserData(id) {
     const db = this._db();
@@ -790,6 +804,22 @@ class FirebaseStore {
       .set({ opening_minutes: Math.round(Number(minutes) || 0) }, { merge: true });
     this._profilesCache = null;
   }
+  async setContrat(id, debut, fin) {
+    await this.db.collection('profiles').doc(id)
+      .set({ contrat_debut: debut || '', contrat_fin: fin || '' }, { merge: true });
+    this._profilesCache = null;
+  }
+  // Supprime des journées de prestations (jours écrits hors contrat), en un lot.
+  async deleteEntries(employee_id, dates) {
+    if (!dates || !dates.length) return;
+    await this._commit(dates.map((d) => ({
+      ref: this.db.collection('day_entries').doc(this._entryId(employee_id, d)), delete: true,
+    })));
+    const set = new Set(dates);
+    const list = this._entriesCache[employee_id];
+    if (list) this._entriesCache[employee_id] = list.filter((e) => !set.has(e.entry_date));
+    this._oublier('prestationsPeriode:');
+  }
   async sendPasswordReset(email) {
     try { await this.auth.sendPasswordResetEmail((email || '').trim()); }
     catch (e) { throw new Error(this._authMsg(e)); }
@@ -1324,20 +1354,23 @@ class FirebaseStore {
       ref: this.db.collection('benevole_prefill').doc(`${x.benevole_id}_${x.month}`),
       data: { benevole_id: String(x.benevole_id), month: x.month },
     }));
-    /* Solde de départ des employées.
+    /* Solde de départ et dates de contrat des employées.
      * La restauration ne recrée volontairement PAS les comptes (nom, email,
      * rôle, activation) : ils vivent dans Firebase Auth, et les réécrire
      * pourrait ressusciter un compte supprimé ou modifier des droits.
      * Mais le solde de départ, lui, est une donnée métier : sans cette ligne,
      * une restauration le remettait silencieusement à zéro et faussait tout le
-     * cumul d'heures de l'employée. On ne réécrit QUE ce champ. */
+     * cumul d'heures de l'employée. On ne réécrit QUE ces champs. */
     (data.profiles || []).forEach((pr) => {
       const id = map[pr.id];
-      if (!id || pr.opening_minutes == null) return;
-      ops.push({
-        ref: this.db.collection('profiles').doc(id),
-        data: { opening_minutes: Math.round(Number(pr.opening_minutes) || 0) },
-      });
+      if (!id) return;
+      const data = {};
+      if (pr.opening_minutes != null) data.opening_minutes = Math.round(Number(pr.opening_minutes) || 0);
+      // Dates de contrat : donnée métier elle aussi (elles décident des jours comptés).
+      if (pr.contrat_debut != null) data.contrat_debut = String(pr.contrat_debut || '');
+      if (pr.contrat_fin != null) data.contrat_fin = String(pr.contrat_fin || '');
+      if (!Object.keys(data).length) return;
+      ops.push({ ref: this.db.collection('profiles').doc(id), data });
     });
     (data.schedule_templates || []).forEach((t) => ops.push({
       ref: this.db.collection('schedule_templates').doc(emp(t.employee_id)),
