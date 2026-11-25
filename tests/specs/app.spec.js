@@ -2490,3 +2490,40 @@ test('vocabulaire : l’interface écrit « employé(e) », jamais « employée 
     expect(restes, v).toEqual([]);
   }
 });
+
+/* Cas réel : « Récup. » posé pendant le congé d'automne, sur des jours SANS
+ * horaire prévu. La journée valait 0 h prévue, 0 h prestée : rien n'était
+ * retiré du solde, et le corriger en « Maladie » ne changeait rien non plus.
+ * La feuille le signale désormais. */
+test('feuille : un motif posé un jour sans horaire prévu est signalé', async ({ page }) => {
+  await loginAdmin(page);
+  await expect(page.locator('#sheetTable')).toBeVisible();
+  const banniere = page.locator('#sansPrevuBanner');
+  await expect(banniere).toBeHidden();
+
+  // Jour AVEC horaire prévu : rien à signaler.
+  await page.locator('select[data-k="jour_type"][data-date="2026-09-03"]').selectOption('recup');
+  await expect(page.locator('#tDelta')).not.toHaveText('+0h15');
+  await expect(banniere).toBeHidden();
+
+  // Jour SANS horaire prévu (14 septembre, jamais pré-rempli dans la démo).
+  const sel = page.locator('select[data-k="jour_type"][data-date="2026-09-14"]');
+  await sel.selectOption('recup');
+  await expect(page.locator('#toast')).toContainText('aucun horaire prévu ce jour-là');
+  await expect(sel).toHaveClass(/\berr\b/);
+  await expect(banniere).toBeVisible();
+  await expect(banniere).toContainText('1 jour(s) marqué(s)');
+
+  // L'horaire prévu inscrit : l'avertissement disparaît.
+  const ligne = page.locator('#sheetTable tbody tr', { has: sel });
+  await pickTime(ligne.locator('[data-k="planned_start"]'), '14:00');
+  await pickTime(ligne.locator('[data-k="planned_end"]'), '18:00');
+  await expect(sel).not.toHaveClass(/\berr\b/);
+  await expect(banniere).toBeHidden();
+
+  // Après rechargement, le signal est recalculé à l'identique.
+  await page.locator('select[data-k="jour_type"][data-date="2026-09-15"]').selectOption('maladie');
+  await page.reload();
+  await expect(page.locator('#sansPrevuBanner')).toContainText('1 jour(s) marqué(s)');
+  await expect(page.locator('select[data-k="jour_type"][data-date="2026-09-15"]')).toHaveClass(/\berr\b/);
+});
