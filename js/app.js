@@ -6,7 +6,7 @@
 /* Version affichée dans l'entête : permet de vérifier d'un coup d'œil que
  * l'appareil utilise bien la dernière version publiée.
  * ⚠️ À incrémenter à CHAQUE déploiement, en même temps que `CACHE` dans sw.js. */
-const APP_VERSION = 'v2026.11.19-2';
+const APP_VERSION = 'v2026.11.25-1';
 
 let STORE = null, MODE = 'demo', ME = null;
 let VIEW = 'sheet';
@@ -312,11 +312,17 @@ function deltaAJustifier(e) {
   return grossWorked(e) - plannedMinutes(e);
 }
 // Menu du type de journée, dans la colonne « Journée ».
-function jourTypeSelect(date, value, disabled) {
+/* Un motif posé un jour SANS horaire prévu ne change rien au solde : la
+ * journée vaut 0 h prévue, 0 h prestée. Une récupération y paraît prise alors
+ * qu'elle ne coûte rien (cas réel : jours de congé scolaire sans horaire). On le
+ * signale, sur la ligne et au-dessus du tableau. */
+const typeSansPrevu = (e) => estJourType(e) && !plannedMinutes(e);
+const TITRE_SANS_PREVU = "Aucun horaire prévu ce jour-là : ce motif ne change rien au solde.";
+function jourTypeSelect(date, value, disabled, sansPrevu) {
   const v = JOUR_TYPES[value] ? value : '';
   const opts = ['', 'recup', 'conge', 'maladie']
     .map((k) => `<option value="${k}"${k === v ? ' selected' : ''}>${k ? JOUR_COURTS[k] : '—'}</option>`).join('');
-  return `<select class="cell jtype${v ? ' jtype-on' : ''}" data-k="jour_type" data-date="${date}" ${disabled ? 'disabled' : ''}>${opts}</select>`;
+  return `<select class="cell jtype${v ? ' jtype-on' : ''}${sansPrevu ? ' err' : ''}" data-k="jour_type" data-date="${date}" ${disabled ? 'disabled' : ''}${sansPrevu ? ` title="${TITRE_SANS_PREVU}"` : ''}>${opts}</select>`;
 }
 function fmtHM(min) {
   const sign = min < 0 ? '-' : '';
@@ -968,6 +974,12 @@ function showHorsLigne() {
 }
 
 /* ---------------- Vue : Feuille mensuelle (type Excel) ---------------- */
+function texteSansPrevu(n) {
+  return `${n} jour(s) marqué(s) Récup., Congé ou Maladie sans horaire prévu : sans effet sur le solde. `
+    + (ME.role === 'admin'
+      ? "Inscrivez l'horaire prévu de ces jours, ou remettez « — » si personne n'était attendu."
+      : "Signalez-le à l'administration, qui inscrira l'horaire prévu.");
+}
 async function viewSheet() {
   const app = document.getElementById('app');
   const empId = SEL_EMP;
@@ -1043,7 +1055,7 @@ async function viewSheet() {
     validated: '<span class="badge validated">✓ Validé</span>' }[month.status];
 
   let rows = '';
-  let warnings = 0;
+  let warnings = 0, sansPrevu = 0;
   for (let d = 1; d <= dim; d++) {
     const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
     const dow = new Date(CUR.y, CUR.m - 1, d).getDay();
@@ -1063,6 +1075,7 @@ async function viewSheet() {
     const typeJour = estJourType(e);          // récupération, congé ou maladie
     const needJustif = deltaAJustifier(e) !== 0 && !e.justification;
     if (needJustif) warnings++;
+    if (typeSansPrevu(e)) sansPrevu++;
     // Valeurs réelles affichées : par défaut = prévu (pré-remplissage) si non modifié.
     const realStart = e.start_time || (!modified ? (e.planned_start || '') : '');
     const realEnd = e.end_time || (!modified ? (e.planned_end || '') : '');
@@ -1077,7 +1090,7 @@ async function viewSheet() {
       <td class="grp-real">${breakSelect(date, typeJour ? 0 : e.break_minutes, !canEditWorked || typeJour)}</td>
       <td class="nowrap c-worked"><strong>${worked ? fmtHM(worked) : '—'}</strong></td>
       <td class="c-delta ${delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</td>
-      <td class="c-jtype">${jourTypeSelect(date, e.jour_type, !canEditWorked)}</td>
+      <td class="c-jtype">${jourTypeSelect(date, e.jour_type, !canEditWorked, typeSansPrevu(e))}</td>
       <td class="c-justif"><input class="cell wide ${needJustif ? 'err' : ''}" data-k="justification" data-date="${date}" value="${echapper(e.justification)}" ${canEditWorked ? '' : 'disabled'} placeholder="${needJustif ? 'Justification requise' : ''}"/></td>
     </tr>`;
   }
@@ -1099,6 +1112,7 @@ async function viewSheet() {
         <div>${adminControls} <button class="small" id="pdfBtn" title="Télécharge en PDF la feuille de prestations de ${echapper((editableProf && editableProf.full_name) || '')} pour ${monthName(CUR.y, CUR.m)}"><span class="ic ic-document" aria-hidden="true"></span> PDF — Prestations de ${echapper((editableProf && editableProf.full_name) || '')}, ${monthName(CUR.y, CUR.m)}</button></div>
       </div>
       <div class="msg error" id="warnBanner" ${warnings ? '' : 'style="display:none"'}>${warnings} jour(s) avec un écart non justifié.</div>
+      <div class="msg error" id="sansPrevuBanner" ${sansPrevu ? '' : 'style="display:none"'}>${texteSansPrevu(sansPrevu)}</div>
       ${!monthEditable && empId === ME.id && ME.role === 'employee'
         ? '<div class="msg">Ce mois est validé : vous ne pouvez plus le modifier. Contactez l\'administrateur si besoin.</div>' : ''}
       <div class="table-wrap">
@@ -1176,7 +1190,11 @@ async function viewSheet() {
      * peut-être d'effacer un type, auquel cas le prévu réapparaît. */
     const typeJour = estJourType(e);
     const jsel = tr.querySelector('.c-jtype select');
-    if (jsel) { jsel.value = e.jour_type || ''; jsel.classList.toggle('jtype-on', typeJour); }
+    if (jsel) {
+      jsel.value = e.jour_type || ''; jsel.classList.toggle('jtype-on', typeJour);
+      jsel.classList.toggle('err', typeSansPrevu(e));
+      if (typeSansPrevu(e)) jsel.title = TITRE_SANS_PREVU; else jsel.removeAttribute('title');
+    }
     const modifiable = !!(jsel && !jsel.disabled);
     tr.querySelectorAll('[data-k="start_time"], [data-k="end_time"], [data-k="break_minutes"]')
       .forEach((el) => { el.disabled = !modifiable || typeJour; });
@@ -1194,12 +1212,13 @@ async function viewSheet() {
     if (bsel) { bsel.value = String(midi); bsel.classList.toggle('brk-on', midi > 0); }
   }
   function refreshTotals() {
-    let P = 0, W = 0, warn = 0;
+    let P = 0, W = 0, warn = 0, sansP = 0;
     for (let d = 1; d <= dim; d++) {
       const date = `${CUR.y}-${pad(CUR.m)}-${pad(d)}`;
       const e = byDate[date]; if (!e || horsContrat(editableProf, date)) continue;
       const p = plannedMinutes(e), w = effectiveWorked(e); P += p; W += w;
       if (deltaAJustifier(e) !== 0 && !e.justification) warn++;
+      if (typeSansPrevu(e)) sansP++;
     }
     const delta = W - P, closing = baseCarry + delta;
     setTile('tPlanned', fmtHM(P)); setTile('tWorked', fmtHM(W));
@@ -1207,6 +1226,8 @@ async function viewSheet() {
     setTile('tClosing', fmtHM(closing), closing >= 0);
     const wb = document.getElementById('warnBanner');
     if (wb) { wb.textContent = warn + ' jour(s) avec un écart non justifié.'; wb.style.display = warn ? '' : 'none'; }
+    const sb = document.getElementById('sansPrevuBanner');
+    if (sb) { sb.textContent = texteSansPrevu(sansP); sb.style.display = sansP ? '' : 'none'; }
   }
   const flashSaved = (el) => { el.classList.add('saved'); setTimeout(() => el.classList.remove('saved'), 700); };
 
@@ -1308,6 +1329,9 @@ async function viewSheet() {
       refreshRow(tr, date);
       refreshTotals();
       flashSaved(el);
+      if (k === 'jour_type' && typeSansPrevu(saved)) {
+        toast(`${JOUR_TYPES[saved.jour_type]} le ${date.slice(8)}/${date.slice(5, 7)} : aucun horaire prévu ce jour-là, le solde ne change pas.`, 'error');
+      }
     } catch (e) {
       console.error('[sheet:save]', e);
       toast('Enregistrement impossible : ' + e.message, 'error');

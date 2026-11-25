@@ -172,7 +172,7 @@ th { background:#f2ead9; color:#6b5f4c; font-weight:700; font-size:14px; letter-
 .grid select.cell.brk:not(.brk-on) { opacity:.75; }
 .grid select.cell.brk.brk-on { color:var(--red-dark); font-weight:700; opacity:1; }
 .grid input.cell:focus, .grid select.cell:focus { outline:2px solid var(--primary); border-radius:6px; }
-.grid input.cell.err { background:#fdecec; outline:2px solid var(--red); }
+.grid input.cell.err, .grid select.cell.jtype.err { background:#fdecec; outline:2px solid var(--red); }
 .grid input.cell:disabled, .grid select.cell:disabled { color:#5c5344; }
 tr.weekend td { background:#f7f2e8; color:#b3a893; }
 .nowrap { white-space:nowrap; }
